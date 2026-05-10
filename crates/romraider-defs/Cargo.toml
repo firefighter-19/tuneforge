@@ -1,0 +1,19 @@
+[package]
+name        = "romraider-defs"
+version     = { workspace = true }
+edition     = { workspace = true }
+rust-version = { workspace = true }
+license     = { workspace = true }
+authors     = { workspace = true }
+description = "Parser for RomRaider ECU and logger XML definitions"
+
+[lints]
+workspace = true
+
+[dependencies]
+romraider-core = { workspace = true }
+
+thiserror  = { workspace = true }
+tracing    = { workspace = true }
+serde      = { workspace = true }
+quick-xml  = { workspace = true }

@@ -1,0 +1,18 @@
+/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# IDE
+/.idea
+/.vscode
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local user config / fixtures with real ROM dumps (never commit binaries)
+/local
+/fixtures/*.bin
+/fixtures/*.rom
+/fixtures/*.hex

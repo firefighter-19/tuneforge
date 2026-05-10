@@ -1,0 +1,29 @@
+[package]
+name        = "romraider-cli"
+version     = { workspace = true }
+edition     = { workspace = true }
+rust-version = { workspace = true }
+license     = { workspace = true }
+authors     = { workspace = true }
+description = "Headless CLI for romraider-rs (debug I/O, dump ROM, smoke test logger)"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "romraider"
+path = "src/main.rs"
+
+[dependencies]
+romraider-core     = { workspace = true }
+romraider-defs     = { workspace = true }
+romraider-io       = { workspace = true, features = ["serial"] }
+romraider-protocol = { workspace = true, features = ["ssm"] }
+romraider-rom      = { workspace = true }
+romraider-logger   = { workspace = true }
+
+clap     = { workspace = true }
+anyhow   = { workspace = true }
+tracing  = { workspace = true }
+tracing-subscriber = { workspace = true }
+serialport = { workspace = true }

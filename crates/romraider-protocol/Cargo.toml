@@ -1,0 +1,25 @@
+[package]
+name        = "romraider-protocol"
+version     = { workspace = true }
+edition     = { workspace = true }
+rust-version = { workspace = true }
+license     = { workspace = true }
+authors     = { workspace = true }
+description = "ECU diagnostic protocols (SSM, OBD-II, DS2, NCS) for romraider-rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+romraider-core = { workspace = true }
+romraider-io   = { workspace = true }
+
+thiserror = { workspace = true }
+tracing   = { workspace = true }
+
+[features]
+default = ["ssm", "obd2"]
+ssm   = []
+obd2  = []
+ds2   = []
+ncs   = []

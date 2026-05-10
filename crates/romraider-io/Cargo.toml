@@ -1,0 +1,27 @@
+[package]
+name        = "romraider-io"
+version     = { workspace = true }
+edition     = { workspace = true }
+rust-version = { workspace = true }
+license     = { workspace = true }
+authors     = { workspace = true }
+description = "Hardware transports (serial, J2534, ELM327) for romraider-rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+romraider-core = { workspace = true }
+
+thiserror  = { workspace = true }
+tracing    = { workspace = true }
+serialport = { workspace = true }
+
+[target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
+libloading = { workspace = true }
+
+[features]
+default = ["serial"]
+serial  = []
+elm327  = ["serial"]
+j2534   = []

@@ -1,0 +1,84 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/romraider-core",
+    "crates/romraider-io",
+    "crates/romraider-protocol",
+    "crates/romraider-defs",
+    "crates/romraider-rom",
+    "crates/romraider-logger",
+    "crates/romraider-cli",
+    "crates/romraider-gui",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.78"
+license = "GPL-2.0-or-later"
+authors = ["romraider-rs contributors"]
+repository = "https://github.com/RomRaider/romraider-rs"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+
+[workspace.dependencies]
+# Internal crates — keep paths so a single `cargo build` builds the whole tree.
+romraider-core     = { path = "crates/romraider-core" }
+romraider-io       = { path = "crates/romraider-io" }
+romraider-protocol = { path = "crates/romraider-protocol" }
+romraider-defs     = { path = "crates/romraider-defs" }
+romraider-rom      = { path = "crates/romraider-rom" }
+romraider-logger   = { path = "crates/romraider-logger" }
+
+# Errors / logging
+thiserror   = "2"
+anyhow      = "1"
+tracing     = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Serialization / parsing
+serde       = { version = "1", features = ["derive"] }
+serde_json  = "1"
+quick-xml   = { version = "0.36", features = ["serialize"] }
+nom         = "7"
+binrw       = "0.14"
+byteorder   = "1"
+hex         = "0.4"
+
+# Async / time
+tokio       = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util"] }
+futures     = "0.3"
+
+# Hardware I/O
+serialport  = "4"
+libloading  = "0.8"
+
+# Math
+nalgebra    = "0.33"
+
+# CLI
+clap        = { version = "4", features = ["derive"] }
+
+# GUI
+eframe      = { version = "0.30", default-features = false, features = ["default_fonts", "glow", "persistence"] }
+egui        = "0.30"
+egui_extras = { version = "0.30", features = ["all_loaders"] }
+egui_plot   = "0.30"
+
+[profile.release]
+lto         = "thin"
+codegen-units = 1
+strip       = "symbols"
+
+[profile.release-debug]
+inherits    = "release"
+debug       = true
+strip       = "none"
