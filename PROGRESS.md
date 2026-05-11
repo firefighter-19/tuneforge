@@ -1,0 +1,107 @@
+# romraider-rs — общий статус проекта
+
+Сводная таблица по всем крейтам. Детали каждого — в соответствующем
+`crates/<name>/PROGRESS.md`.
+
+## Сводка по крейтам
+
+| Крейт                   | Назначение                                     | Готовность | PROGRESS                                              |
+| ----------------------- | ---------------------------------------------- | :--------: | ----------------------------------------------------- |
+| **romraider-core**      | Address, Endian, bytes-utils, errors           | 🟢 75%     | [`crates/romraider-core/PROGRESS.md`](crates/romraider-core/PROGRESS.md)         |
+| **romraider-io**        | Transport-trait + serial/elm327/j2534          | 🟡 40%     | [`crates/romraider-io/PROGRESS.md`](crates/romraider-io/PROGRESS.md)             |
+| **romraider-protocol**  | SSM/OBD/DS2/NCS диалекты                       | 🟡 30%     | [`crates/romraider-protocol/PROGRESS.md`](crates/romraider-protocol/PROGRESS.md) |
+| **romraider-defs**      | Парсер + резолв ECU/log_defs XML, scaling      | 🟢 70%     | [`crates/romraider-defs/PROGRESS.md`](crates/romraider-defs/PROGRESS.md)         |
+| **romraider-rom**       | ROM-image, decode/encode, checksum             | 🟡 60%     | [`crates/romraider-rom/PROGRESS.md`](crates/romraider-rom/PROGRESS.md)           |
+| **romraider-logger**    | Backend логгера + plugins                      | 🔴 10%     | [`crates/romraider-logger/PROGRESS.md`](crates/romraider-logger/PROGRESS.md)     |
+| **romraider-cli**       | Headless CLI (debug + smoke-tests)             | 🟢 80%     | [`crates/romraider-cli/PROGRESS.md`](crates/romraider-cli/PROGRESS.md)           |
+| **romraider-gui**       | egui-редактор + (будущий) логгер UI            | 🟡 35%     | [`crates/romraider-gui/PROGRESS.md`](crates/romraider-gui/PROGRESS.md)           |
+
+**Легенда:** 🟢 ≥60% — 🟡 30–60% — 🔴 <30%
+
+Проценты — субъективная оценка «по сравнению с минимально-полезным
+эквивалентом апстрима» для типичных пользовательских сценариев.
+
+## Сводка по слайсам (сделано)
+
+| Слайс | Тема                                              | Коммит        |
+| ----- | ------------------------------------------------- | ------------- |
+| 1     | SSM ECU-init end-to-end через MockTransport       | `fb70f98`     |
+| 2     | Парс `<roms>` ECU-определений                     | `c4e7973`     |
+| 3     | Резолв ROM/table/scaling наследования + типизация | `0d5d6ba`     |
+| 4     | Компиляция и eval scaling-формул (meval)          | `6f33021`     |
+| 5     | Парс `log_defs.xml` (логгер-определения)          | `3fd5e80`     |
+| 6     | ROM bytes ↔ resolved table (read_table)           | `4588fb0`     |
+| 7     | GUI MVP: open ROM/def, picker, read-only грид     | `9500ec4`     |
+| 8     | GUI editing: DragValue + write-back, Save As      | следующий коммит |
+
+## Что работает прямо сейчас (E2E сценарии)
+
+1. **Открыть, посмотреть, редактировать ROM-файл с XML-определением:**
+   ```bash
+   cargo run -p romraider-gui
+   # File → Open ROM (.bin) → Open Def (.xml) → выбрать ROM-ID + таблицу
+   # Кликнуть в ячейку, поправить значение → File → Save ROM As…
+   ```
+   ⚠️ checksum НЕ пересчитываются — сохранённый ROM ECU не примет, пока
+   не реализуем Subaru STD/ALT2 checksum.
+
+2. **Headless-инспекция определений:**
+   ```bash
+   cargo run -p romraider-cli -- inspect-def def.xml --resolve --rom A2WC522S --sample-byte 800
+   ```
+   Показывает разрешённые таблицы child-ROM с примером конверсии.
+
+3. **Headless-чтение таблицы из ROM:**
+   ```bash
+   cargo run -p romraider-cli -- read-table firmware.bin --def def.xml --rom-id A2WC522S --table "Target Boost A"
+   ```
+
+4. **SSM ECU-init на реальном железе:**
+   ```bash
+   cargo run -p romraider-cli -- ssm-init --port /dev/cu.usbserial-XXX
+   ```
+   ⚠️ Не тестировал на живой машине — только на mock-транспорте.
+
+## Critical path к «по-настоящему пригоден для тюнинга»
+
+Минимальный набор, чтобы можно было РЕАЛЬНО открыть прошивку, поправить
+карту и залить обратно:
+
+1. **Subaru STD/ALT2 checksum** ([rom](crates/romraider-rom/PROGRESS.md)) — без них сохранённый ROM невалиден
+2. **Compare two ROMs** ([gui](crates/romraider-gui/PROGRESS.md)) — стандартный workflow тюнера
+3. **Heatmap-раскраска + tooltip** ([gui](crates/romraider-gui/PROGRESS.md)) — без них таблицу глазами не отсканировать
+4. **Undo/Redo** ([gui](crates/romraider-gui/PROGRESS.md)) — без них боязно править
+5. **Switch-таблицы UI** ([gui+rom](crates/romraider-rom/PROGRESS.md)) — много ECU-настроек скрыты в bit-флагах
+
+Для **дампа и реflash** — отдельный долгий путь:
+
+6. **SSM ReadBlock + dump-rom CLI** ([protocol](crates/romraider-protocol/PROGRESS.md))
+7. **J2534 Open/Connect/ReadMsgs/WriteMsgs** ([io](crates/romraider-io/PROGRESS.md))
+8. **J2534 LibraryLocator** под Win/Linux ([io](crates/romraider-io/PROGRESS.md))
+9. **RamTune** — отдельный модуль для flash (опасно, тестировать на ECU-доноре)
+
+Для **полноценного логгера**:
+
+10. **`LoggerSession::run` цикл** ([logger](crates/romraider-logger/PROGRESS.md))
+11. **Резолв `include="ssmbase16"` для LogParam** ([defs](crates/romraider-defs/PROGRESS.md))
+12. **Eval `[value]`-синтаксиса формул** ([defs](crates/romraider-defs/PROGRESS.md))
+13. **XY-график подвязан к broadcast** ([gui](crates/romraider-gui/PROGRESS.md))
+14. **CLI `logger` команда** ([cli](crates/romraider-cli/PROGRESS.md))
+
+## Принципы
+
+- **XML-определения апстрима — не модифицируются.** Они источник истины и
+  ценнейший актив сообщества; мы парсим их как есть.
+- **Эталон поведения — Java-RomRaider.** Каждая фича сверяется с её
+  Java-аналогом (см. ссылку в `PROGRESS.md` соответствующего крейта).
+- **Слайсами**, а не «весь модуль за раз»: каждый слайс заканчивается
+  работающей фичей end-to-end и набором тестов.
+- **Тесты на каждом слое:** unit на синтетических данных + integration на
+  фикстурах из апстрима.
+
+## Метрики
+
+- **Тестов в воркспейсе:** 93 (passing, 0 failed) на момент `slice-8`
+- **Строк Rust-кода:** ~5000 (не считая XML-фикстур)
+- **Зависимостей (workspace deps в `Cargo.toml`):** 16 (минимум для области)
+- **Коммитов:** 8 фич-коммитов + начальный + LICENSE
