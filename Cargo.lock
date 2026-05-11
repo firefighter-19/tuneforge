@@ -2596,6 +2596,7 @@ dependencies = [
  "rfd",
  "romraider-core",
  "romraider-defs",
+ "romraider-io",
  "romraider-logger",
  "romraider-rom",
  "tracing",
