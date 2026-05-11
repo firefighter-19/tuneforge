@@ -6,7 +6,10 @@ use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
 use romraider_core::bytes;
-use romraider_defs::{resolve, ResolvedRom, ResolvedTable, RomDefinition, RomsDocument};
+use romraider_defs::{
+    resolve, LogParameter, LoggerDocument, LoggerEcu, ResolvedRom, ResolvedTable, RomDefinition,
+    RomsDocument,
+};
 use romraider_io::serial::{SerialConfig, SerialTransport};
 use romraider_io::Transport;
 use romraider_protocol::ssm::{self, EcuInitResponse};
@@ -37,6 +40,18 @@ enum Cmd {
     /// Загрузить ROM-файл и вывести базовую инфу.
     InspectRom {
         path: PathBuf,
+    },
+
+    /// Прочитать `log_defs.xml` (`<ecus>`) и показать сводку.
+    ///
+    /// С флагом `--ecu <id>` фокусируется на одном ECU: list of параметров
+    /// с offset/metric/expr.
+    InspectLog {
+        path: PathBuf,
+
+        /// Сфокусироваться на одном ECU (template-id типа `ssmbase` или hex-ECU-ID).
+        #[arg(long)]
+        ecu: Option<String>,
     },
 
     /// Прочитать XML-определение ECU (`<roms>`) и показать сводку.
@@ -74,6 +89,7 @@ fn main() -> Result<()> {
         Cmd::InspectDef { path, resolve, rom, sample_byte } => {
             inspect_def(&path, resolve, rom.as_deref(), sample_byte)
         }
+        Cmd::InspectLog { path, ecu } => inspect_log(&path, ecu.as_deref()),
     }
 }
 
@@ -228,6 +244,92 @@ fn debug_storage(s: romraider_defs::StorageType) -> &'static str {
         Float  => "float",
         Hex    => "hex",
         Char   => "char",
+    }
+}
+
+fn inspect_log(path: &PathBuf, ecu_filter: Option<&str>) -> Result<()> {
+    let doc = romraider_defs::parse_log_file(path)
+        .with_context(|| format!("parsing {}", path.display()))?;
+    if let Some(id) = ecu_filter {
+        let ecu = doc
+            .find_ecu(id)
+            .ok_or_else(|| anyhow::anyhow!("ECU `{id}` not found in {}", path.display()))?;
+        print_log_ecu_detail(&doc, ecu);
+    } else {
+        print_log_overview(path, &doc);
+    }
+    Ok(())
+}
+
+fn print_log_overview(path: &PathBuf, doc: &LoggerDocument) {
+    println!("File:              {}", path.display());
+    println!("Convert factors:   {}", doc.ecu_tools.convert_factors.len());
+    for f in &doc.ecu_tools.convert_factors {
+        println!("  [{:<5}] {:<30} → {:<6} ({})", f.kind, f.name, f.metric, f.expr);
+    }
+    println!();
+    println!("Log protocols:     {}", doc.logprotocols.logprotocols.len());
+    for p in &doc.logprotocols.logprotocols {
+        let templates: Vec<_>  = p.ecus.iter().filter(|e| e.is_template()).collect();
+        let concrete = p.ecus.len() - templates.len();
+        let template_params: usize = templates.iter().map(|e| e.parameters.len()).sum();
+        println!(
+            "  type={:<6}  default={:<10}  templates={:<3} concrete={:<4} template-params={}",
+            p.kind,
+            p.default.as_deref().unwrap_or("-"),
+            templates.len(),
+            concrete,
+            template_params,
+        );
+        for t in templates {
+            let inc = t.include.as_deref().unwrap_or("-");
+            println!(
+                "    template {:<12} include={:<10} params={}",
+                t.kind.as_deref().unwrap_or("?"),
+                inc,
+                t.parameters.len(),
+            );
+        }
+    }
+}
+
+fn print_log_ecu_detail(doc: &LoggerDocument, ecu: &LoggerEcu) {
+    println!("ECU:        {}", ecu.id);
+    println!("Name:       {}", ecu.name);
+    println!("Type:       {}", ecu.kind.as_deref().unwrap_or("-"));
+    println!("Include:    {}", ecu.include.as_deref().unwrap_or("-"));
+    println!("Parameters: {}", ecu.parameters.len());
+    if ecu.parameters.is_empty() {
+        println!("  (none — naследует через include={:?})", ecu.include);
+        return;
+    }
+    for p in &ecu.parameters {
+        print_log_parameter(doc, p);
+    }
+}
+
+fn print_log_parameter(doc: &LoggerDocument, p: &LogParameter) {
+    let storage = p.storage_type.as_deref().unwrap_or("-");
+    let metric  = p.metric.as_deref().unwrap_or("");
+    let expr    = p.expr.as_deref().unwrap_or("?");
+    let bb      = match (p.byte.as_deref(), p.bit.as_deref()) {
+        (Some(b), Some(bt)) => format!("byte={b} bit={bt}"),
+        _ => "—".into(),
+    };
+    let factor = p
+        .kind
+        .as_deref()
+        .and_then(|k| doc.find_convert_factor(k))
+        .map(|f| format!("  alt: {} → {}", f.expr, f.metric))
+        .unwrap_or_default();
+
+    println!(
+        "  • {:<35} offset={:<10} {:<7} {:<14} expr={:<26} metric={}{}",
+        p.id, p.offset, storage, bb, expr, metric, factor
+    );
+    for a in &p.alts {
+        let st = a.storage_type.as_deref().unwrap_or("-");
+        println!("      alt {:<8} {}", st, a.offset);
     }
 }
 
