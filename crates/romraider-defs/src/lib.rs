@@ -12,7 +12,7 @@ pub mod error;
 pub mod logger;
 pub mod scaling;
 
-pub use ecu::EcuDefinition;
+pub use ecu::{AxisDef, EcuDefinition, TableDef, TableKind};
 pub use error::{DefError, DefResult};
-pub use logger::LoggerDefinition;
-pub use scaling::Scaling;
+pub use logger::{DtcDefinition, LoggerDefinition, LoggerParameter, LoggerSwitch};
+pub use scaling::{Expression, Scaling};

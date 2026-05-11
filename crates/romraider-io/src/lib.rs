@@ -18,5 +18,8 @@ pub mod elm327;
 #[cfg(feature = "j2534")]
 pub mod j2534;
 
+#[cfg(feature = "mock")]
+pub mod mock;
+
 pub use error::{IoError, IoResult};
 pub use transport::Transport;

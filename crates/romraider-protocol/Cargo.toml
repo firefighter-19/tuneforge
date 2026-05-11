@@ -17,6 +17,9 @@ romraider-io   = { workspace = true }
 thiserror = { workspace = true }
 tracing   = { workspace = true }
 
+[dev-dependencies]
+romraider-io = { workspace = true, features = ["mock"] }
+
 [features]
 default = ["ssm", "obd2"]
 ssm   = []

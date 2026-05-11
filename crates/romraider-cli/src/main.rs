@@ -7,7 +7,8 @@ use tracing_subscriber::EnvFilter;
 
 use romraider_core::bytes;
 use romraider_io::serial::{SerialConfig, SerialTransport};
-use romraider_protocol::ssm;
+use romraider_io::Transport;
+use romraider_protocol::ssm::{self, EcuInitResponse};
 use romraider_rom::RomImage;
 
 #[derive(Parser)]
@@ -63,18 +64,31 @@ fn ssm_init(port: &str, baud: u32, timeout: Duration) -> Result<()> {
     let mut cfg = SerialConfig::ssm(port);
     cfg.baud_rate = baud;
     let mut tr = SerialTransport::open(&cfg)?;
-
-    let frame = ssm::build_request(ssm::Command::EcuInit, &[]);
-    println!("→ {}", bytes::hex_dump(&frame));
-
     tr.purge()?;
-    tr.write_all(&frame, timeout)?;
 
-    let mut buf = vec![0u8; 256];
-    let n = tr.read_frame(&mut buf, timeout)?;
-    buf.truncate(n);
-    println!("← {}", bytes::hex_dump(&buf));
+    let request = ssm::build_request(ssm::Command::EcuInit, &[]);
+    println!("→ {}", bytes::hex_dump(&request));
+
+    let init = ssm::ecu_init(&mut tr, timeout)
+        .context("SSM ecu-init failed (check cable, ignition, baud rate)")?;
+    print_ecu_init(&init);
     Ok(())
+}
+
+fn print_ecu_init(init: &EcuInitResponse) {
+    println!("SSM ID:        {}", bytes::hex_dump(&init.ssm_id));
+    println!("ROM ID:        {} ({})", bytes::hex_dump(&init.rom_id), printable_ascii(&init.rom_id));
+    println!("Capabilities:  {} bytes", init.capabilities.len());
+    if !init.capabilities.is_empty() {
+        println!("               {}", bytes::hex_dump(&init.capabilities));
+    }
+}
+
+fn printable_ascii(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|&b| if (0x20..0x7f).contains(&b) { b as char } else { '.' })
+        .collect()
 }
 
 fn inspect_rom(path: &PathBuf) -> Result<()> {
