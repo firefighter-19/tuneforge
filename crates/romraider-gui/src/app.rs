@@ -49,6 +49,21 @@ impl eframe::App for App {
                         }
                     }
                     ui.separator();
+                    if ui.button("Open Compare ROM…").clicked() {
+                        ui.close_menu();
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("ROM image", &["bin", "rom", "hex"])
+                            .add_filter("Any", &["*"])
+                            .pick_file()
+                        {
+                            self.editor.load_compare_rom(path);
+                        }
+                    }
+                    if ui.button("Close Compare ROM").clicked() {
+                        ui.close_menu();
+                        self.editor.clear_compare_rom();
+                    }
+                    ui.separator();
                     if ui.button("Save ROM As…").clicked() {
                         ui.close_menu();
                         if let Some(path) = rfd::FileDialog::new()

@@ -125,11 +125,17 @@ Desktop GUI на `eframe`/`egui`: открыть ROM, выбрать опред�
 
 ### Сравнение двух ROM (Compare)
 
-| Фича                                          | Java-аналог              | Rust | Статус |
-| --------------------------------------------- | ------------------------ | ---- | :----: |
-| Открыть второй ROM как «base»                 | `CompareImagesForm`      | —    |   ❌   |
-| Подсветка отличий в таблицах                  | `Table.compare`          | —    |   ❌   |
-| Diff-режим: показывать ΔX                     | toggle в Compare-form    | —    |   ❌   |
+| Фича                                          | Java-аналог              | Rust                                | Статус |
+| --------------------------------------------- | ------------------------ | ----------------------------------- | :----: |
+| Открыть второй ROM как «base»                 | `CompareImagesForm`      | `EditorPanel::load_compare_rom`     |   ✅   |
+| File → Open/Close Compare ROM menu items      | `CompareImagesForm`-menu | `app.rs` File-меню                  |   ✅   |
+| Подсветка отличий в таблицах (bg color)       | `Table.compare` + bg     | `render_cell` + `diff_bg`           |   ✅   |
+| Diff-режим: показывать ΔX                     | toggle в Compare-form    | `DisplayMode::{Values,Diff}` toggle |   ✅   |
+| Threshold для «значимого» отличия             | `Settings.compareSensitivity` | EPSILON 1e-9 в `diff_bg`       |  🟡 hardcoded |
+| Подсветка таблиц в дереве (есть/нет изменений)| `RomTree.markChanged`    | —                                   |   ❌   |
+| Процентный режим diff (%)                     | toggle в Compare-form    | —                                   |   ❌   |
+| Сравнение axes                                | `Table.compare`          | —                                   |   ❌   |
+| Экспорт diff-отчёта                           | `CompareImagesForm` save | —                                   |   ❌   |
 
 ### Логгер UI (нужен ли отдельный layout?)
 

@@ -14,7 +14,7 @@
 | **romraider-rom**       | ROM-image, decode/encode, checksum             | 🟢 70%     | [`crates/romraider-rom/PROGRESS.md`](crates/romraider-rom/PROGRESS.md)           |
 | **romraider-logger**    | Backend логгера + plugins                      | 🔴 10%     | [`crates/romraider-logger/PROGRESS.md`](crates/romraider-logger/PROGRESS.md)     |
 | **romraider-cli**       | Headless CLI (debug + smoke-tests)             | 🟢 80%     | [`crates/romraider-cli/PROGRESS.md`](crates/romraider-cli/PROGRESS.md)           |
-| **romraider-gui**       | egui-редактор + (будущий) логгер UI            | 🟡 40%     | [`crates/romraider-gui/PROGRESS.md`](crates/romraider-gui/PROGRESS.md)           |
+| **romraider-gui**       | egui-редактор + (будущий) логгер UI            | 🟡 45%     | [`crates/romraider-gui/PROGRESS.md`](crates/romraider-gui/PROGRESS.md)           |
 
 **Легенда:** 🟢 ≥60% — 🟡 30–60% — 🔴 <30%
 
@@ -34,7 +34,8 @@
 | 7     | GUI MVP: open ROM/def, picker, read-only грид     | `9500ec4`     |
 | 8     | GUI editing: DragValue + write-back, Save As      | (закоммичено)    |
 | 9     | Subaru classic checksum (`checksum fix` tables)   | (закоммичено)    |
-| 10    | Auto-fix checksum в GUI Save + status-индикатор   | следующий коммит |
+| 10    | Auto-fix checksum в GUI Save + status-индикатор   | (закоммичено)    |
+| 11    | Compare ROMs в GUI (diff coloring + Values/Diff)  | следующий коммит |
 
 ## Что работает прямо сейчас (E2E сценарии)
 
@@ -70,8 +71,8 @@
 карту и залить обратно:
 
 1. ~~**Subaru классический checksum**~~ ✅ Slice 9
-2. ~~**Авто-fix Subaru checksum при сохранении в GUI** + индикатор valid/invalid после загрузки~~ ✅ Slice 10
-3. **Compare two ROMs** ([gui](crates/romraider-gui/PROGRESS.md)) — стандартный workflow тюнера
+2. ~~**Авто-fix Subaru checksum** + индикатор valid/invalid~~ ✅ Slice 10
+3. ~~**Compare two ROMs**~~ ✅ Slice 11 (diff-bg + Values/Diff mode; пометки таблиц в дереве — потом)
 4. **Heatmap-раскраска + tooltip** ([gui](crates/romraider-gui/PROGRESS.md)) — без них таблицу глазами не отсканировать
 5. **Undo/Redo** ([gui](crates/romraider-gui/PROGRESS.md)) — без них боязно править
 6. **Switch-таблицы UI** ([gui+rom](crates/romraider-rom/PROGRESS.md)) — много ECU-настроек скрыты в bit-флагах
@@ -104,7 +105,7 @@
 
 ## Метрики
 
-- **Тестов в воркспейсе:** 103 (passing, 0 failed) на момент `slice-10` (без новых тестов — slice-10 чисто GUI-интеграция уже покрытого алгоритма)
-- **Строк Rust-кода:** ~5400 (не считая XML-фикстур)
-- **Зависимостей (workspace deps в `Cargo.toml`):** 17 (rfd добавлен в slice-7)
-- **Коммитов:** 10 фич-коммитов + начальный + LICENSE + PROGRESS-документация
+- **Тестов в воркспейсе:** 103 (passing, 0 failed) на момент `slice-11` (без новых — slice-11 чисто GUI-расширение, проверяется руками)
+- **Строк Rust-кода:** ~5600 (не считая XML-фикстур)
+- **Зависимостей (workspace deps в `Cargo.toml`):** 17
+- **Коммитов:** 11 фич-коммитов + начальный + LICENSE + PROGRESS-документация

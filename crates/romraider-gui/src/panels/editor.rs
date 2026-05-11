@@ -19,12 +19,25 @@ use tracing::{info, warn};
 #[derive(Default)]
 pub struct EditorPanel {
     rom:                 Option<RomState>,
+    /// Опциональный второй ROM (base) для compare-режима. Read-only.
+    compare_rom:         Option<RomState>,
     def:                 Option<DefState>,
     selected_rom_id:     Option<String>,
     selected_table_name: Option<String>,
     error:               Option<String>,
     /// Кратковременное сообщение в статусной строке (например, «Saved to …»).
     notice:              Option<String>,
+    /// Что показывать в ячейках, когда есть `compare_rom`.
+    display_mode:        DisplayMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DisplayMode {
+    /// Показывать текущие значения; раскраска фона по diff vs base.
+    #[default]
+    Values,
+    /// Показывать `current - base`; read-only.
+    Diff,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -62,6 +75,26 @@ impl EditorPanel {
                 self.error = Some(format!("Failed to open ROM: {e}"));
             }
         }
+    }
+
+    pub fn load_compare_rom(&mut self, path: PathBuf) {
+        match RomImage::open(&path) {
+            Ok(rom) => {
+                self.compare_rom = Some(RomState { path, rom });
+                self.error       = None;
+                self.notice      = None;
+            }
+            Err(e) => {
+                warn!(?e, "compare rom open failed");
+                self.error = Some(format!("Failed to open compare ROM: {e}"));
+            }
+        }
+    }
+
+    pub fn clear_compare_rom(&mut self) {
+        self.compare_rom = None;
+        // Сбрасываем режим, чтобы Diff не висел без base.
+        self.display_mode = DisplayMode::Values;
     }
 
     pub fn load_def(&mut self, path: PathBuf) {
@@ -167,7 +200,8 @@ impl EditorPanel {
 
     fn render_status(&mut self, ui: &mut egui::Ui) {
         let summary = self.checksum_summary();
-        let mut fix_clicked = false;
+        let mut fix_clicked    = false;
+        let mut clear_compare  = false;
 
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("ROM:").strong());
@@ -208,9 +242,24 @@ impl EditorPanel {
                 }
             }
         });
-        if fix_clicked {
-            self.fix_checksums_now();
+
+        // Вторая строка: compare-ROM + display-mode toggle.
+        if let Some(c) = &self.compare_rom {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Base:").strong());
+                ui.label(c.path.display().to_string());
+                if ui.small_button("✕").on_hover_text("Close compare ROM").clicked() {
+                    clear_compare = true;
+                }
+                ui.separator();
+                ui.label("Show:");
+                ui.selectable_value(&mut self.display_mode, DisplayMode::Values, "Values");
+                ui.selectable_value(&mut self.display_mode, DisplayMode::Diff,   "Diff");
+            });
         }
+
+        if fix_clicked   { self.fix_checksums_now(); }
+        if clear_compare { self.clear_compare_rom(); }
         if let Some(msg) = self.notice.clone() {
             ui.horizontal(|ui| {
                 ui.colored_label(egui::Color32::LIGHT_BLUE, msg);
@@ -264,11 +313,13 @@ impl EditorPanel {
     }
 
     fn render_content(&mut self, ui: &mut egui::Ui) {
-        // Disjoint-borrow: rom mut, def imm, selection imm — все разные поля self.
-        let rom_state  = self.rom.as_mut();
-        let def_state  = self.def.as_ref();
-        let rom_id     = self.selected_rom_id.as_deref();
-        let table_name = self.selected_table_name.as_deref();
+        // Disjoint-borrow: rom mut, def imm, compare imm, selection imm — все разные поля self.
+        let rom_state   = self.rom.as_mut();
+        let def_state   = self.def.as_ref();
+        let compare_rom = self.compare_rom.as_ref().map(|r| &r.rom);
+        let rom_id      = self.selected_rom_id.as_deref();
+        let table_name  = self.selected_table_name.as_deref();
+        let mode        = self.display_mode;
 
         let (Some(rom_state), Some(def_state), Some(rom_id), Some(table_name)) =
             (rom_state, def_state, rom_id, table_name)
@@ -292,11 +343,13 @@ impl EditorPanel {
         egui::ScrollArea::both()
             .auto_shrink([false, false])
             .show(ui, |ui| match table.kind {
-                Some(TableKind::ThreeD) => render_3d(ui, &mut rom_state.rom, table),
+                Some(TableKind::ThreeD) => render_3d(ui, &mut rom_state.rom, compare_rom, table, mode),
                 Some(TableKind::TwoD)
                 | Some(TableKind::OneD)
                 | Some(TableKind::XAxis)
-                | Some(TableKind::YAxis) => render_flat(ui, &mut rom_state.rom, table),
+                | Some(TableKind::YAxis) => {
+                    render_flat(ui, &mut rom_state.rom, compare_rom, table, mode)
+                }
                 Some(TableKind::StaticXAxis) | Some(TableKind::StaticYAxis) => {
                     render_static_axis(ui, table);
                 }
@@ -377,7 +430,13 @@ fn render_table_header(ui: &mut egui::Ui, t: &ResolvedTable) {
     }
 }
 
-fn render_3d(ui: &mut egui::Ui, rom: &mut RomImage, table: &ResolvedTable) {
+fn render_3d(
+    ui:          &mut egui::Ui,
+    rom:         &mut RomImage,
+    compare_rom: Option<&RomImage>,
+    table:       &ResolvedTable,
+    mode:        DisplayMode,
+) {
     let (Some(size_x), Some(size_y)) = (table.size_x, table.size_y) else {
         ui.colored_label(egui::Color32::YELLOW, "3D table is missing sizex/sizey.");
         return;
@@ -396,8 +455,12 @@ fn render_3d(ui: &mut egui::Ui, rom: &mut RomImage, table: &ResolvedTable) {
     let precision = precision_from_format(table.scalings.first().and_then(|s| s.format.as_deref()));
     let speed     = cell_speed(scaling.as_ref(), precision);
 
-    // Real-values для отображения и редактирования.
+    // Real-values из current ROM для отображения/редактирования.
     let mut display: Vec<f64> = raw.iter().map(|&x| to_real(scaling.as_ref(), x)).collect();
+    // Real-values из base ROM (если задан) — для diff-раскраски.
+    let base_real: Option<Vec<f64>> = compare_rom
+        .and_then(|cr| cr.read_table(table).ok())
+        .map(|raw_b| raw_b.into_iter().map(|x| to_real(scaling.as_ref(), x)).collect());
 
     let x_axis = table.axes.iter().find(|a| a.kind == Some(TableKind::XAxis));
     let y_axis = table.axes.iter().find(|a| a.kind == Some(TableKind::YAxis));
@@ -431,7 +494,6 @@ fn render_3d(ui: &mut egui::Ui, rom: &mut RomImage, table: &ResolvedTable) {
             }
             ui.end_row();
 
-            // Data rows with Y-axis labels on the left + editable cells.
             for y in 0..size_y {
                 if let Some(ys) = &y_values {
                     let v = to_real(y_scaling.as_ref(), ys[y]);
@@ -440,15 +502,9 @@ fn render_3d(ui: &mut egui::Ui, rom: &mut RomImage, table: &ResolvedTable) {
                     ui.label(egui::RichText::new(y.to_string()).strong());
                 }
                 for x in 0..size_x {
-                    let idx = y * size_x + x;
-                    if ui
-                        .add(
-                            egui::DragValue::new(&mut display[idx])
-                                .speed(speed)
-                                .fixed_decimals(precision),
-                        )
-                        .changed()
-                    {
+                    let idx  = y * size_x + x;
+                    let base = base_real.as_ref().and_then(|b| b.get(idx).copied());
+                    if render_cell(ui, &mut display[idx], base, mode, precision, speed) {
                         changed = true;
                     }
                 }
@@ -461,7 +517,13 @@ fn render_3d(ui: &mut egui::Ui, rom: &mut RomImage, table: &ResolvedTable) {
     }
 }
 
-fn render_flat(ui: &mut egui::Ui, rom: &mut RomImage, table: &ResolvedTable) {
+fn render_flat(
+    ui:          &mut egui::Ui,
+    rom:         &mut RomImage,
+    compare_rom: Option<&RomImage>,
+    table:       &ResolvedTable,
+    mode:        DisplayMode,
+) {
     let count = table
         .size_x
         .or(table.size_y)
@@ -487,23 +549,21 @@ fn render_flat(ui: &mut egui::Ui, rom: &mut RomImage, table: &ResolvedTable) {
     let speed     = cell_speed(scaling.as_ref(), precision);
 
     let mut display: Vec<f64> = raw.iter().map(|&x| to_real(scaling.as_ref(), x)).collect();
+    let base_real: Option<Vec<f64>> = compare_rom
+        .and_then(|cr| cr.read_cells(table, count).ok())
+        .map(|raw_b| raw_b.into_iter().map(|x| to_real(scaling.as_ref(), x)).collect());
+
     let mut changed = false;
     egui::Grid::new("table-flat-grid")
         .striped(true)
         .spacing([6.0, 2.0])
         .show(ui, |ui| {
-            for (i, v) in display.iter_mut().enumerate() {
+            for i in 0..display.len() {
                 if i > 0 && i % 8 == 0 {
                     ui.end_row();
                 }
-                if ui
-                    .add(
-                        egui::DragValue::new(v)
-                            .speed(speed)
-                            .fixed_decimals(precision),
-                    )
-                    .changed()
-                {
+                let base = base_real.as_ref().and_then(|b| b.get(i).copied());
+                if render_cell(ui, &mut display[i], base, mode, precision, speed) {
                     changed = true;
                 }
             }
@@ -512,6 +572,66 @@ fn render_flat(ui: &mut egui::Ui, rom: &mut RomImage, table: &ResolvedTable) {
 
     if changed {
         write_back(rom, table, &display, scaling.as_ref());
+    }
+}
+
+/// Универсальная отрисовка одной ячейки: DragValue в Values-режиме, Label
+/// со значением Δ в Diff-режиме. Раскраска фона по знаку diff (только когда
+/// base задан).
+///
+/// Возвращает `true` если значение было изменено (только в Values-режиме).
+fn render_cell(
+    ui:        &mut egui::Ui,
+    value:     &mut f64,
+    base:      Option<f64>,
+    mode:      DisplayMode,
+    precision: usize,
+    speed:     f64,
+) -> bool {
+    let diff       = base.map_or(0.0, |b| *value - b);
+    let bg         = diff_bg(diff, base.is_some());
+    let mut changed = false;
+
+    egui::Frame::none()
+        .fill(bg)
+        .inner_margin(egui::Margin::same(1.0))
+        .show(ui, |ui| match mode {
+            DisplayMode::Values => {
+                if ui
+                    .add(
+                        egui::DragValue::new(value)
+                            .speed(speed)
+                            .fixed_decimals(precision),
+                    )
+                    .changed()
+                {
+                    changed = true;
+                }
+            }
+            DisplayMode::Diff => {
+                // В Diff-режиме показываем Δ или сам value (если base нет).
+                let label = match base {
+                    Some(_) => format!("{:+.*}", precision, diff),
+                    None    => format!("{:.*}",  precision, value),
+                };
+                ui.label(label);
+            }
+        });
+    changed
+}
+
+fn diff_bg(diff: f64, have_base: bool) -> egui::Color32 {
+    if !have_base {
+        return egui::Color32::TRANSPARENT;
+    }
+    // EPSILON-чувствительность чтобы не подсвечивать совсем мелкие float-расхождения.
+    const EPSILON: f64 = 1e-9;
+    if diff > EPSILON {
+        egui::Color32::from_rgb(80, 35, 35)  // current выше base — красноватый
+    } else if diff < -EPSILON {
+        egui::Color32::from_rgb(35, 65, 35)  // current ниже base — зеленоватый
+    } else {
+        egui::Color32::TRANSPARENT
     }
 }
 
