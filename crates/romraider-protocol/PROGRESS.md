@@ -56,7 +56,8 @@
 | ECU-init request (`0xBF`)                     | `SSMEcuInit`                      | `ssm::ecu_init`               |   ✅   |
 | ECU-init response decode (SSM ID + ROM ID + caps) | `SSMEcuInitImpl`               | `ssm::decode_ecu_init`        |   ✅   |
 | Read by address (`0xA8`, до 255 байт за раз)  | `SSMProtocol.constructReadMemoryRequest` | `ssm::read_addresses`     |   ✅   |
-| Read by block (`0xA0`)                        | `SSMProtocol.constructReadAddressRequest` | — (только enum-вариант)  |   ❌   |
+| Read by block (`0xA0`) — 1..=254 байт          | `SSMProtocol.constructReadMemoryRequest` | `ssm::read_block` + `READ_BLOCK_MAX` константа | ✅ |
+| Полный дамп ROM с прогресс-callback           | сборка вручную в Java RomRaider  | `ssm::dump_rom(transport, start, length, chunk_size, progress_cb)` | ✅ |
 | Write by address (`0xB8`)                     | `SSMProtocol.constructWriteAddressRequest` | —                       |   ❌   |
 | Write by block (`0xB0`)                       | `SSMProtocol.constructWriteMemoryRequest` | —                        |   ❌   |
 | Response validation (length+checksum)         | `SSMResponseProcessor`            | `ssm::parse_response`         |   ✅   |

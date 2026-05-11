@@ -9,11 +9,11 @@
 | ----------------------- | ---------------------------------------------- | :--------: | ----------------------------------------------------- |
 | **romraider-core**      | Address, Endian, bytes-utils, errors           | 🟢 75%     | [`crates/romraider-core/PROGRESS.md`](crates/romraider-core/PROGRESS.md)         |
 | **romraider-io**        | Transport-trait + serial/elm327/j2534          | 🟡 40%     | [`crates/romraider-io/PROGRESS.md`](crates/romraider-io/PROGRESS.md)             |
-| **romraider-protocol**  | SSM/OBD/DS2/NCS диалекты                       | 🟡 30%     | [`crates/romraider-protocol/PROGRESS.md`](crates/romraider-protocol/PROGRESS.md) |
+| **romraider-protocol**  | SSM/OBD/DS2/NCS диалекты                       | 🟡 40%     | [`crates/romraider-protocol/PROGRESS.md`](crates/romraider-protocol/PROGRESS.md) |
 | **romraider-defs**      | Парсер + резолв ECU/log_defs XML, scaling      | 🟢 85%     | [`crates/romraider-defs/PROGRESS.md`](crates/romraider-defs/PROGRESS.md)         |
 | **romraider-rom**       | ROM-image, decode/encode, checksum             | 🟢 70%     | [`crates/romraider-rom/PROGRESS.md`](crates/romraider-rom/PROGRESS.md)           |
 | **romraider-logger**    | Backend логгера + plugins                      | 🟡 45%     | [`crates/romraider-logger/PROGRESS.md`](crates/romraider-logger/PROGRESS.md)     |
-| **romraider-cli**       | Headless CLI (debug + smoke-tests + logger)    | 🟢 85%     | [`crates/romraider-cli/PROGRESS.md`](crates/romraider-cli/PROGRESS.md)           |
+| **romraider-cli**       | Headless CLI (debug + smoke-tests + logger + dump-rom) | 🟢 90% | [`crates/romraider-cli/PROGRESS.md`](crates/romraider-cli/PROGRESS.md)         |
 | **romraider-gui**       | egui-редактор + логгер с live XY-плотом        | 🟡 70%     | [`crates/romraider-gui/PROGRESS.md`](crates/romraider-gui/PROGRESS.md)           |
 
 **Легенда:** 🟢 ≥60% — 🟡 30–60% — 🔴 <30%
@@ -41,7 +41,8 @@
 | 14    | Tooltip ячеек (addr/raw/real/Δ/formula)           | (закоммичено)    |
 | 15    | Switch + BitwiseSwitch UI (radio + checkboxes)    | (закоммичено)    |
 | 16    | Logger backbone: resolve include + [value] + CLI  | (закоммичено)    |
-| 17    | GUI live XY-plot: worker thread + mpsc + Plot     | следующий коммит |
+| 17    | GUI live XY-plot: worker thread + mpsc + Plot     | (закоммичено)    |
+| 18    | SSM ReadBlock + CLI dump-rom (+MockTransport fix) | следующий коммит |
 
 ## Что работает прямо сейчас (E2E сценарии)
 
@@ -90,8 +91,8 @@
 
 Для **дампа и реflash** — отдельный долгий путь:
 
-6. **SSM ReadBlock + dump-rom CLI** ([protocol](crates/romraider-protocol/PROGRESS.md))
-7. **J2534 Open/Connect/ReadMsgs/WriteMsgs** ([io](crates/romraider-io/PROGRESS.md))
+6. ~~**SSM ReadBlock + dump-rom CLI**~~ ✅ Slice 18
+7. **J2534 Open/Connect/ReadMsgs/WriteMsgs** ([io](crates/romraider-io/PROGRESS.md)) — для современных Subaru через CAN
 8. **J2534 LibraryLocator** под Win/Linux ([io](crates/romraider-io/PROGRESS.md))
 9. **RamTune** — отдельный модуль для flash (опасно, тестировать на ECU-доноре)
 
@@ -118,7 +119,7 @@
 
 ## Метрики
 
-- **Тестов в воркспейсе:** 127 (passing, 0 failed) на момент `slice-17` (без новых — slice-17 чисто GUI-расширение, проверяется руками)
-- **Строк Rust-кода:** ~7000 (не считая XML-фикстур)
+- **Тестов в воркспейсе:** 134 (passing, 0 failed) на момент `slice-18` (+7: read_block × 3, dump_rom × 4 на MockTransport)
+- **Строк Rust-кода:** ~7200 (не считая XML-фикстур)
 - **Зависимостей (workspace deps в `Cargo.toml`):** 17
-- **Коммитов:** 17 фич-коммитов + начальный + LICENSE + PROGRESS-документация
+- **Коммитов:** 18 фич-коммитов + начальный + LICENSE + PROGRESS-документация

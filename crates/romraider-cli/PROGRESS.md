@@ -38,7 +38,7 @@ ROM-таблиц без GUI. Удобен как:
 
 | Команда (могла бы быть)                       | Аргументы                                   | Зачем                                    | Статус |
 | --------------------------------------------- | ------------------------------------------- | ---------------------------------------- | :----: |
-| `dump-rom`                                    | `--port <p> --output <bin>`                 | дамп прошивки с ECU по SSM `ReadBlock`   |   ❌   |
+| `dump-rom`                                    | `--port <p> --start 0x000000 --length N --output <bin> [--chunk-size 128]` | дамп прошивки с ECU по SSM `ReadBlock` с прогрессом каждые 5% | ✅ |
 | `write-table`                                 | `--rom <bin> --def <xml> --rom-id <id> --table <name> --values <csv>` | bulk-редактирование таблицы без GUI | ❌ |
 | `verify-checksum` / `fix-checksum`            | `--rom <bin> --def <xml>`                   | проверка/пересчёт checksum-ов            |   ❌   |
 | `compare-roms`                                | `--a <bin1> --b <bin2> --def <xml>`         | diff двух ROM-файлов по таблицам         |   ❌   |

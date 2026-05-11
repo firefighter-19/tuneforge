@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
-use romraider_core::bytes;
+use romraider_core::{bytes, Address};
 use romraider_defs::{
     resolve, LogParameter, LoggerDocument, LoggerEcu, ResolvedRom, ResolvedTable, RomDefinition,
     RomsDocument,
@@ -41,6 +41,36 @@ enum Cmd {
     /// Загрузить ROM-файл и вывести базовую инфу.
     InspectRom {
         path: PathBuf,
+    },
+
+    /// Дамп прошивки с ECU через SSM `ReadBlock` (0xA0) в `.bin`-файл.
+    /// Адресный диапазон и размер зависят от ECU — для Subaru SH7055 обычно
+    /// `--start 0 --length 524288` (512 KiB).
+    DumpRom {
+        #[arg(short, long)]
+        port: String,
+        #[arg(short, long, default_value_t = 4800)]
+        baud: u32,
+
+        /// Начальный адрес (`0x...` или просто hex без префикса).
+        #[arg(long, default_value = "0x000000")]
+        start: String,
+
+        /// Сколько байт читать (десятичное или `0x...`).
+        #[arg(long)]
+        length: String,
+
+        /// Куда сохранить дамп.
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Размер одного SSM-чанка (1..=254). По умолчанию 128 — безопасно
+        /// для большинства реальных ECU; больше = меньше round-trip overhead.
+        #[arg(long, default_value_t = 128)]
+        chunk_size: usize,
+
+        #[arg(long, default_value_t = 2000)]
+        timeout_ms: u64,
     },
 
     /// Headless-логгер: опрашивает ECU по SSM, пишет CSV-датлог. По
@@ -149,12 +179,94 @@ fn main() -> Result<()> {
         Cmd::ReadTable { rom, def, rom_id, table } => {
             read_table_cmd(&rom, &def, &rom_id, &table)
         }
+        Cmd::DumpRom {
+            port, baud, start, length, output, chunk_size, timeout_ms,
+        } => dump_rom_cmd(
+            &port, baud, &start, &length, &output, chunk_size,
+            Duration::from_millis(timeout_ms),
+        ),
         Cmd::Logger {
             port, baud, def, ecu, params, interval_ms, duration_secs, out, timeout_ms,
         } => logger_cmd(
             &port, baud, &def, &ecu, &params, interval_ms, duration_secs, &out,
             Duration::from_millis(timeout_ms),
         ),
+    }
+}
+
+fn dump_rom_cmd(
+    port:       &str,
+    baud:       u32,
+    start:      &str,
+    length:     &str,
+    output:     &PathBuf,
+    chunk_size: usize,
+    timeout:    Duration,
+) -> Result<()> {
+    let start_addr  = parse_int_or_hex_u32(start).with_context(|| format!("--start `{start}`"))?;
+    let length_val  = parse_int_or_hex_usize(length).with_context(|| format!("--length `{length}`"))?;
+    if length_val == 0 {
+        anyhow::bail!("--length must be > 0");
+    }
+
+    let mut cfg = SerialConfig::ssm(port);
+    cfg.baud_rate = baud;
+    let mut transport = SerialTransport::open(&cfg)
+        .with_context(|| format!("opening serial {port}@{baud}"))?;
+    transport.purge()?;
+
+    let started = std::time::Instant::now();
+    eprintln!(
+        "Dumping {length_val} bytes from 0x{start_addr:06X} (chunks of {chunk_size}, timeout {}ms)…",
+        timeout.as_millis()
+    );
+    let mut last_percent = -1i32;
+    let bytes = ssm::dump_rom(
+        &mut transport,
+        Address::new(start_addr),
+        length_val,
+        chunk_size,
+        timeout,
+        |done, total| {
+            let percent = (done as i64 * 100 / total as i64) as i32;
+            if percent != last_percent && (percent % 5 == 0 || done == total) {
+                let elapsed = started.elapsed().as_secs_f64();
+                let rate    = done as f64 / elapsed.max(1e-6);
+                eprintln!("  {done}/{total} ({percent}%)  {rate:.1} B/s");
+                last_percent = percent;
+            }
+        },
+    )
+    .context("dump_rom failed")?;
+    std::fs::write(output, &bytes).with_context(|| format!("writing {}", output.display()))?;
+    eprintln!(
+        "Done in {:.1}s. {} bytes written to {}",
+        started.elapsed().as_secs_f64(),
+        bytes.len(),
+        output.display()
+    );
+    Ok(())
+}
+
+fn parse_int_or_hex_u32(s: &str) -> Result<u32> {
+    let trimmed = s.trim();
+    let stripped = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"));
+    match stripped {
+        Some(hex) => u32::from_str_radix(hex, 16).context("invalid hex"),
+        None      => trimmed.parse::<u32>().context("invalid decimal"),
+    }
+}
+
+fn parse_int_or_hex_usize(s: &str) -> Result<usize> {
+    let trimmed = s.trim();
+    let stripped = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"));
+    match stripped {
+        Some(hex) => usize::from_str_radix(hex, 16).context("invalid hex"),
+        None      => trimmed.parse::<usize>().context("invalid decimal"),
     }
 }
 

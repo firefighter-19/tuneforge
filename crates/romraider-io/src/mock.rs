@@ -72,9 +72,17 @@ impl Transport for MockTransport {
     }
 
     fn read_frame(&mut self, buf: &mut [u8], timeout: Duration) -> IoResult<usize> {
-        let response = self.pending.pop_front().ok_or(IoError::ReadTimeout(timeout))?;
+        let mut response = self.pending.pop_front().ok_or(IoError::ReadTimeout(timeout))?;
         let n = response.len().min(buf.len());
         buf[..n].copy_from_slice(&response[..n]);
+        // Если в `response` остались байты — кладём остаток обратно в начало
+        // очереди, чтобы следующий `read_frame` подобрал их. Это имитирует
+        // поведение реального serial-порта, который доставляет кадр по
+        // частям из ядра.
+        if response.len() > n {
+            let remainder = response.split_off(n);
+            self.pending.push_front(remainder);
+        }
         Ok(n)
     }
 

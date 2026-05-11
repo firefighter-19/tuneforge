@@ -183,6 +183,97 @@ pub fn ecu_init<T: Transport + ?Sized>(
     decode_ecu_init(response.data)
 }
 
+/// Максимальное число байт данных, которое физически вмещает один SSM-ответ.
+/// Length-байт фрейма (`u8`) считает `1 (cmd echo) + data.len()`, поэтому
+/// `data.len() ≤ 255 − 1 = 254`. Для реальных ECU безопасно держать
+/// `chunk_size ≤ 128` (см. `CLI default` в `romraider-cli`).
+pub const READ_BLOCK_MAX: usize = 254;
+
+/// Прочитать `count` последовательных байт начиная с `address` одной
+/// SSM-командой `ReadBlock` (0xA0). Максимум [`READ_BLOCK_MAX`] байт за запрос.
+///
+/// Wire format запроса:
+/// `80 10 F0 06 A0 pad addr_hi addr_mid addr_lo (count-1) cksm`.
+/// Ответ: `80 F0 10 (count+1) 0xE0 <count bytes> cksm`.
+///
+/// Возвращает [`ProtocolError::InvalidArgument`] если `count` вне `1..=254`.
+#[instrument(skip(transport))]
+pub fn read_block<T: Transport + ?Sized>(
+    transport: &mut T,
+    address:   Address,
+    count:     usize,
+    timeout:   Duration,
+) -> ProtocolResult<Vec<u8>> {
+    if !(1..=READ_BLOCK_MAX).contains(&count) {
+        return Err(ProtocolError::InvalidArgument(format!(
+            "ssm::read_block count must be 1..={READ_BLOCK_MAX}, got {count}"
+        )));
+    }
+    let raw = address.raw();
+    let payload = [
+        0x00, // pad
+        ((raw >> 16) & 0xFF) as u8,
+        ((raw >>  8) & 0xFF) as u8,
+        ( raw        & 0xFF) as u8,
+        (count - 1) as u8,
+    ];
+    let frame = build_request(Command::ReadBlock, &payload);
+    debug!(bytes = frame.len(), count, "SSM read-block request");
+    transport.write_all(&frame, timeout)?;
+
+    let raw_response = read_complete_frame(transport, timeout)?;
+    let response     = parse_response(&raw_response)?;
+    if response.command_echo != Command::ReadBlock.response_byte() {
+        return Err(ProtocolError::UnexpectedResponse(response.command_echo));
+    }
+    if response.data.len() != count {
+        return Err(ProtocolError::ResponseTooShort {
+            got:      response.data.len(),
+            expected: count,
+        });
+    }
+    Ok(response.data.to_vec())
+}
+
+/// Прочитать `length` байт начиная с `start`, бакеты по `chunk_size` через
+/// последовательные [`read_block`]-запросы. После каждой удачной пачки
+/// зовётся `progress(bytes_read, total)`.
+///
+/// Подходит для дампа целой прошивки. Время определяется latency-ом канала:
+/// на 4800-baud serial ~100–200 ms на запрос, дамп 512 KiB ≈ 7 минут.
+pub fn dump_rom<T, F>(
+    transport:  &mut T,
+    start:      Address,
+    length:     usize,
+    chunk_size: usize,
+    timeout:    Duration,
+    mut progress: F,
+) -> ProtocolResult<Vec<u8>>
+where
+    T: Transport + ?Sized,
+    F: FnMut(usize, usize),
+{
+    if length == 0 {
+        return Ok(Vec::new());
+    }
+    if !(1..=READ_BLOCK_MAX).contains(&chunk_size) {
+        return Err(ProtocolError::InvalidArgument(format!(
+            "dump_rom chunk_size must be 1..={READ_BLOCK_MAX}, got {chunk_size}"
+        )));
+    }
+    let mut out = Vec::with_capacity(length);
+    progress(0, length);
+    while out.len() < length {
+        let remaining = length - out.len();
+        let this_chunk = chunk_size.min(remaining);
+        let addr = Address::new(start.raw() + out.len() as u32);
+        let chunk = read_block(transport, addr, this_chunk, timeout)?;
+        out.extend_from_slice(&chunk);
+        progress(out.len(), length);
+    }
+    Ok(out)
+}
+
 #[instrument(skip(transport, addresses))]
 pub fn read_addresses<T: Transport + ?Sized>(
     transport: &mut T,
@@ -356,6 +447,138 @@ mod tests {
 
         let expected_request = build_request(Command::ReadAddress, &[0x00, 0x12, 0x34, 0x56]);
         assert_eq!(t.last_write(), Some(expected_request.as_slice()));
+    }
+
+    #[test]
+    fn read_block_builds_correct_request_and_parses_response() {
+        let mut inner = vec![Command::ReadBlock.response_byte()];
+        inner.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE]);
+        let response = pack_response(&inner);
+
+        let mut t = MockTransport::with_responses([response]);
+        let data  = read_block(&mut t, Address::new(0x012345), 6, Duration::from_millis(100))
+            .unwrap();
+        assert_eq!(data, vec![0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE]);
+
+        // Wire-format: 80 10 F0 06 A0 00 01 23 45 05 cksm
+        let req = t.last_write().unwrap();
+        assert_eq!(req[0..4], [0x80, 0x10, 0xF0, 0x06]);
+        assert_eq!(req[4],    0xA0);             // ReadBlock
+        assert_eq!(req[5],    0x00);             // pad
+        assert_eq!(req[6..9], [0x01, 0x23, 0x45]); // address
+        assert_eq!(req[9],    0x05);             // count - 1 (6 byte → 5)
+    }
+
+    #[test]
+    fn read_block_max_payload_encodes_count_byte_correctly() {
+        let mut inner = vec![Command::ReadBlock.response_byte()];
+        inner.extend_from_slice(&[0u8; READ_BLOCK_MAX]);
+        let response = pack_response(&inner);
+        let mut t = MockTransport::with_responses([response]);
+        let data  = read_block(&mut t, Address::new(0), READ_BLOCK_MAX, Duration::from_millis(100))
+            .unwrap();
+        assert_eq!(data.len(), READ_BLOCK_MAX);
+        // count - 1 = 253 = 0xFD
+        let req = t.last_write().unwrap();
+        assert_eq!(req[9], (READ_BLOCK_MAX - 1) as u8);
+    }
+
+    #[test]
+    fn read_block_rejects_zero_and_oversize() {
+        let mut t = MockTransport::new();
+        assert!(matches!(
+            read_block(&mut t, Address::new(0), 0, Duration::from_millis(10)),
+            Err(ProtocolError::InvalidArgument(_))
+        ));
+        assert!(matches!(
+            read_block(&mut t, Address::new(0), READ_BLOCK_MAX + 1, Duration::from_millis(10)),
+            Err(ProtocolError::InvalidArgument(_))
+        ));
+    }
+
+    #[test]
+    fn dump_rom_iterates_chunks_and_reports_progress() {
+        // 600-байтный «образ» при chunk_size=200: 3 запроса по 200+200+200.
+        let chunks = [
+            vec![0xAAu8; 200],
+            vec![0xBBu8; 200],
+            vec![0xCCu8; 200],
+        ];
+        let responses: Vec<Vec<u8>> = chunks
+            .iter()
+            .map(|data| {
+                let mut inner = vec![Command::ReadBlock.response_byte()];
+                inner.extend_from_slice(data);
+                pack_response(&inner)
+            })
+            .collect();
+        let mut t = MockTransport::with_responses(responses);
+
+        let mut progress_calls = Vec::new();
+        let bytes = dump_rom(
+            &mut t,
+            Address::new(0x100),
+            600,
+            200,
+            Duration::from_millis(100),
+            |done, total| progress_calls.push((done, total)),
+        )
+        .unwrap();
+
+        assert_eq!(bytes.len(), 600);
+        assert!(bytes[..200].iter().all(|&b| b == 0xAA));
+        assert!(bytes[200..400].iter().all(|&b| b == 0xBB));
+        assert!(bytes[400..].iter().all(|&b| b == 0xCC));
+
+        // Прогресс: 0 → 200 → 400 → 600.
+        assert_eq!(progress_calls, vec![(0, 600), (200, 600), (400, 600), (600, 600)]);
+
+        // Адреса запросов: 0x100, 0x1C8, 0x290.
+        let writes = t.writes();
+        assert_eq!(writes.len(), 3);
+        assert_eq!(writes[0][6..9], [0x00, 0x01, 0x00]); // 0x100
+        assert_eq!(writes[1][6..9], [0x00, 0x01, 0xC8]); // 0x100 + 200 = 0x1C8
+        assert_eq!(writes[2][6..9], [0x00, 0x02, 0x90]); // 0x1C8 + 200 = 0x290
+        // 200 байт → count-1 = 199 = 0xC7
+        assert_eq!(writes[0][9], 199);
+    }
+
+    #[test]
+    fn dump_rom_handles_remainder_chunk() {
+        // 250 байт при chunk_size=200: 1 полный (200) + 1 хвост (50).
+        let chunks = [vec![0xAAu8; 200], vec![0xBBu8; 50]];
+        let responses: Vec<Vec<u8>> = chunks
+            .iter()
+            .map(|data| {
+                let mut inner = vec![Command::ReadBlock.response_byte()];
+                inner.extend_from_slice(data);
+                pack_response(&inner)
+            })
+            .collect();
+        let mut t = MockTransport::with_responses(responses);
+        let bytes = dump_rom(&mut t, Address::new(0), 250, 200, Duration::from_millis(100), |_, _| {})
+            .unwrap();
+        assert_eq!(bytes.len(), 250);
+        let writes = t.writes();
+        assert_eq!(writes[0][9], 199); // count-1 для 200 байт
+        assert_eq!(writes[1][9], 49);  // count-1 для 50 байт
+    }
+
+    #[test]
+    fn dump_rom_zero_length_returns_empty() {
+        let mut t = MockTransport::new();
+        let bytes = dump_rom(&mut t, Address::new(0), 0, 256, Duration::from_millis(10), |_, _| {})
+            .unwrap();
+        assert!(bytes.is_empty());
+        assert!(t.writes().is_empty());
+    }
+
+    #[test]
+    fn dump_rom_invalid_chunk_size_errors() {
+        let mut t = MockTransport::new();
+        let err = dump_rom(&mut t, Address::new(0), 100, 0, Duration::from_millis(10), |_, _| {})
+            .unwrap_err();
+        assert!(matches!(err, ProtocolError::InvalidArgument(_)));
     }
 
     #[test]

@@ -16,6 +16,9 @@ pub enum ProtocolError {
     #[error("ECU returned negative response: 0x{nrc:02X} for service 0x{service:02X}")]
     NegativeResponse { service: u8, nrc: u8 },
 
+    #[error("invalid argument: {0}")]
+    InvalidArgument(String),
+
     #[error(transparent)]
     Io(#[from] romraider_io::IoError),
 
