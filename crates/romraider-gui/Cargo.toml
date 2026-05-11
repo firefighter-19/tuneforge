@@ -17,6 +17,7 @@ path = "src/main.rs"
 [dependencies]
 romraider-core     = { workspace = true }
 romraider-defs     = { workspace = true }
+romraider-io       = { workspace = true }
 romraider-rom      = { workspace = true }
 romraider-logger   = { workspace = true }
 

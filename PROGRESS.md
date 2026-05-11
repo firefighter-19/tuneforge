@@ -14,7 +14,7 @@
 | **romraider-rom**       | ROM-image, decode/encode, checksum             | 🟢 70%     | [`crates/romraider-rom/PROGRESS.md`](crates/romraider-rom/PROGRESS.md)           |
 | **romraider-logger**    | Backend логгера + plugins                      | 🟡 45%     | [`crates/romraider-logger/PROGRESS.md`](crates/romraider-logger/PROGRESS.md)     |
 | **romraider-cli**       | Headless CLI (debug + smoke-tests + logger)    | 🟢 85%     | [`crates/romraider-cli/PROGRESS.md`](crates/romraider-cli/PROGRESS.md)           |
-| **romraider-gui**       | egui-редактор + (будущий) логгер UI            | 🟡 65%     | [`crates/romraider-gui/PROGRESS.md`](crates/romraider-gui/PROGRESS.md)           |
+| **romraider-gui**       | egui-редактор + логгер с live XY-плотом        | 🟡 70%     | [`crates/romraider-gui/PROGRESS.md`](crates/romraider-gui/PROGRESS.md)           |
 
 **Легенда:** 🟢 ≥60% — 🟡 30–60% — 🔴 <30%
 
@@ -40,7 +40,8 @@
 | 13    | Undo/Redo + Edit-меню + Ctrl+Z/Y хоткеи           | (закоммичено)    |
 | 14    | Tooltip ячеек (addr/raw/real/Δ/formula)           | (закоммичено)    |
 | 15    | Switch + BitwiseSwitch UI (radio + checkboxes)    | (закоммичено)    |
-| 16    | Logger backbone: resolve include + [value] + CLI  | следующий коммит |
+| 16    | Logger backbone: resolve include + [value] + CLI  | (закоммичено)    |
+| 17    | GUI live XY-plot: worker thread + mpsc + Plot     | следующий коммит |
 
 ## Что работает прямо сейчас (E2E сценарии)
 
@@ -99,8 +100,10 @@
 10. ~~**`LoggerSession::poll_once` цикл**~~ ✅ Slice 16 — sync + async broadcast
 11. ~~**Резолв `include="ssmbase16"`**~~ ✅ Slice 16
 12. ~~**Eval `[value]`-синтаксиса формул**~~ ✅ Slice 16
-13. **XY-график подвязан к broadcast** ([gui](crates/romraider-gui/PROGRESS.md)) — следующий шаг
+13. ~~**XY-график подвязан к live samples**~~ ✅ Slice 17 (через std::sync::mpsc — async broadcast пока не нужен)
 14. ~~**CLI `logger` команда**~~ ✅ Slice 16
+
+Логгер-критпуть закрыт. Все 5 пунктов реализованы (точечно ещё нужен реальный round-trip на железе и polish-улучшения: пометки осей, save plot, выбор портов из dropdown — но это не блокирует).
 
 ## Принципы
 
@@ -115,7 +118,7 @@
 
 ## Метрики
 
-- **Тестов в воркспейсе:** 127 (passing, 0 failed) на момент `slice-16` (+8: 3 compile_log_expr + 2 resolve_ecu integration + 3 LoggerSession::poll_once)
-- **Строк Rust-кода:** ~6700 (не считая XML-фикстур)
+- **Тестов в воркспейсе:** 127 (passing, 0 failed) на момент `slice-17` (без новых — slice-17 чисто GUI-расширение, проверяется руками)
+- **Строк Rust-кода:** ~7000 (не считая XML-фикстур)
 - **Зависимостей (workspace deps в `Cargo.toml`):** 17
-- **Коммитов:** 16 фич-коммитов + начальный + LICENSE + PROGRESS-документация
+- **Коммитов:** 17 фич-коммитов + начальный + LICENSE + PROGRESS-документация

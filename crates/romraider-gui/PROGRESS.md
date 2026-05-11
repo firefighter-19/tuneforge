@@ -143,9 +143,11 @@ Desktop GUI на `eframe`/`egui`: открыть ROM, выбрать опред�
 
 | Фича                                          | Java-аналог                          | Rust                          | Статус |
 | --------------------------------------------- | ------------------------------------ | ----------------------------- | :----: |
-| Logger tab (заглушка с синусоидой)            | logger window                        | `logger.rs` panel             |  🟡 заглушка |
-| Селектор параметров для логгирования          | `paramlist/`                         | —                             |   ❌   |
-| XY-график с egui_plot                         | `handler/graph/`                     | — (заглушка с одной кривой)   |   ❌   |
+| Logger tab — настройка + live-плот            | logger window                        | `logger.rs`: full LoggerPanel | ✅ |
+| Селектор параметров для логгирования          | `paramlist/`                         | checkbox-список из `ResolvedLogEcu` | ✅ |
+| XY-график с egui_plot                         | `handler/graph/`                     | Multi-line `Plot` с legend; rolling history по 600 точек | ✅ |
+| Worker-thread + mpsc-канал → UI               | `LoggerController` SwingWorker      | `std::thread` + `std::sync::mpsc` + AtomicBool stop-flag | ✅ |
+| Загрузка `log_defs.xml` из панели             | `LoggerSettings`                     | rfd-picker + auto-resolve ECU | ✅ |
 | Gauge-dashboard (стрелочные / цифровые)       | `handler/dash/`                      | —                             |   ❌   |
 | Live-data таблица                             | `handler/livedata/`                  | —                             |   ❌   |
 | Запись в файл из UI                           | `handler/file/`                      | —                             |   ❌   |
