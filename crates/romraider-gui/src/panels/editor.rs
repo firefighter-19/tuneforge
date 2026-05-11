@@ -607,6 +607,14 @@ fn render_3d(
             } else {
                 None
             };
+            let stride        = table.storage_type.map(|s| s.byte_size()).unwrap_or(1);
+            let base_addr_raw = table.storage_address.map_or(0, |a| a.raw());
+            let units         = table.scalings.first().and_then(|s| s.units.as_deref());
+            let expression    = scaling
+                .as_ref()
+                .and_then(|c| c.source.expression.as_deref());
+            let to_byte_expr  = scaling.as_ref().and_then(|c| c.source.to_byte.as_deref());
+
             for y in 0..size_y {
                 if let Some(ys) = &y_values {
                     let v = to_real(y_scaling.as_ref(), ys[y]);
@@ -618,7 +626,19 @@ fn render_3d(
                     let idx  = y * size_x + x;
                     let base = base_real.as_ref().and_then(|b| b.get(idx).copied());
                     let bg   = cell_bg(display[idx], base, heat_range);
-                    if render_cell(ui, &mut display[idx], base, bg, mode, precision, speed) {
+                    let tooltip = CellTooltip {
+                        addr: Address::new(
+                            base_addr_raw + (idx * stride) as u32,
+                        ),
+                        raw_byte: raw[idx],
+                        position: format!("y={y}, x={x}"),
+                        units,
+                        expression,
+                        to_byte: to_byte_expr,
+                    };
+                    if render_cell(
+                        ui, &mut display[idx], base, bg, mode, precision, speed, &tooltip,
+                    ) {
                         changed = true;
                     }
                 }
@@ -674,6 +694,13 @@ fn render_flat(
     } else {
         None
     };
+    let stride        = table.storage_type.map(|s| s.byte_size()).unwrap_or(1);
+    let base_addr_raw = table.storage_address.map_or(0, |a| a.raw());
+    let units         = table.scalings.first().and_then(|s| s.units.as_deref());
+    let expression    = scaling
+        .as_ref()
+        .and_then(|c| c.source.expression.as_deref());
+    let to_byte_expr  = scaling.as_ref().and_then(|c| c.source.to_byte.as_deref());
 
     let mut changed = false;
     egui::Grid::new("table-flat-grid")
@@ -686,7 +713,17 @@ fn render_flat(
                 }
                 let base = base_real.as_ref().and_then(|b| b.get(i).copied());
                 let bg   = cell_bg(display[i], base, heat_range);
-                if render_cell(ui, &mut display[i], base, bg, mode, precision, speed) {
+                let tooltip = CellTooltip {
+                    addr: Address::new(base_addr_raw + (i * stride) as u32),
+                    raw_byte: raw[i],
+                    position: format!("i={i}"),
+                    units,
+                    expression,
+                    to_byte: to_byte_expr,
+                };
+                if render_cell(
+                    ui, &mut display[i], base, bg, mode, precision, speed, &tooltip,
+                ) {
                     changed = true;
                 }
             }
@@ -709,9 +746,20 @@ fn cell_bg(value: f64, base: Option<f64>, heat_range: Option<(f64, f64)>) -> egu
     }
 }
 
+/// Информация для tooltip-а одной ячейки (то, что должно быть видно при hover).
+struct CellTooltip<'a> {
+    addr:       Address,
+    raw_byte:   f64,
+    position:   String,
+    units:      Option<&'a str>,
+    expression: Option<&'a str>,
+    to_byte:    Option<&'a str>,
+}
+
 /// Универсальная отрисовка одной ячейки: DragValue в Values-режиме, Label
 /// со значением Δ (или сырого value) в Diff-режиме. Цвет фона `bg` уже
-/// вычислен снаружи (compare-diff приоритетнее heatmap).
+/// вычислен снаружи (compare-diff приоритетнее heatmap). При hover показывает
+/// `tooltip` — адрес, raw/real, формула, diff vs base (если задан).
 ///
 /// Возвращает `true` если значение было изменено (только в Values-режиме).
 fn render_cell(
@@ -722,9 +770,10 @@ fn render_cell(
     mode:      DisplayMode,
     precision: usize,
     speed:     f64,
+    tooltip:   &CellTooltip<'_>,
 ) -> bool {
     let mut changed = false;
-    egui::Frame::none()
+    let response = egui::Frame::none()
         .fill(bg)
         .inner_margin(egui::Margin::same(1.0))
         .show(ui, |ui| match mode {
@@ -747,8 +796,55 @@ fn render_cell(
                 };
                 ui.label(label);
             }
-        });
+        })
+        .response;
+
+    let snapshot_value = *value;
+    response.on_hover_ui(|ui| {
+        cell_tooltip_ui(ui, tooltip, snapshot_value, base, precision);
+    });
     changed
+}
+
+fn cell_tooltip_ui(
+    ui:         &mut egui::Ui,
+    t:          &CellTooltip<'_>,
+    real_value: f64,
+    base:       Option<f64>,
+    precision:  usize,
+) {
+    let units = t.units.unwrap_or("");
+    ui.label(
+        egui::RichText::new(format!("@ {}  ({})", t.addr, t.position))
+            .strong()
+            .monospace(),
+    );
+    ui.label(format!("Real:  {:.*} {}", precision, real_value, units));
+    ui.label(format!("Byte:  {}", format_byte(t.raw_byte)));
+    if let Some(b) = base {
+        ui.separator();
+        ui.label(format!("Base:  {:.*} {}", precision, b, units));
+        ui.label(format!("Δ:     {:+.*}", precision, real_value - b));
+    }
+    if t.expression.is_some() || t.to_byte.is_some() {
+        ui.separator();
+        if let Some(e) = t.expression {
+            ui.label(format!("byte → real:  {e}"));
+        }
+        if let Some(b) = t.to_byte {
+            ui.label(format!("real → byte:  {b}"));
+        }
+    }
+}
+
+/// Форматирование «raw byte»-значения: целочисленные показываем без точки,
+/// дробные (float storage) — с 4 знаками.
+fn format_byte(v: f64) -> String {
+    if v.fract().abs() < 1e-9 && v.abs() < 1e15 {
+        format!("{}", v as i64)
+    } else {
+        format!("{v:.4}")
+    }
 }
 
 fn diff_bg(diff: f64, have_base: bool) -> egui::Color32 {
@@ -1016,6 +1112,20 @@ mod tests {
         let mut log = UndoLog::default();
         log.record(Address::new(0), vec![1, 2], vec![1, 2]);
         assert!(!log.can_undo());
+    }
+
+    #[test]
+    fn format_byte_integer_when_whole_number() {
+        assert_eq!(format_byte(128.0),   "128");
+        assert_eq!(format_byte(255.0),   "255");
+        assert_eq!(format_byte(0.0),     "0");
+        assert_eq!(format_byte(-1.0),    "-1");
+    }
+
+    #[test]
+    fn format_byte_fractional_when_float() {
+        assert_eq!(format_byte(1.5),      "1.5000");
+        assert_eq!(format_byte(0.001333), "0.0013");
     }
 
     #[test]

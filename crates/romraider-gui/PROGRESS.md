@@ -121,6 +121,7 @@ Desktop GUI на `eframe`/`egui`: открыть ROM, выбрать опред�
 | Bitwise switch UI (checkboxes для битов)      | `TableBitwiseSwitchView`             | —                                    |   ❌   |
 | Reset to base values                          | `Table.resetToOriginal`              | —                                    |   ❌   |
 | Tab-keyboard navigation между ячейками        | Swing default                        | partial via DragValue                |  🟡   |
+| **Tooltip на hover** — addr/raw/real/Δ/formula | `Table.getDescription` popup        | `CellTooltip` + `cell_tooltip_ui` через `on_hover_ui` | ✅ |
 | Ctrl+1/2/3 переключение views (data/raw/hex)  | `TableToolBar`                       | —                                    |   ❌   |
 | Right-click context menu                      | `TableMenuItem` popup                | —                                    |   ❌   |
 
@@ -182,7 +183,7 @@ Desktop GUI на `eframe`/`egui`: открыть ROM, выбрать опред�
 - [ ] **Undo/Redo** — без него UX страдает; нужен log изменений в `editor`
 - [ ] **Recent files** — Settings-style persistence
 - [ ] **In-place Save (Ctrl+S)** — сейчас только Save As
-- [ ] **Description tooltip для ячеек** — много полезного в `<description>` от апстрима
+- [x] ~~**Description tooltip для ячеек**~~ — сделано в Slice 14, но без `<description>` (то лежит в header; добавить в tooltip — TODO)
 
 ### Важные фичи
 - [ ] **Compare two ROMs** — кросс-сравнение, ключевая фича апстрима

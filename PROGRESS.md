@@ -14,7 +14,7 @@
 | **romraider-rom**       | ROM-image, decode/encode, checksum             | 🟢 70%     | [`crates/romraider-rom/PROGRESS.md`](crates/romraider-rom/PROGRESS.md)           |
 | **romraider-logger**    | Backend логгера + plugins                      | 🔴 10%     | [`crates/romraider-logger/PROGRESS.md`](crates/romraider-logger/PROGRESS.md)     |
 | **romraider-cli**       | Headless CLI (debug + smoke-tests)             | 🟢 80%     | [`crates/romraider-cli/PROGRESS.md`](crates/romraider-cli/PROGRESS.md)           |
-| **romraider-gui**       | egui-редактор + (будущий) логгер UI            | 🟡 55%     | [`crates/romraider-gui/PROGRESS.md`](crates/romraider-gui/PROGRESS.md)           |
+| **romraider-gui**       | egui-редактор + (будущий) логгер UI            | 🟡 60%     | [`crates/romraider-gui/PROGRESS.md`](crates/romraider-gui/PROGRESS.md)           |
 
 **Легенда:** 🟢 ≥60% — 🟡 30–60% — 🔴 <30%
 
@@ -37,7 +37,8 @@
 | 10    | Auto-fix checksum в GUI Save + status-индикатор   | (закоммичено)    |
 | 11    | Compare ROMs в GUI (diff coloring + Values/Diff)  | (закоммичено)    |
 | 12    | Heatmap-раскраска ячеек (cool→warm по value)      | (закоммичено)    |
-| 13    | Undo/Redo + Edit-меню + Ctrl+Z/Y хоткеи           | следующий коммит |
+| 13    | Undo/Redo + Edit-меню + Ctrl+Z/Y хоткеи           | (закоммичено)    |
+| 14    | Tooltip ячеек (addr/raw/real/Δ/formula)           | следующий коммит |
 
 ## Что работает прямо сейчас (E2E сценарии)
 
@@ -77,9 +78,10 @@
 3. ~~**Compare two ROMs**~~ ✅ Slice 11
 4. ~~**Heatmap-раскраска**~~ ✅ Slice 12
 5. ~~**Undo/Redo**~~ ✅ Slice 13 (history=100, drag = много мелких шагов; coalescing — потом)
-6. **Switch-таблицы UI** ([gui+rom](crates/romraider-rom/PROGRESS.md)) — много ECU-настроек скрыты в bit-флагах
-7. **Tooltip для ячеек** — описание из `<description>` + raw/real value + formula
+6. ~~**Tooltip для ячеек**~~ ✅ Slice 14 (addr/raw/real/Δ/formula; `<description>` в tooltip — потом)
+7. **Switch-таблицы UI** ([gui+rom](crates/romraider-rom/PROGRESS.md)) — много ECU-настроек скрыты в bit-флагах
 8. **Coalescing undo** при drag (один шаг на drag, а не на каждое промежуточное значение)
+9. **Description в cell tooltip** — копировать описание таблицы в hover-popup
 
 Для **дампа и реflash** — отдельный долгий путь:
 
@@ -109,7 +111,7 @@
 
 ## Метрики
 
-- **Тестов в воркспейсе:** 112 (passing, 0 failed) на момент `slice-13` (+5 unit на UndoLog в gui)
-- **Строк Rust-кода:** ~5900 (не считая XML-фикстур)
+- **Тестов в воркспейсе:** 114 (passing, 0 failed) на момент `slice-14` (+2 unit на format_byte в gui)
+- **Строк Rust-кода:** ~6000 (не считая XML-фикстур)
 - **Зависимостей (workspace deps в `Cargo.toml`):** 17
-- **Коммитов:** 13 фич-коммитов + начальный + LICENSE + PROGRESS-документация
+- **Коммитов:** 14 фич-коммитов + начальный + LICENSE + PROGRESS-документация
