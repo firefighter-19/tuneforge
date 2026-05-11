@@ -21,5 +21,8 @@ pub mod j2534;
 #[cfg(feature = "mock")]
 pub mod mock;
 
+#[cfg(feature = "tactrix")]
+pub mod tactrix;
+
 pub use error::{IoError, IoResult};
 pub use transport::Transport;

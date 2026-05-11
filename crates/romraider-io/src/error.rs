@@ -36,6 +36,18 @@ pub enum IoError {
     #[error("ELM327 unexpected response: {0:?}")]
     ElmUnexpectedResponse(String),
 
+    #[error("Tactrix device VID={vid:#06X} PID={pid:#06X} not found on USB")]
+    TactrixNotFound { vid: u16, pid: u16 },
+
+    #[error("Tactrix USB error: {0}")]
+    TactrixUsb(String),
+
+    #[error("Tactrix unexpected response: {0}")]
+    TactrixUnexpected(String),
+
+    #[error("Tactrix interface 0 has no IN+OUT bulk endpoint pair")]
+    TactrixNoBulkEndpoints,
+
     #[error(transparent)]
     Core(#[from] romraider_core::CoreError),
 }

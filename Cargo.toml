@@ -60,6 +60,7 @@ futures     = "0.3"
 # Hardware I/O
 serialport  = "4"
 libloading  = "0.8"
+rusb        = "0.9"
 
 # Math
 nalgebra    = "0.33"

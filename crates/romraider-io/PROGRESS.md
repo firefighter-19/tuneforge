@@ -52,6 +52,9 @@
 | ELM327 — кадрирование `>`-prompt      | inline в `ElmConnection`               | `Elm327::read_until_prompt`       |   ✅   |
 | ELM327 — auto-detect протокола (ATSP) | в `ElmConnectionManager`               | —                                 |   ❌   |
 | J2534 — динамическая загрузка DLL/SO  | `J2534LibraryLocator`                  | `j2534::Library::open` (libloading) |  ✅   |
+| **Tactrix Openport 2.0 (USB-bulk)**   | через J2534 DLL (Windows-only в апстриме) | `tactrix::TactrixTransport` через rusb (libusb), нативно на Mac ARM | ✅ |
+| Tactrix protocol парсер               | inline в Tactrix DLL                   | `tactrix::protocol::parse_frame` + 11 unit-тестов | ✅ |
+| Tactrix handshake (ati/ata/ato)        | inline в Tactrix DLL                   | `TactrixTransport::open` |  ✅   |
 | J2534 — vtable PassThru функций       | `J2534_v0404` через JNA                | `j2534::api::PassThruVtable`      |   ✅   |
 | J2534 — Open/Close устройство         | `J2534Impl.open/close`                 | `Device::open` (stub, unimplemented) | 🟡   |
 | J2534 — Connect/Disconnect канал      | `J2534Impl.connect/disconnect`         | —                                 |   ❌   |

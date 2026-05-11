@@ -8,7 +8,7 @@
 | Крейт                   | Назначение                                     | Готовность | PROGRESS                                              |
 | ----------------------- | ---------------------------------------------- | :--------: | ----------------------------------------------------- |
 | **romraider-core**      | Address, Endian, bytes-utils, errors           | 🟢 75%     | [`crates/romraider-core/PROGRESS.md`](crates/romraider-core/PROGRESS.md)         |
-| **romraider-io**        | Transport-trait + serial/elm327/j2534          | 🟡 40%     | [`crates/romraider-io/PROGRESS.md`](crates/romraider-io/PROGRESS.md)             |
+| **romraider-io**        | Transport-trait + serial/elm327/j2534/tactrix  | 🟡 55%     | [`crates/romraider-io/PROGRESS.md`](crates/romraider-io/PROGRESS.md)             |
 | **romraider-protocol**  | SSM/OBD/DS2/NCS диалекты                       | 🟡 40%     | [`crates/romraider-protocol/PROGRESS.md`](crates/romraider-protocol/PROGRESS.md) |
 | **romraider-defs**      | Парсер + резолв ECU/log_defs XML, scaling      | 🟢 85%     | [`crates/romraider-defs/PROGRESS.md`](crates/romraider-defs/PROGRESS.md)         |
 | **romraider-rom**       | ROM-image, decode/encode, checksum             | 🟢 70%     | [`crates/romraider-rom/PROGRESS.md`](crates/romraider-rom/PROGRESS.md)           |
@@ -42,7 +42,8 @@
 | 15    | Switch + BitwiseSwitch UI (radio + checkboxes)    | (закоммичено)    |
 | 16    | Logger backbone: resolve include + [value] + CLI  | (закоммичено)    |
 | 17    | GUI live XY-plot: worker thread + mpsc + Plot     | (закоммичено)    |
-| 18    | SSM ReadBlock + CLI dump-rom (+MockTransport fix) | следующий коммит |
+| 18    | SSM ReadBlock + CLI dump-rom (+MockTransport fix) | (закоммичено)    |
+| 19    | TactrixTransport (USB-bulk via rusb, ati/ata/ato) | следующий коммит |
 
 ## Что работает прямо сейчас (E2E сценарии)
 
@@ -119,7 +120,7 @@
 
 ## Метрики
 
-- **Тестов в воркспейсе:** 134 (passing, 0 failed) на момент `slice-18` (+7: read_block × 3, dump_rom × 4 на MockTransport)
-- **Строк Rust-кода:** ~7200 (не считая XML-фикстур)
-- **Зависимостей (workspace deps в `Cargo.toml`):** 17
-- **Коммитов:** 18 фич-коммитов + начальный + LICENSE + PROGRESS-документация
+- **Тестов в воркспейсе:** 145 (passing, 0 failed) на момент `slice-19` (+11: tactrix-frame parser)
+- **Строк Rust-кода:** ~7700 (не считая XML-фикстур)
+- **Зависимостей (workspace deps в `Cargo.toml`):** 18 (rusb добавлен в slice-19)
+- **Коммитов:** 19 фич-коммитов + начальный + LICENSE + PROGRESS-документация

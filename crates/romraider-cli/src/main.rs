@@ -11,6 +11,7 @@ use romraider_defs::{
     RomsDocument,
 };
 use romraider_io::serial::{SerialConfig, SerialTransport};
+use romraider_io::tactrix::{TactrixConfig, TactrixTransport};
 use romraider_io::Transport;
 use romraider_logger::{LoggerSession, SessionConfig};
 use romraider_protocol::ssm::{self, EcuInitResponse};
@@ -28,14 +29,22 @@ enum Cmd {
     /// Перечислить доступные последовательные порты.
     Ports,
 
-    /// Открыть порт, отправить SSM ECU-Init и распечатать ответ.
+    /// Открыть канал, отправить SSM ECU-Init и распечатать ответ.
+    ///
+    /// По умолчанию использует SerialTransport (требует `--port`). С флагом
+    /// `--tactrix` подключается к Openport 2.0 через USB-bulk (libusb).
     SsmInit {
-        #[arg(short, long)]
+        #[arg(short, long, default_value = "")]
         port: String,
         #[arg(short, long, default_value_t = 4800)]
         baud: u32,
         #[arg(long, default_value_t = 1500)]
         timeout_ms: u64,
+
+        /// Использовать Tactrix Openport 2.0 (USB-bulk) вместо serial-порта.
+        /// `--port` в этом режиме игнорируется.
+        #[arg(long)]
+        tactrix: bool,
     },
 
     /// Загрузить ROM-файл и вывести базовую инфу.
@@ -170,7 +179,16 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
         Cmd::Ports => list_ports(),
-        Cmd::SsmInit { port, baud, timeout_ms } => ssm_init(&port, baud, Duration::from_millis(timeout_ms)),
+        Cmd::SsmInit { port, baud, timeout_ms, tactrix } => {
+            let timeout = Duration::from_millis(timeout_ms);
+            if tactrix {
+                ssm_init_tactrix(timeout)
+            } else if port.is_empty() {
+                anyhow::bail!("--port required when --tactrix is not set");
+            } else {
+                ssm_init(&port, baud, timeout)
+            }
+        }
         Cmd::InspectRom { path } => inspect_rom(&path),
         Cmd::InspectDef { path, resolve, rom, sample_byte } => {
             inspect_def(&path, resolve, rom.as_deref(), sample_byte)
@@ -375,6 +393,26 @@ fn ssm_init(port: &str, baud: u32, timeout: Duration) -> Result<()> {
 
     let init = ssm::ecu_init(&mut tr, timeout)
         .context("SSM ecu-init failed (check cable, ignition, baud rate)")?;
+    print_ecu_init(&init);
+    Ok(())
+}
+
+fn ssm_init_tactrix(timeout: Duration) -> Result<()> {
+    let cfg = TactrixConfig::default();
+    eprintln!(
+        "Opening Tactrix Openport (VID={:#06X} PID={:#06X}, ISO-14230 @ 4800)…",
+        cfg.vid, cfg.pid
+    );
+    let mut tr = TactrixTransport::open(&cfg)
+        .context("Tactrix open failed (check USB cable + Openport firmware)")?;
+    eprintln!("Transport: {}", tr.description());
+    tr.purge()?;
+
+    let request = ssm::build_request(ssm::Command::EcuInit, &[]);
+    println!("→ {}", bytes::hex_dump(&request));
+
+    let init = ssm::ecu_init(&mut tr, timeout)
+        .context("SSM ecu-init via Tactrix failed (ignition ON? K-Line wired?)")?;
     print_ecu_init(&init);
     Ok(())
 }

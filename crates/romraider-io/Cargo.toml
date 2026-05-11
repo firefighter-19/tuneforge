@@ -16,6 +16,7 @@ romraider-core = { workspace = true }
 thiserror  = { workspace = true }
 tracing    = { workspace = true }
 serialport = { workspace = true }
+rusb       = { workspace = true, optional = true }
 
 [target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
 libloading = { workspace = true }
@@ -26,3 +27,6 @@ serial  = []
 elm327  = ["serial"]
 j2534   = []
 mock    = []
+# Tactrix Openport 2.0 USB-bulk transport (libusb через rusb).
+# Требует системную libusb-1.0; на macOS: `brew install libusb`.
+tactrix = ["dep:rusb"]
