@@ -15,6 +15,11 @@ pub enum TactrixFrame {
     Ack { channel: Option<u8> },
     /// `ari <firmware-info>\r\n` — ответ на identify.
     Identify { info: String },
+    /// `are<details>\r\n` — error response (например, на пустую команду).
+    /// Не считается фатальной — handshake читает дальше.
+    Error { info: String },
+    /// `arf<filter_id>\r\n` — ack для PassThruStartMsgFilter (`atf`).
+    FilterAck { id: u32 },
     /// Бинарный фрейм с данными.
     Data {
         /// Маркер канала: `0x33`..`0x36`. Совпадает с протокол-байтом из `ato`.
@@ -93,9 +98,28 @@ pub fn parse_frame(raw: &[u8]) -> Result<(usize, TactrixFrame), ParseError> {
     match raw[2] {
         b'o' => parse_ascii_ack(raw),
         b'i' => parse_ascii_identify(raw),
+        b'e' => parse_ascii_error(raw),
+        b'f' => parse_ascii_filter_ack(raw),
         b @ (PROTO_ISO9141 | PROTO_ISO14230 | PROTO_CAN | PROTO_ISO15765) => parse_binary(raw, b),
         other => Err(ParseError::UnknownDiscriminator(other)),
     }
+}
+
+fn parse_ascii_error(raw: &[u8]) -> Result<(usize, TactrixFrame), ParseError> {
+    let lf = raw.iter().position(|&b| b == b'\n').ok_or(ParseError::NeedMoreData)?;
+    let line = std::str::from_utf8(&raw[..lf]).map_err(|_| ParseError::InvalidUtf8)?;
+    let trimmed = line.trim_end_matches('\r').trim_end();
+    let info = trimmed.strip_prefix("are").unwrap_or(trimmed).trim().to_string();
+    Ok((lf + 1, TactrixFrame::Error { info }))
+}
+
+fn parse_ascii_filter_ack(raw: &[u8]) -> Result<(usize, TactrixFrame), ParseError> {
+    let lf = raw.iter().position(|&b| b == b'\n').ok_or(ParseError::NeedMoreData)?;
+    let line = std::str::from_utf8(&raw[..lf]).map_err(|_| ParseError::InvalidUtf8)?;
+    let trimmed = line.trim_end_matches('\r').trim_end();
+    let body = trimmed.strip_prefix("arf").unwrap_or(trimmed).trim();
+    let id = body.parse::<u32>().unwrap_or(0);
+    Ok((lf + 1, TactrixFrame::FilterAck { id }))
 }
 
 fn parse_ascii_ack(raw: &[u8]) -> Result<(usize, TactrixFrame), ParseError> {
@@ -120,12 +144,20 @@ fn parse_ascii_identify(raw: &[u8]) -> Result<(usize, TactrixFrame), ParseError>
 }
 
 fn parse_binary(raw: &[u8], proto_byte: u8) -> Result<(usize, TactrixFrame), ParseError> {
-    // 'a' 'r' <proto> <len> <type> <ts:4> <payload(len-5)>
+    // Layout: `'a' 'r' <proto> <len> <kind> <data: len-1 bytes>`.
+    //
+    // Для **CAN / ISO15765** первые 4 байта `data` — big-endian timestamp (μs),
+    // далее идёт user-payload (см. dschultzca/j2534 `parse_ts`).
+    //
+    // Для **K-line (ISO9141 / ISO14230)** Tactrix-firmware timestamp НЕ
+    // вставляет — payload идёт сразу после kind. Соответственно payload-size
+    // = len - 1, и для SSM2 первые байты payload — это сам SSM-фрейм с
+    // заголовком (`80 F0 10 <len> ...`).
     if raw.len() < 4 {
         return Err(ParseError::NeedMoreData);
     }
     let len = raw[3] as usize;
-    if len < 5 {
+    if len < 1 {
         return Err(ParseError::InvalidLen);
     }
     let total = 4 + len;
@@ -133,12 +165,22 @@ fn parse_binary(raw: &[u8], proto_byte: u8) -> Result<(usize, TactrixFrame), Par
         return Err(ParseError::NeedMoreData);
     }
     let kind = PacketKind::from_byte(raw[4]);
-    let ts = u32::from_be_bytes([raw[5], raw[6], raw[7], raw[8]]);
-    let payload = raw[9..total].to_vec();
+
+    let is_can = matches!(proto_byte, PROTO_CAN | PROTO_ISO15765);
+    let (timestamp_us, payload) = if is_can {
+        if len < 5 {
+            return Err(ParseError::InvalidLen);
+        }
+        let ts = u32::from_be_bytes([raw[5], raw[6], raw[7], raw[8]]);
+        (ts, raw[9..total].to_vec())
+    } else {
+        (0u32, raw[5..total].to_vec())
+    };
+
     Ok((total, TactrixFrame::Data {
         protocol_byte: proto_byte,
         kind,
-        timestamp_us: ts,
+        timestamp_us,
         payload,
     }))
 }
@@ -172,21 +214,41 @@ mod tests {
     }
 
     #[test]
-    fn parses_binary_norm_msg() {
-        // 'a' 'r' 0x34 (ISO14230) len=10 type=0x00 ts=0x00010203 payload= 80 F0 10 01 FF 40
-        // len covers type(1)+ts(4)+payload(5) = 10
+    fn parses_k_line_norm_msg_without_timestamp() {
+        // K-line (ISO9141/14230): payload идёт сразу после kind, без timestamp.
+        // len=6 → kind(1) + payload(5).
         let raw = &[
-            b'a', b'r', 0x34, 0x0A, // header + len=10
-            0x00,                    // pkt_type = Normal
-            0x00, 0x01, 0x02, 0x03,  // ts BE
+            b'a', b'r', 0x33, 0x06, // header + len=6
+            0x00,                    // kind = NORM_MSG
             0x80, 0xF0, 0x10, 0x01, 0xFF, // SSM payload (5 bytes)
         ];
         let (consumed, frame) = parse_frame(raw).unwrap();
         assert_eq!(consumed, raw.len());
         match frame {
             TactrixFrame::Data { protocol_byte, kind, timestamp_us, payload } => {
-                assert_eq!(protocol_byte, 0x34);
+                assert_eq!(protocol_byte, 0x33);
                 assert_eq!(kind,          PacketKind::Normal);
+                assert_eq!(timestamp_us,  0); // нет timestamp в K-line
+                assert_eq!(payload,       vec![0x80, 0xF0, 0x10, 0x01, 0xFF]);
+            }
+            other => panic!("expected Data, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_can_norm_msg_with_timestamp() {
+        // CAN/ISO15765: первые 4 байта после kind — timestamp.
+        let raw = &[
+            b'a', b'r', 0x35, 0x0A, // header + len=10
+            0x00,                    // kind = NORM_MSG
+            0x00, 0x01, 0x02, 0x03,  // ts BE
+            0x80, 0xF0, 0x10, 0x01, 0xFF, // payload (5 bytes)
+        ];
+        let (consumed, frame) = parse_frame(raw).unwrap();
+        assert_eq!(consumed, raw.len());
+        match frame {
+            TactrixFrame::Data { protocol_byte, timestamp_us, payload, .. } => {
+                assert_eq!(protocol_byte, 0x35);
                 assert_eq!(timestamp_us,  0x00010203);
                 assert_eq!(payload,       vec![0x80, 0xF0, 0x10, 0x01, 0xFF]);
             }
@@ -195,13 +257,9 @@ mod tests {
     }
 
     #[test]
-    fn parses_rx_end_indication() {
-        // type=0x40, no payload
-        let raw = &[
-            b'a', b'r', 0x34, 0x05,    // header + len=5
-            0x40,                       // RX end
-            0x00, 0x00, 0x10, 0x00,     // ts
-        ];
+    fn parses_k_line_rx_end_no_payload() {
+        // K-line RX end: len=1, только kind, никакого ts/payload.
+        let raw = &[b'a', b'r', 0x33, 0x01, 0x40];
         let (consumed, frame) = parse_frame(raw).unwrap();
         assert_eq!(consumed, raw.len());
         match frame {
@@ -236,8 +294,32 @@ mod tests {
     }
 
     #[test]
+    fn parses_error_frame() {
+        let raw = b"are\r\n";
+        let (consumed, frame) = parse_frame(raw).unwrap();
+        assert_eq!(consumed, 5);
+        assert_eq!(frame, TactrixFrame::Error { info: String::new() });
+    }
+
+    #[test]
+    fn parses_error_with_info() {
+        let raw = b"are bad command\r\n";
+        let (consumed, frame) = parse_frame(raw).unwrap();
+        assert_eq!(consumed, raw.len());
+        assert_eq!(frame, TactrixFrame::Error { info: "bad command".into() });
+    }
+
+    #[test]
     fn invalid_len_too_short() {
-        let raw = &[b'a', b'r', 0x34, 0x02, 0x00];
+        // len=0 запрещено (минимум 1 байт kind).
+        let raw = &[b'a', b'r', 0x34, 0x00];
+        assert_eq!(parse_frame(raw).unwrap_err(), ParseError::InvalidLen);
+    }
+
+    #[test]
+    fn can_requires_len_at_least_5() {
+        // CAN/ISO15765: len < 5 невалиден, т.к. ts занимает 4 байта.
+        let raw = &[b'a', b'r', 0x35, 0x02, 0x00, 0xAA];
         assert_eq!(parse_frame(raw).unwrap_err(), ParseError::InvalidLen);
     }
 
@@ -245,9 +327,8 @@ mod tests {
     fn multiple_frames_back_to_back() {
         let mut raw = Vec::new();
         raw.extend_from_slice(b"aro\r\n");
-        raw.extend_from_slice(&[
-            b'a', b'r', 0x34, 0x06, 0x00, 0x00, 0x00, 0x00, 0x01, 0xDE,
-        ]);
+        // K-line NORM_MSG: len=2 → kind(1) + payload(1)
+        raw.extend_from_slice(&[b'a', b'r', 0x34, 0x02, 0x00, 0xDE]);
         let (n1, f1) = parse_frame(&raw).unwrap();
         assert_eq!(f1, TactrixFrame::Ack { channel: None });
         let (n2, f2) = parse_frame(&raw[n1..]).unwrap();

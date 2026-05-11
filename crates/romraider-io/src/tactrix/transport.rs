@@ -8,7 +8,7 @@ use tracing::{debug, warn};
 use crate::error::{IoError, IoResult};
 use crate::transport::Transport;
 
-use super::protocol::{parse_frame, PacketKind, ParseError, TactrixFrame, PROTO_ISO14230};
+use super::protocol::{parse_frame, PacketKind, ParseError, TactrixFrame, PROTO_ISO9141};
 
 /// Стандартный VID Tactrix (унаследован от FTDI).
 pub const TACTRIX_VID: u16 = 0x0403;
@@ -21,6 +21,10 @@ pub struct TactrixConfig {
     pub pid:           u16,
     /// Протокол для `ato`: `0x33` ISO9141, `0x34` ISO14230, `0x35` CAN, `0x36` ISO15765.
     pub protocol:      u8,
+    /// Connect flags для `ato` (J2534 PassThruConnect flags). Для SSM K-line —
+    /// `ISO9141_NO_CHECKSUM = 0x200`, т.к. SSM-фрейм сам содержит modular-checksum
+    /// в последнем байте и не должен «дважды чекcумиться» драйвером Tactrix.
+    pub flags:         u32,
     pub baud:          u32,
     /// Таймаут на handshake-команды при `open`.
     pub claim_timeout: Duration,
@@ -31,7 +35,13 @@ impl Default for TactrixConfig {
         Self {
             vid:           TACTRIX_VID,
             pid:           TACTRIX_OP2_PID,
-            protocol:      PROTO_ISO14230, // SSM2 K-Line
+            // RomRaider Java также подключается к Subaru SSM как ISO9141 + NO_CHECKSUM:
+            // J2534ConnectionISO9141.java → `api.connect(deviceId,
+            // Flag.ISO9141_NO_CHECKSUM.getValue(), connectionProperties.getBaudRate())`.
+            // ISO14230 (KWP-2000) применяет жёсткий handshake/timing, который SSM
+            // не использует — устройство «слышит» начало RX но не получает payload.
+            protocol:      PROTO_ISO9141,
+            flags:         0x0000_0200, // ISO9141_NO_CHECKSUM
             baud:          4800,
             claim_timeout: Duration::from_secs(2),
         }
@@ -54,21 +64,49 @@ impl TactrixTransport {
     /// На macOS дополнительной настройки не требуется (libusb через IOKit).
     /// На Linux может понадобиться udev-rule для прав, либо запуск из-под root.
     pub fn open(cfg: &TactrixConfig) -> IoResult<Self> {
-        let handle = rusb::open_device_with_vid_pid(cfg.vid, cfg.pid)
+        let mut handle = rusb::open_device_with_vid_pid(cfg.vid, cfg.pid)
             .ok_or(IoError::TactrixNotFound { vid: cfg.vid, pid: cfg.pid })?;
 
-        // На Linux libusb может конкурировать за устройство с kernel-driver-ом.
-        #[cfg(target_os = "linux")]
-        {
-            let _ = handle.set_auto_detach_kernel_driver(true);
+        // libusb может конкурировать за устройство с kernel-driver-ом —
+        // на macOS Apple-class-driver моментально захватывает интерфейс,
+        // на Linux то же делает `ftdi_sio` для FTDI-PID. Best-effort: если
+        // платформа не поддерживает — вызов вернёт ошибку, проигнорируем.
+        if let Err(e) = handle.set_auto_detach_kernel_driver(true) {
+            tracing::debug!(?e, "set_auto_detach_kernel_driver unsupported (ignored)");
+        }
+
+        // На macOS bulk-transfer-ы возвращают ENTNOTFOUND, если active
+        // configuration не активирована. Спецификация USB говорит, что после
+        // enumeration конфигурация должна быть выбрана, но macOS оставляет
+        // это на хост-приложение в некоторых случаях.
+        if let Err(e) = handle.set_active_configuration(1) {
+            tracing::debug!(?e, "set_active_configuration(1) — может быть уже active, игнорируем");
+        } else {
+            tracing::debug!("set_active_configuration(1) ok");
+        }
+
+        // Openport 2.0 = CDC ACM: iface 0 = CDC Communications (control +
+        // interrupt EP), iface 1 = CDC Data (bulk EP). Bulk transfers идут
+        // на iface 1, поэтому claim его. Detach обоих kernel-driver-ов чтобы
+        // AppleUSBCDC не мешал.
+        let _ = handle.detach_kernel_driver(0);
+        let _ = handle.detach_kernel_driver(1);
+        if let Err(e) = handle.claim_interface(1) {
+            tracing::warn!(?e, "claim_interface(1) failed");
+            return Err(usb_err(e));
+        }
+        tracing::debug!("interface 1 (CDC Data) claimed");
+
+        if let Err(e) = handle.set_alternate_setting(1, 0) {
+            tracing::debug!(?e, "set_alternate_setting(1,0) ignored");
         }
 
         let (ep_in, ep_out) = find_bulk_endpoints(&handle.device())?;
-
-        // claim_interface ДОЛЖЕН быть после поиска эндпоинтов (на некоторых
-        // платформах descriptor доступен только после claim — пробуем оба порядка).
-        let mut handle = handle;
-        handle.claim_interface(0).map_err(usb_err)?;
+        tracing::debug!(
+            ep_in = format_args!("{ep_in:#04X}"),
+            ep_out = format_args!("{ep_out:#04X}"),
+            "found bulk endpoints",
+        );
 
         let mut t = Self {
             handle,
@@ -79,32 +117,57 @@ impl TactrixTransport {
             rx_buf:  Vec::with_capacity(2048),
         };
 
-        // Идентификация — устройство отвечает "ari <firmware>\r\n".
-        t.send(b"\r\n\r\nati\r\n", cfg.claim_timeout)?;
-        match t.read_one_frame(cfg.claim_timeout)? {
-            TactrixFrame::Identify { info } => debug!(%info, "Tactrix identify"),
-            other => {
-                return Err(IoError::TactrixUnexpected(format!(
-                    "expected identify, got {other:?}"
-                )))
-            }
-        }
+        // Идентификация. Tactrix может вернуть несколько фреймов (ari + are),
+        // поэтому ждём ИМЕННО Identify, остальное логируем.
+        tracing::debug!("sending ati");
+        t.send(b"ati\r\n", cfg.claim_timeout)?;
+        let info = t.wait_for_identify(cfg.claim_timeout)?;
+        debug!(%info, "Tactrix identify");
 
         // Attach.
+        tracing::debug!("sending ata");
         t.send(b"ata\r\n", cfg.claim_timeout)?;
-        let _ = t.expect_ack(cfg.claim_timeout)?;
+        let _ = t.wait_for_ack(cfg.claim_timeout)?;
 
-        // Open channel: `ato<protocol-decimal> 0 <baud> 0`.
-        let cmd = format!("ato{} 0 {} 0\r\n", cfg.protocol, cfg.baud);
+        // Open channel: `ato<j2534-protocol-id> 0 <baud> 0`.
+        // ВАЖНО: `cfg.protocol` — это байт-маркер бинарных кадров (0x33..0x36 = ASCII '3'..'6'),
+        // а в `ato` идёт ИМЕННО голая цифра J2534 protocol ID (3..6). Это одно и то же число,
+        // просто записанное по-разному: 0x34 == ASCII '4' → команда "ato4".
+        let proto_id = cfg.protocol.wrapping_sub(b'0');
+        let cmd = format!("ato{} {} {} 0\r\n", proto_id, cfg.flags, cfg.baud);
+        tracing::debug!(cmd = %cmd.trim_end(), "sending ato");
         t.send(cmd.as_bytes(), cfg.claim_timeout)?;
-        if let Some(ch) = t.expect_ack(cfg.claim_timeout)? {
-            t.channel = ch;
-        }
+        let _ = t.wait_for_ack(cfg.claim_timeout)?;
+        // В Tactrix-wire-протоколе нет отдельного channel-id — в качестве
+        // идентификатора канала используется сам protocol-id (см. dschultzca/j2534
+        // `*pChannelID = protocolID;`). `aro` без digit — нормальный ack.
+        t.channel = proto_id;
+        tracing::debug!(channel = t.channel, "Tactrix channel opened (channel == protocol_id)");
+
+        // PASS-all filter: без хотя бы одного активного фильтра Tactrix
+        // молча выкидывает все входящие пакеты — поэтому handshake без `atf`
+        // приводит к тому, что `att` отдаёт ack, но никаких Data-кадров
+        // в обратную сторону не приходит.
+        // Формат: `atf<ch> <filter_type> <tx_flags> <data_size>\r\n<mask><pattern>`.
+        // FilterType=1 (PASS_FILTER), data_size=1, mask=0x00, pattern=0x00.
+        let mut atf = Vec::with_capacity(16);
+        atf.extend_from_slice(format!("atf{} 1 0 1\r\n", t.channel).as_bytes());
+        atf.extend_from_slice(&[0x00, 0x00]);
+        tracing::debug!("sending atf (PASS-all filter)");
+        t.send(&atf, cfg.claim_timeout)?;
+        let filter_id = t.wait_for_filter_ack(cfg.claim_timeout)?;
+        tracing::debug!(filter_id, "filter installed");
 
         Ok(t)
     }
 
     fn send(&self, bytes: &[u8], timeout: Duration) -> IoResult<()> {
+        tracing::trace!(
+            n = bytes.len(),
+            hex = %hex_dump(bytes),
+            ascii = %ascii_dump(bytes),
+            "tactrix bulk write",
+        );
         let mut written = 0;
         while written < bytes.len() {
             let n = self
@@ -148,15 +211,87 @@ impl TactrixTransport {
                 .read_bulk(self.ep_in, &mut tmp, remaining)
                 .map_err(usb_err)?;
             if n > 0 {
+                tracing::trace!(
+                    n,
+                    hex = %hex_dump(&tmp[..n]),
+                    ascii = %ascii_dump(&tmp[..n]),
+                    "tactrix bulk read",
+                );
                 self.rx_buf.extend_from_slice(&tmp[..n]);
             }
         }
     }
 
-    fn expect_ack(&mut self, timeout: Duration) -> IoResult<Option<u8>> {
-        match self.read_one_frame(timeout)? {
-            TactrixFrame::Ack { channel } => Ok(channel),
-            other => Err(IoError::TactrixUnexpected(format!("expected ack, got {other:?}"))),
+    /// Ждать `Ack`-фрейм. Если приходит `Error`-фрейм во время handshake —
+    /// это значит, что Tactrix отверг команду; пробрасываем как ошибку.
+    fn wait_for_ack(&mut self, timeout: Duration) -> IoResult<Option<u8>> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(IoError::ReadTimeout(timeout));
+            }
+            match self.read_one_frame(remaining)? {
+                TactrixFrame::Ack { channel } => return Ok(channel),
+                TactrixFrame::Error { info } => {
+                    return Err(IoError::TactrixUnexpected(format!(
+                        "Tactrix rejected command (are {info})"
+                    )));
+                }
+                TactrixFrame::FilterAck { id } => {
+                    tracing::warn!(id, "unexpected filter ack while waiting for ack");
+                }
+                other => {
+                    tracing::warn!(?other, "unexpected frame while waiting for ack");
+                }
+            }
+        }
+    }
+
+    /// Ждать `FilterAck`-фрейм (`arf<id>`).
+    fn wait_for_filter_ack(&mut self, timeout: Duration) -> IoResult<u32> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(IoError::ReadTimeout(timeout));
+            }
+            match self.read_one_frame(remaining)? {
+                TactrixFrame::FilterAck { id } => return Ok(id),
+                TactrixFrame::Error { info } => {
+                    return Err(IoError::TactrixUnexpected(format!(
+                        "Tactrix rejected filter (are {info})"
+                    )));
+                }
+                other => {
+                    tracing::warn!(?other, "unexpected frame while waiting for filter ack");
+                }
+            }
+        }
+    }
+
+    /// Ждать `Identify`-фрейм. Поведение на `Error` — как у `wait_for_ack`.
+    fn wait_for_identify(&mut self, timeout: Duration) -> IoResult<String> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(IoError::ReadTimeout(timeout));
+            }
+            match self.read_one_frame(remaining)? {
+                TactrixFrame::Identify { info } => return Ok(info),
+                TactrixFrame::Error { info } => {
+                    return Err(IoError::TactrixUnexpected(format!(
+                        "Tactrix rejected identify (are {info})"
+                    )));
+                }
+                TactrixFrame::FilterAck { id } => {
+                    tracing::warn!(id, "unexpected filter ack while waiting for identify");
+                }
+                other => {
+                    tracing::warn!(?other, "unexpected frame while waiting for identify");
+                }
+            }
         }
     }
 }
@@ -171,32 +306,58 @@ impl Transport for TactrixTransport {
         self.send(&frame, timeout)
     }
 
-    /// Прочитать «сырые» SSM-байты — игнорируем все служебные фреймы (TxDone,
-    /// RxEnd, и т.п.), пока не получим первый `NORM_MSG`.
+    /// Прочитать одно SSM-сообщение целиком.
+    ///
+    /// Tactrix-firmware дробит длинный K-line-ответ на цепочку фреймов:
+    /// `NORM_MSG_START_IND` → `NORM_MSG` (один или несколько чанков) →
+    /// `RX_MSG_END_IND`. Нам нужно склеить все `NORM_MSG`-чанки до
+    /// конца-индикации, чтобы получить полный SSM-фрейм (`80 F0 10 <len>
+    /// <data> <chksum>`).
     fn read_frame(&mut self, buf: &mut [u8], timeout: Duration) -> IoResult<usize> {
         let deadline = Instant::now() + timeout;
+        let mut acc: Vec<u8> = Vec::new();
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
+                if !acc.is_empty() {
+                    // Таймаут после частичной сборки — отдаём что есть, чтобы
+                    // верхний слой мог хотя бы попробовать распарсить.
+                    tracing::warn!(
+                        bytes = acc.len(),
+                        "read_frame timed out mid-message, returning partial"
+                    );
+                    break;
+                }
                 return Err(IoError::ReadTimeout(timeout));
             }
             match self.read_one_frame(remaining)? {
+                TactrixFrame::Data { kind: PacketKind::NormalStart, .. } => {
+                    tracing::trace!("RX message start");
+                }
                 TactrixFrame::Data { kind: PacketKind::Normal, payload, .. } => {
-                    let n = payload.len().min(buf.len());
-                    buf[..n].copy_from_slice(&payload[..n]);
-                    return Ok(n);
+                    acc.extend_from_slice(&payload);
+                    tracing::trace!(chunk = payload.len(), total = acc.len(), "RX chunk");
+                }
+                TactrixFrame::Data { kind: PacketKind::RxEnd | PacketKind::RxEndExtended, .. } => {
+                    tracing::trace!(total = acc.len(), "RX message end");
+                    break;
                 }
                 TactrixFrame::Data { kind, .. } => {
-                    debug!(?kind, "discarding non-Normal data frame");
+                    debug!(?kind, "discarding non-data frame mid-stream");
                 }
-                TactrixFrame::Ack { .. } => {
-                    debug!("stray ack while reading data");
+                TactrixFrame::Ack { .. } => debug!("stray ack while reading data"),
+                TactrixFrame::Identify { .. } => debug!("stray identify while reading data"),
+                TactrixFrame::Error { info } => {
+                    tracing::warn!(%info, "Tactrix error frame mid-stream; ignoring");
                 }
-                TactrixFrame::Identify { .. } => {
-                    debug!("stray identify while reading data");
+                TactrixFrame::FilterAck { id } => {
+                    debug!(id, "stray filter ack while reading data");
                 }
             }
         }
+        let n = acc.len().min(buf.len());
+        buf[..n].copy_from_slice(&acc[..n]);
+        Ok(n)
     }
 
     fn purge(&mut self) -> IoResult<()> {
@@ -225,19 +386,42 @@ impl Drop for TactrixTransport {
             Duration::from_millis(500),
         );
         let _ = self.send(b"atz\r\n", Duration::from_millis(500));
-        if let Err(e) = self.handle.release_interface(0) {
-            warn!(?e, "tactrix release_interface failed");
+        if let Err(e) = self.handle.release_interface(1) {
+            warn!(?e, "tactrix release_interface(1) failed");
         }
     }
 }
 
 fn find_bulk_endpoints(device: &Device<GlobalContext>) -> IoResult<(u8, u8)> {
     let cfg = device.active_config_descriptor().map_err(usb_err)?;
+    tracing::debug!(
+        cfg_value      = cfg.number(),
+        num_interfaces = cfg.num_interfaces(),
+        max_power_ma   = cfg.max_power(),
+        "active config descriptor",
+    );
+    let mut found: Option<(u8, u8)> = None;
     for iface in cfg.interfaces() {
         for descr in iface.descriptors() {
+            tracing::debug!(
+                iface = descr.interface_number(),
+                alt   = descr.setting_number(),
+                class = format_args!("{:#04X}", descr.class_code()),
+                sub   = format_args!("{:#04X}", descr.sub_class_code()),
+                proto = format_args!("{:#04X}", descr.protocol_code()),
+                num_eps = descr.num_endpoints(),
+                "interface descriptor",
+            );
             let mut in_ep  = None;
             let mut out_ep = None;
             for ep in descr.endpoint_descriptors() {
+                tracing::debug!(
+                    addr  = format_args!("{:#04X}", ep.address()),
+                    dir   = ?ep.direction(),
+                    xfer  = ?ep.transfer_type(),
+                    max_size = ep.max_packet_size(),
+                    "  endpoint",
+                );
                 if ep.transfer_type() == rusb::TransferType::Bulk {
                     match ep.direction() {
                         rusb::Direction::In  => in_ep  = Some(ep.address()),
@@ -245,14 +429,36 @@ fn find_bulk_endpoints(device: &Device<GlobalContext>) -> IoResult<(u8, u8)> {
                     }
                 }
             }
-            if let (Some(i), Some(o)) = (in_ep, out_ep) {
-                return Ok((i, o));
+            // Берём только bulk endpoints с alt-setting 0 на data-интерфейсе
+            // (iface 1 для Openport 2.0; control interface 0 у CDC имеет
+            // только interrupt EP). Первый найденный bulk-пара побеждает.
+            if descr.setting_number() == 0 && found.is_none() {
+                if let (Some(i), Some(o)) = (in_ep, out_ep) {
+                    found = Some((i, o));
+                }
             }
         }
     }
-    Err(IoError::TactrixNoBulkEndpoints)
+    found.ok_or(IoError::TactrixNoBulkEndpoints)
 }
 
 fn usb_err(e: rusb::Error) -> IoError {
     IoError::TactrixUsb(e.to_string())
+}
+
+fn hex_dump(b: &[u8]) -> String {
+    let mut s = String::with_capacity(b.len() * 3);
+    for (i, byte) in b.iter().enumerate() {
+        if i > 0 {
+            s.push(' ');
+        }
+        s.push_str(&format!("{byte:02x}"));
+    }
+    s
+}
+
+fn ascii_dump(b: &[u8]) -> String {
+    b.iter()
+        .map(|&c| if (0x20..0x7f).contains(&c) { c as char } else { '.' })
+        .collect()
 }
