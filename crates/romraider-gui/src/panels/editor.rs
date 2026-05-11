@@ -29,6 +29,8 @@ pub struct EditorPanel {
     notice:              Option<String>,
     /// Что показывать в ячейках, когда есть `compare_rom`.
     display_mode:        DisplayMode,
+    /// Подсвечивать ли ячейки cool→warm градиентом по значению (когда нет compare).
+    heatmap_enabled:     bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -241,6 +243,9 @@ impl EditorPanel {
                     }
                 }
             }
+            ui.separator();
+            ui.checkbox(&mut self.heatmap_enabled, "Heatmap")
+                .on_hover_text("Раскрасить ячейки cool→warm по значению (только в режиме Values без compare ROM)");
         });
 
         // Вторая строка: compare-ROM + display-mode toggle.
@@ -340,15 +345,18 @@ impl EditorPanel {
         render_table_header(ui, table);
         ui.separator();
 
+        let heatmap = self.heatmap_enabled;
         egui::ScrollArea::both()
             .auto_shrink([false, false])
             .show(ui, |ui| match table.kind {
-                Some(TableKind::ThreeD) => render_3d(ui, &mut rom_state.rom, compare_rom, table, mode),
+                Some(TableKind::ThreeD) => {
+                    render_3d(ui, &mut rom_state.rom, compare_rom, table, mode, heatmap)
+                }
                 Some(TableKind::TwoD)
                 | Some(TableKind::OneD)
                 | Some(TableKind::XAxis)
                 | Some(TableKind::YAxis) => {
-                    render_flat(ui, &mut rom_state.rom, compare_rom, table, mode)
+                    render_flat(ui, &mut rom_state.rom, compare_rom, table, mode, heatmap)
                 }
                 Some(TableKind::StaticXAxis) | Some(TableKind::StaticYAxis) => {
                     render_static_axis(ui, table);
@@ -436,6 +444,7 @@ fn render_3d(
     compare_rom: Option<&RomImage>,
     table:       &ResolvedTable,
     mode:        DisplayMode,
+    heatmap:     bool,
 ) {
     let (Some(size_x), Some(size_y)) = (table.size_x, table.size_y) else {
         ui.colored_label(egui::Color32::YELLOW, "3D table is missing sizex/sizey.");
@@ -494,6 +503,11 @@ fn render_3d(
             }
             ui.end_row();
 
+            let heat_range = if heatmap && base_real.is_none() {
+                heatmap_range(scaling.as_ref(), &display)
+            } else {
+                None
+            };
             for y in 0..size_y {
                 if let Some(ys) = &y_values {
                     let v = to_real(y_scaling.as_ref(), ys[y]);
@@ -504,7 +518,8 @@ fn render_3d(
                 for x in 0..size_x {
                     let idx  = y * size_x + x;
                     let base = base_real.as_ref().and_then(|b| b.get(idx).copied());
-                    if render_cell(ui, &mut display[idx], base, mode, precision, speed) {
+                    let bg   = cell_bg(display[idx], base, heat_range);
+                    if render_cell(ui, &mut display[idx], base, bg, mode, precision, speed) {
                         changed = true;
                     }
                 }
@@ -523,6 +538,7 @@ fn render_flat(
     compare_rom: Option<&RomImage>,
     table:       &ResolvedTable,
     mode:        DisplayMode,
+    heatmap:     bool,
 ) {
     let count = table
         .size_x
@@ -553,6 +569,12 @@ fn render_flat(
         .and_then(|cr| cr.read_cells(table, count).ok())
         .map(|raw_b| raw_b.into_iter().map(|x| to_real(scaling.as_ref(), x)).collect());
 
+    let heat_range = if heatmap && base_real.is_none() {
+        heatmap_range(scaling.as_ref(), &display)
+    } else {
+        None
+    };
+
     let mut changed = false;
     egui::Grid::new("table-flat-grid")
         .striped(true)
@@ -563,7 +585,8 @@ fn render_flat(
                     ui.end_row();
                 }
                 let base = base_real.as_ref().and_then(|b| b.get(i).copied());
-                if render_cell(ui, &mut display[i], base, mode, precision, speed) {
+                let bg   = cell_bg(display[i], base, heat_range);
+                if render_cell(ui, &mut display[i], base, bg, mode, precision, speed) {
                     changed = true;
                 }
             }
@@ -575,23 +598,32 @@ fn render_flat(
     }
 }
 
+/// Цвет фона ячейки. Приоритет: compare-diff > heatmap > прозрачный.
+fn cell_bg(value: f64, base: Option<f64>, heat_range: Option<(f64, f64)>) -> egui::Color32 {
+    if let Some(b) = base {
+        diff_bg(value - b, true)
+    } else if let Some((mn, mx)) = heat_range {
+        heat_color(value, mn, mx)
+    } else {
+        egui::Color32::TRANSPARENT
+    }
+}
+
 /// Универсальная отрисовка одной ячейки: DragValue в Values-режиме, Label
-/// со значением Δ в Diff-режиме. Раскраска фона по знаку diff (только когда
-/// base задан).
+/// со значением Δ (или сырого value) в Diff-режиме. Цвет фона `bg` уже
+/// вычислен снаружи (compare-diff приоритетнее heatmap).
 ///
 /// Возвращает `true` если значение было изменено (только в Values-режиме).
 fn render_cell(
     ui:        &mut egui::Ui,
     value:     &mut f64,
     base:      Option<f64>,
+    bg:        egui::Color32,
     mode:      DisplayMode,
     precision: usize,
     speed:     f64,
 ) -> bool {
-    let diff       = base.map_or(0.0, |b| *value - b);
-    let bg         = diff_bg(diff, base.is_some());
     let mut changed = false;
-
     egui::Frame::none()
         .fill(bg)
         .inner_margin(egui::Margin::same(1.0))
@@ -609,9 +641,8 @@ fn render_cell(
                 }
             }
             DisplayMode::Diff => {
-                // В Diff-режиме показываем Δ или сам value (если base нет).
                 let label = match base {
-                    Some(_) => format!("{:+.*}", precision, diff),
+                    Some(b) => format!("{:+.*}", precision, *value - b),
                     None    => format!("{:.*}",  precision, value),
                 };
                 ui.label(label);
@@ -633,6 +664,51 @@ fn diff_bg(diff: f64, have_base: bool) -> egui::Color32 {
     } else {
         egui::Color32::TRANSPARENT
     }
+}
+
+/// Диапазон для heatmap: scaling.min/max если оба заданы, иначе автоматический
+/// min/max из самих данных. Возвращает `None` если диапазон вырожденный
+/// (все ячейки равны или невалидны) — в этом случае heatmap не рисуется.
+fn heatmap_range(scaling: Option<&CompiledScaling>, data: &[f64]) -> Option<(f64, f64)> {
+    if let Some(c) = scaling {
+        if let (Some(mn), Some(mx)) = (c.source.min, c.source.max) {
+            if mn < mx {
+                return Some((mn, mx));
+            }
+        }
+    }
+    let (mn, mx) = data.iter().copied().filter(|x| x.is_finite()).fold(
+        (f64::INFINITY, f64::NEG_INFINITY),
+        |(a, b), v| (a.min(v), b.max(v)),
+    );
+    if mn.is_finite() && mx.is_finite() && mn < mx {
+        Some((mn, mx))
+    } else {
+        None
+    }
+}
+
+/// 3-точечный градиент cool blue → mid neutral → hot red. Цвета подобраны так,
+/// чтобы текст DragValue поверх оставался читаемым на тёмной теме.
+fn heat_color(value: f64, min: f64, max: f64) -> egui::Color32 {
+    let t = ((value - min) / (max - min)).clamp(0.0, 1.0);
+    let (r0, g0, b0) = (28u8,  50,  89);   // холодный, тёмно-синий
+    let (r1, g1, b1) = (75u8,  75,  60);   // нейтральный, тёмно-оливковый
+    let (r2, g2, b2) = (110u8, 35,  35);   // горячий, тёмно-красный
+    let (r, g, b) = if t < 0.5 {
+        let u = t * 2.0;
+        (lerp_u8(r0, r1, u), lerp_u8(g0, g1, u), lerp_u8(b0, b1, u))
+    } else {
+        let u = (t - 0.5) * 2.0;
+        (lerp_u8(r1, r2, u), lerp_u8(g1, g2, u), lerp_u8(b1, b2, u))
+    };
+    egui::Color32::from_rgb(r, g, b)
+}
+
+fn lerp_u8(a: u8, b: u8, t: f64) -> u8 {
+    let a = f64::from(a);
+    let b = f64::from(b);
+    (a + (b - a) * t).clamp(0.0, 255.0).round() as u8
 }
 
 /// Сконвертировать «real» значения обратно в байт-репрезентацию и записать.
@@ -735,5 +811,38 @@ mod tests {
         assert_eq!(precision_from_format(Some("0")),      0);
         assert_eq!(precision_from_format(Some("0.0##")),  3);
         assert_eq!(precision_from_format(None),           2);
+    }
+
+    #[test]
+    fn heatmap_range_uses_data_when_scaling_missing() {
+        let data = [1.0, 5.0, 3.0, 10.0, 2.0];
+        let (mn, mx) = heatmap_range(None, &data).unwrap();
+        assert_eq!(mn,  1.0);
+        assert_eq!(mx, 10.0);
+    }
+
+    #[test]
+    fn heatmap_range_degenerate_returns_none() {
+        let constant = [4.0, 4.0, 4.0];
+        assert!(heatmap_range(None, &constant).is_none());
+        let empty: [f64; 0] = [];
+        assert!(heatmap_range(None, &empty).is_none());
+    }
+
+    #[test]
+    fn heat_color_clamps_outside_range() {
+        let cold     = heat_color(-10.0, 0.0, 100.0);
+        let cold_in  = heat_color(0.0,   0.0, 100.0);
+        assert_eq!(cold, cold_in, "out-of-range clamps to cold edge");
+        let hot      = heat_color(200.0, 0.0, 100.0);
+        let hot_in   = heat_color(100.0, 0.0, 100.0);
+        assert_eq!(hot, hot_in, "out-of-range clamps to hot edge");
+    }
+
+    #[test]
+    fn heat_color_endpoints_differ() {
+        let cold = heat_color(0.0, 0.0, 1.0);
+        let hot  = heat_color(1.0, 0.0, 1.0);
+        assert_ne!(cold, hot);
     }
 }

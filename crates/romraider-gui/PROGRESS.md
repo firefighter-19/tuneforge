@@ -111,8 +111,9 @@ Desktop GUI на `eframe`/`egui`: открыть ROM, выбрать опред�
 | Dirty-индикатор `* modified`                  | заголовок окна с `*`                 | в `render_status`                    |   ✅   |
 | Precision из `format="0.00"`                  | `Scale.formatter`                    | `precision_from_format`              |   ✅   |
 | Speed из `fine_increment` для DragValue       | стрелки и shift-clicks               | `cell_speed`                         |   ✅   |
-| **Heatmap-раскраска** (cool→warm по value)    | `DataCellView.setColor` + `ColorScaler` | —                                 |   ❌   |
-| Min/Max validation из scaling                 | `Scale.min/max`                      | —                                    |   ❌   |
+| **Heatmap-раскраска** (cool→warm по value)    | `DataCellView.setColor` + `ColorScaler` | `heat_color` + `heatmap_range` (toggle в статусе) | ✅ |
+| Heatmap-диапазон из `scaling.min/max`         | `Scale.min/max`                      | `heatmap_range` (с fallback на auto) |   ✅   |
+| Min/Max validation при вводе                  | `Scale.min/max` clamp                | —                                    |   ❌   |
 | Copy/Paste значений в Excel-формате           | `Table.copy/paste` + `Transferable`  | —                                    |   ❌   |
 | Multi-cell selection + bulk-edit (+10%, =N)   | `TableMenuItem` actions              | —                                    |   ❌   |
 | Undo для редактирования                       | undo-manager                         | —                                    |   ❌   |
