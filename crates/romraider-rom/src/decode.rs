@@ -65,6 +65,61 @@ fn decode_one(bytes: &[u8], storage_type: StorageType, endian: Endian) -> f64 {
     }
 }
 
+/// Закодировать `values` обратно в байты по [`StorageType`] и [`Endian`].
+///
+/// Значения вне диапазона целого типа clamp-аются (`u8::MAX` для uint8,
+/// `i16::MIN..=i16::MAX` для int16 и т.п.) и **округляются** до ближайшего
+/// целого. Это совпадает с поведением Java-RomRaider при ручном вводе.
+#[must_use]
+pub fn encode_cells(values: &[f64], storage_type: StorageType, endian: Endian) -> Vec<u8> {
+    let mut out = Vec::with_capacity(values.len() * storage_type.byte_size());
+    for &v in values {
+        encode_one(v, storage_type, endian, &mut out);
+    }
+    out
+}
+
+fn encode_one(value: f64, storage_type: StorageType, endian: Endian, out: &mut Vec<u8>) {
+    match storage_type {
+        StorageType::UInt8 | StorageType::Hex | StorageType::Char => {
+            let n = value.clamp(0.0, f64::from(u8::MAX)).round() as u8;
+            out.push(n);
+        }
+        StorageType::Int8 => {
+            let n = value
+                .clamp(f64::from(i8::MIN), f64::from(i8::MAX))
+                .round() as i8;
+            out.push(n as u8);
+        }
+        StorageType::UInt16 => {
+            let n = value.clamp(0.0, f64::from(u16::MAX)).round() as u16;
+            out.extend_from_slice(&endian.write_u16(n));
+        }
+        StorageType::Int16 => {
+            let n = value
+                .clamp(f64::from(i16::MIN), f64::from(i16::MAX))
+                .round() as i16;
+            out.extend_from_slice(&endian.write_u16(n as u16));
+        }
+        StorageType::UInt32 => {
+            let n = value.clamp(0.0, f64::from(u32::MAX)).round() as u32;
+            out.extend_from_slice(&endian.write_u32(n));
+        }
+        StorageType::Int32 => {
+            let n = value
+                .clamp(f64::from(i32::MIN), f64::from(i32::MAX))
+                .round() as i32;
+            out.extend_from_slice(&endian.write_u32(n as u32));
+        }
+        StorageType::Float => {
+            // Сначала сужаем до f32 — это сама природа хранения; точность
+            // потеряется, но это та же потеря, что и при decode.
+            let bits = (value as f32).to_bits();
+            out.extend_from_slice(&endian.write_u32(bits));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,5 +175,49 @@ mod tests {
     fn zero_count_returns_empty() {
         let v = decode_cells(&[], StorageType::UInt16, Endian::Big, 0).unwrap();
         assert!(v.is_empty());
+    }
+
+    #[test]
+    fn encode_uint16_big_endian_round_trip() {
+        let original = [0x00, 0x10, 0xFF, 0xFF, 0x80, 0x00];
+        let decoded  = decode_cells(&original, StorageType::UInt16, Endian::Big, 3).unwrap();
+        let encoded  = encode_cells(&decoded, StorageType::UInt16, Endian::Big);
+        assert_eq!(encoded, original);
+    }
+
+    #[test]
+    fn encode_int8_negative_values() {
+        let v = encode_cells(&[-1.0, -128.0, 127.0], StorageType::Int8, Endian::Big);
+        assert_eq!(v, vec![0xFF, 0x80, 0x7F]);
+    }
+
+    #[test]
+    fn encode_clamps_out_of_range_values() {
+        // uint8 принимает 0..=255; -10 → 0, 300 → 255
+        let v = encode_cells(&[-10.0, 300.0, 128.0], StorageType::UInt8, Endian::Big);
+        assert_eq!(v, vec![0x00, 0xFF, 0x80]);
+    }
+
+    #[test]
+    fn encode_rounds_to_nearest() {
+        // 0.4 → 0, 0.6 → 1, 1.5 → 2 (banker's? нет, .round() — away-from-zero)
+        let v = encode_cells(&[0.4, 0.6, 1.5, 2.5], StorageType::UInt8, Endian::Big);
+        assert_eq!(v, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn encode_float_little_endian_round_trip() {
+        let original = [0x00, 0x00, 0xC0, 0x3F]; // 1.5 LE
+        let decoded  = decode_cells(&original, StorageType::Float, Endian::Little, 1).unwrap();
+        let encoded  = encode_cells(&decoded, StorageType::Float, Endian::Little);
+        assert_eq!(encoded, original);
+    }
+
+    #[test]
+    fn encode_decode_full_cycle_int16() {
+        let original = [-32_768.0, -1.0, 0.0, 1.0, 32_767.0];
+        let bytes    = encode_cells(&original, StorageType::Int16, Endian::Big);
+        let decoded  = decode_cells(&bytes, StorageType::Int16, Endian::Big, 5).unwrap();
+        assert_eq!(decoded, original);
     }
 }

@@ -76,15 +76,37 @@ impl EditorPanel {
         egui::CentralPanel::default().show_inside(ui, |ui| self.render_content(ui));
     }
 
+    pub fn save_rom_as(&mut self, path: PathBuf) {
+        let Some(state) = self.rom.as_mut() else {
+            self.error = Some("No ROM loaded.".into());
+            return;
+        };
+        match state.rom.save_as(&path) {
+            Ok(()) => {
+                state.path = path;
+                self.error = None;
+            }
+            Err(e) => {
+                warn!(?e, "save_as failed");
+                self.error = Some(format!("Save failed: {e}"));
+            }
+        }
+    }
+
     fn render_status(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("ROM:").strong());
-            ui.label(
-                self.rom
-                    .as_ref()
-                    .map(|r| r.path.display().to_string())
-                    .unwrap_or_else(|| "(not loaded)".into()),
-            );
+            match &self.rom {
+                Some(r) => {
+                    ui.label(r.path.display().to_string());
+                    if r.rom.is_dirty() {
+                        ui.colored_label(egui::Color32::YELLOW, "● modified");
+                    }
+                }
+                None => {
+                    ui.label("(not loaded)");
+                }
+            }
             ui.separator();
             ui.label(egui::RichText::new("Def:").strong());
             ui.label(
@@ -138,29 +160,25 @@ impl EditorPanel {
         render_table_tree(ui, rom_def, &mut self.selected_table_name);
     }
 
-    fn render_content(&self, ui: &mut egui::Ui) {
-        let Some(rom) = self.rom.as_ref() else {
-            ui.label("Use File → Open ROM… to load a firmware binary.");
-            return;
-        };
-        let Some(def) = self.def.as_ref() else {
-            ui.label("Load a definition file (File → Open Def…) to view tables.");
-            return;
-        };
-        let Some(rom_id) = self.selected_rom_id.as_ref() else {
-            ui.label("Pick a ROM ID in the sidebar.");
-            return;
-        };
-        let Some(table_name) = self.selected_table_name.as_ref() else {
-            ui.label("Pick a table in the sidebar.");
+    fn render_content(&mut self, ui: &mut egui::Ui) {
+        // Disjoint-borrow: rom mut, def imm, selection imm — все разные поля self.
+        let rom_state  = self.rom.as_mut();
+        let def_state  = self.def.as_ref();
+        let rom_id     = self.selected_rom_id.as_deref();
+        let table_name = self.selected_table_name.as_deref();
+
+        let (Some(rom_state), Some(def_state), Some(rom_id), Some(table_name)) =
+            (rom_state, def_state, rom_id, table_name)
+        else {
+            ui.label("Load a ROM and a definition, then pick ROM ID + table in the sidebar.");
             return;
         };
 
-        let Some(rom_def) = def.roms.iter().find(|r| r.xml_id == *rom_id) else {
+        let Some(rom_def) = def_state.roms.iter().find(|r| r.xml_id == rom_id) else {
             ui.colored_label(egui::Color32::LIGHT_RED, "Selected ROM ID not found.");
             return;
         };
-        let Some(table) = rom_def.tables.iter().find(|t| t.name == *table_name) else {
+        let Some(table) = rom_def.tables.iter().find(|t| t.name == table_name) else {
             ui.colored_label(egui::Color32::LIGHT_RED, "Selected table not found.");
             return;
         };
@@ -171,11 +189,11 @@ impl EditorPanel {
         egui::ScrollArea::both()
             .auto_shrink([false, false])
             .show(ui, |ui| match table.kind {
-                Some(TableKind::ThreeD) => render_3d(ui, &rom.rom, table),
+                Some(TableKind::ThreeD) => render_3d(ui, &mut rom_state.rom, table),
                 Some(TableKind::TwoD)
                 | Some(TableKind::OneD)
                 | Some(TableKind::XAxis)
-                | Some(TableKind::YAxis) => render_flat(ui, &rom.rom, table),
+                | Some(TableKind::YAxis) => render_flat(ui, &mut rom_state.rom, table),
                 Some(TableKind::StaticXAxis) | Some(TableKind::StaticYAxis) => {
                     render_static_axis(ui, table);
                 }
@@ -256,7 +274,7 @@ fn render_table_header(ui: &mut egui::Ui, t: &ResolvedTable) {
     }
 }
 
-fn render_3d(ui: &mut egui::Ui, rom: &RomImage, table: &ResolvedTable) {
+fn render_3d(ui: &mut egui::Ui, rom: &mut RomImage, table: &ResolvedTable) {
     let (Some(size_x), Some(size_y)) = (table.size_x, table.size_y) else {
         ui.colored_label(egui::Color32::YELLOW, "3D table is missing sizex/sizey.");
         return;
@@ -264,7 +282,7 @@ fn render_3d(ui: &mut egui::Ui, rom: &RomImage, table: &ResolvedTable) {
     let size_x = size_x as usize;
     let size_y = size_y as usize;
 
-    let data = match rom.read_table(table) {
+    let raw = match rom.read_table(table) {
         Ok(d) => d,
         Err(e) => {
             ui.colored_label(egui::Color32::LIGHT_RED, format!("Read failed: {e}"));
@@ -273,13 +291,17 @@ fn render_3d(ui: &mut egui::Ui, rom: &RomImage, table: &ResolvedTable) {
     };
     let scaling   = compile_first_scaling(table);
     let precision = precision_from_format(table.scalings.first().and_then(|s| s.format.as_deref()));
+    let speed     = cell_speed(scaling.as_ref(), precision);
+
+    // Real-values для отображения и редактирования.
+    let mut display: Vec<f64> = raw.iter().map(|&x| to_real(scaling.as_ref(), x)).collect();
 
     let x_axis = table.axes.iter().find(|a| a.kind == Some(TableKind::XAxis));
     let y_axis = table.axes.iter().find(|a| a.kind == Some(TableKind::YAxis));
     let x_values = x_axis.and_then(|a| rom.read_cells(a, size_x).ok());
     let y_values = y_axis.and_then(|a| rom.read_cells(a, size_y).ok());
-    let x_scaling = x_axis.and_then(compile_first_scaling);
-    let y_scaling = y_axis.and_then(compile_first_scaling);
+    let x_scaling   = x_axis.and_then(compile_first_scaling);
+    let y_scaling   = y_axis.and_then(compile_first_scaling);
     let x_precision = precision_from_format(
         x_axis.and_then(|a| a.scalings.first().and_then(|s| s.format.as_deref())),
     );
@@ -287,6 +309,7 @@ fn render_3d(ui: &mut egui::Ui, rom: &RomImage, table: &ResolvedTable) {
         y_axis.and_then(|a| a.scalings.first().and_then(|s| s.format.as_deref())),
     );
 
+    let mut changed = false;
     egui::Grid::new("table-3d-grid")
         .striped(true)
         .spacing([4.0, 2.0])
@@ -295,7 +318,7 @@ fn render_3d(ui: &mut egui::Ui, rom: &RomImage, table: &ResolvedTable) {
             ui.label("");
             if let Some(xs) = &x_values {
                 for x in xs {
-                    let v = apply(x_scaling.as_ref(), *x);
+                    let v = to_real(x_scaling.as_ref(), *x);
                     ui.label(egui::RichText::new(format!("{v:.*}", x_precision)).strong());
                 }
             } else {
@@ -305,25 +328,37 @@ fn render_3d(ui: &mut egui::Ui, rom: &RomImage, table: &ResolvedTable) {
             }
             ui.end_row();
 
-            // Data rows with Y-axis labels on the left
+            // Data rows with Y-axis labels on the left + editable cells.
             for y in 0..size_y {
                 if let Some(ys) = &y_values {
-                    let v = apply(y_scaling.as_ref(), ys[y]);
+                    let v = to_real(y_scaling.as_ref(), ys[y]);
                     ui.label(egui::RichText::new(format!("{v:.*}", y_precision)).strong());
                 } else {
                     ui.label(egui::RichText::new(y.to_string()).strong());
                 }
                 for x in 0..size_x {
-                    let raw    = data.get(y * size_x + x).copied().unwrap_or(f64::NAN);
-                    let scaled = apply(scaling.as_ref(), raw);
-                    ui.label(format!("{scaled:.*}", precision));
+                    let idx = y * size_x + x;
+                    if ui
+                        .add(
+                            egui::DragValue::new(&mut display[idx])
+                                .speed(speed)
+                                .fixed_decimals(precision),
+                        )
+                        .changed()
+                    {
+                        changed = true;
+                    }
                 }
                 ui.end_row();
             }
         });
+
+    if changed {
+        write_back(rom, table, &display, scaling.as_ref());
+    }
 }
 
-fn render_flat(ui: &mut egui::Ui, rom: &RomImage, table: &ResolvedTable) {
+fn render_flat(ui: &mut egui::Ui, rom: &mut RomImage, table: &ResolvedTable) {
     let count = table
         .size_x
         .or(table.size_y)
@@ -337,7 +372,7 @@ fn render_flat(ui: &mut egui::Ui, rom: &RomImage, table: &ResolvedTable) {
         Some(n) => n,
     };
 
-    let data = match rom.read_cells(table, count) {
+    let raw = match rom.read_cells(table, count) {
         Ok(d) => d,
         Err(e) => {
             ui.colored_label(egui::Color32::LIGHT_RED, format!("Read failed: {e}"));
@@ -346,20 +381,60 @@ fn render_flat(ui: &mut egui::Ui, rom: &RomImage, table: &ResolvedTable) {
     };
     let scaling   = compile_first_scaling(table);
     let precision = precision_from_format(table.scalings.first().and_then(|s| s.format.as_deref()));
+    let speed     = cell_speed(scaling.as_ref(), precision);
 
+    let mut display: Vec<f64> = raw.iter().map(|&x| to_real(scaling.as_ref(), x)).collect();
+    let mut changed = false;
     egui::Grid::new("table-flat-grid")
         .striped(true)
         .spacing([6.0, 2.0])
         .show(ui, |ui| {
-            for (i, v) in data.iter().enumerate() {
+            for (i, v) in display.iter_mut().enumerate() {
                 if i > 0 && i % 8 == 0 {
                     ui.end_row();
                 }
-                let scaled = apply(scaling.as_ref(), *v);
-                ui.label(format!("{scaled:.*}", precision));
+                if ui
+                    .add(
+                        egui::DragValue::new(v)
+                            .speed(speed)
+                            .fixed_decimals(precision),
+                    )
+                    .changed()
+                {
+                    changed = true;
+                }
             }
             ui.end_row();
         });
+
+    if changed {
+        write_back(rom, table, &display, scaling.as_ref());
+    }
+}
+
+/// Сконвертировать «real» значения обратно в байт-репрезентацию и записать.
+fn write_back(
+    rom:      &mut RomImage,
+    table:    &ResolvedTable,
+    display:  &[f64],
+    scaling:  Option<&CompiledScaling>,
+) {
+    let raw_back: Vec<f64> = display
+        .iter()
+        .map(|&v| match scaling {
+            Some(s) => s.to_byte(v),
+            None    => v,
+        })
+        .collect();
+    if let Err(e) = rom.write_cells(table, &raw_back) {
+        warn!(?e, "write-back failed");
+    }
+}
+
+fn cell_speed(scaling: Option<&CompiledScaling>, precision: usize) -> f64 {
+    scaling
+        .and_then(|c| c.source.fine_increment)
+        .unwrap_or(if precision == 0 { 1.0 } else { 10f64.powi(-(precision as i32)) })
 }
 
 fn render_static_axis(ui: &mut egui::Ui, table: &ResolvedTable) {
@@ -380,7 +455,7 @@ fn compile_first_scaling(table: &ResolvedTable) -> Option<CompiledScaling> {
     table.scalings.first().and_then(|s| s.compile().ok())
 }
 
-fn apply(scaling: Option<&CompiledScaling>, value: f64) -> f64 {
+fn to_real(scaling: Option<&CompiledScaling>, value: f64) -> f64 {
     scaling.map_or(value, |c| c.to_real(value))
 }
 

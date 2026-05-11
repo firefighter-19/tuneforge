@@ -67,6 +67,45 @@ fn missing_table_address_reports_typed_error() {
 }
 
 #[test]
+fn edit_then_save_round_trip_via_scaling() {
+    // Полный цикл редактирования: decode → отобразить как real → пользователь
+    // правит → to_byte → encode → write. После повторного чтения видим
+    // изменения, raw сериализуется в новые байты.
+    let doc      = parse_str(DEF).unwrap();
+    let resolved = resolve(&doc).unwrap();
+    let table    = &resolved[0].tables[0];
+    let scaling  = table.scalings[0].compile().unwrap();
+
+    let mut rom = build_rom();
+    let raw     = rom.read_table(table).unwrap();
+    let real: Vec<f64> = raw.into_iter().map(|x| scaling.to_real(x)).collect();
+    assert_eq!(real, vec![50.0, 100.0, 150.0, 200.0]);
+
+    // «Пользователь» меняет 2-ю и 3-ю ячейки: 100 psi → 110, 150 → 175.
+    let mut edited = real;
+    edited[1] = 110.0;
+    edited[2] = 175.0;
+
+    // Конверсия обратно в байт-значения и запись.
+    let raw_back: Vec<f64> = edited.iter().map(|x| scaling.to_byte(*x)).collect();
+    rom.write_table(table, &raw_back).unwrap();
+    assert!(rom.is_dirty());
+
+    // Перечитываем — видим новые значения.
+    let raw_after  = rom.read_table(table).unwrap();
+    let real_after: Vec<f64> = raw_after.into_iter().map(|x| scaling.to_real(x)).collect();
+    assert_eq!(real_after, vec![50.0, 110.0, 175.0, 200.0]);
+
+    // Под капотом: 110 psi → byte 220 (BE 0x00DC), 175 → byte 350 (BE 0x015E).
+    assert_eq!(&rom.raw()[0x10..0x18], &[
+        0x00, 0x64, // 100 (=50psi)  не тронут
+        0x00, 0xDC, // 220 (=110psi) изменён
+        0x01, 0x5E, // 350 (=175psi) изменён
+        0x01, 0x90, // 400 (=200psi) не тронут
+    ]);
+}
+
+#[test]
 fn three_d_with_axes_via_explicit_count() {
     // 3D-таблица 3x2 uint8 + X axis (3 float LE) + Y axis (2 float LE).
     let xml = r##"

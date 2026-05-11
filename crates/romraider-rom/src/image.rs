@@ -1,10 +1,10 @@
 use std::path::Path;
 
 use romraider_core::{bytes, Address};
-use romraider_defs::{ResolvedTable, StorageType, TableKind};
+use romraider_defs::{ResolvedTable, TableKind};
 use tracing::debug;
 
-use crate::decode::decode_cells;
+use crate::decode::{decode_cells, encode_cells};
 use crate::error::{RomError, RomResult};
 
 /// ROM-образ — простой буфер с операциями чтения/записи по адресу.
@@ -104,6 +104,43 @@ impl RomImage {
         decode_cells(bytes, storage_type, endian, count)
     }
 
+    /// Записать `values` (как байт-значения, **до** scaling — то, что
+    /// получается через `CompiledScaling::to_byte`) обратно в ROM по адресу
+    /// таблицы. Кол-во ячеек == `values.len()`. Помечает образ как `dirty`.
+    pub fn write_cells(&mut self, table: &ResolvedTable, values: &[f64]) -> RomResult<()> {
+        let storage_type = table.storage_type.ok_or_else(|| RomError::TableMissingField {
+            name:  table.name.clone(),
+            field: "storage_type",
+        })?;
+        let endian = table.endian.ok_or_else(|| RomError::TableMissingField {
+            name:  table.name.clone(),
+            field: "endian",
+        })?;
+        let address = table.storage_address.ok_or_else(|| RomError::TableMissingField {
+            name:  table.name.clone(),
+            field: "storage_address",
+        })?;
+        let bytes = encode_cells(values, storage_type, endian);
+        self.write(address, &bytes)
+    }
+
+    /// Записать таблицу целиком — кол-во ячеек выводится из `kind` и
+    /// `size_x`/`size_y` (как в [`Self::read_table`]). Длина `values`
+    /// должна совпадать с ожидаемым числом.
+    pub fn write_table(&mut self, table: &ResolvedTable, values: &[f64]) -> RomResult<()> {
+        let expected = table_cell_count(table).ok_or_else(|| RomError::TableMissingField {
+            name:  table.name.clone(),
+            field: "size_x or size_y",
+        })?;
+        if values.len() != expected {
+            return Err(RomError::DecodeSizeMismatch {
+                got:      values.len(),
+                expected,
+            });
+        }
+        self.write_cells(table, values)
+    }
+
     /// Прочитать таблицу целиком — count выводится из `kind` и `size_x`/`size_y`:
     /// - `3D`: `size_x * size_y`
     /// - `2D`/`X Axis`/`Y Axis`: `size_x` или `size_y` (что задано)
@@ -141,7 +178,7 @@ fn table_cell_count(table: &ResolvedTable) -> Option<usize> {
 mod tests {
     use super::*;
     use romraider_core::Endian;
-    use romraider_defs::ResolvedScaling;
+    use romraider_defs::{ResolvedScaling, StorageType};
 
     fn table(
         kind:    TableKind,
@@ -215,5 +252,33 @@ mod tests {
         let axis = table(TableKind::XAxis, StorageType::Float, Endian::Big, 0, None, None);
         let cells = rom.read_cells(&axis, 3).unwrap();
         assert_eq!(cells, vec![1.5, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn write_table_round_trip_preserves_values() {
+        let mut rom = RomImage::from_bytes(vec![0u8; 16]);
+        let t = table(TableKind::TwoD, StorageType::UInt16, Endian::Big, 0, Some(4), None);
+        rom.write_table(&t, &[10.0, 200.0, 3000.0, 65535.0]).unwrap();
+        assert!(rom.is_dirty());
+        assert_eq!(
+            rom.read_table(&t).unwrap(),
+            vec![10.0, 200.0, 3000.0, 65535.0]
+        );
+    }
+
+    #[test]
+    fn write_table_size_mismatch_returns_error() {
+        let mut rom = RomImage::from_bytes(vec![0u8; 16]);
+        let t = table(TableKind::TwoD, StorageType::UInt16, Endian::Big, 0, Some(4), None);
+        let err = rom.write_table(&t, &[1.0, 2.0]).unwrap_err();
+        assert!(matches!(err, RomError::DecodeSizeMismatch { .. }));
+    }
+
+    #[test]
+    fn write_cells_writes_through_to_underlying_bytes() {
+        let mut rom = RomImage::from_bytes(vec![0u8; 8]);
+        let t = table(TableKind::TwoD, StorageType::UInt8, Endian::Big, 2, Some(3), None);
+        rom.write_cells(&t, &[1.0, 2.0, 3.0]).unwrap();
+        assert_eq!(&rom.raw()[2..5], &[1, 2, 3]);
     }
 }

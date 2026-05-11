@@ -49,6 +49,16 @@ impl eframe::App for App {
                         }
                     }
                     ui.separator();
+                    if ui.button("Save ROM As…").clicked() {
+                        ui.close_menu();
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("ROM image", &["bin", "rom"])
+                            .save_file()
+                        {
+                            self.editor.save_rom_as(path);
+                        }
+                    }
+                    ui.separator();
                     if ui.button("Quit").clicked() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
