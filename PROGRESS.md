@@ -10,11 +10,11 @@
 | **romraider-core**      | Address, Endian, bytes-utils, errors           | 🟢 75%     | [`crates/romraider-core/PROGRESS.md`](crates/romraider-core/PROGRESS.md)         |
 | **romraider-io**        | Transport-trait + serial/elm327/j2534          | 🟡 40%     | [`crates/romraider-io/PROGRESS.md`](crates/romraider-io/PROGRESS.md)             |
 | **romraider-protocol**  | SSM/OBD/DS2/NCS диалекты                       | 🟡 30%     | [`crates/romraider-protocol/PROGRESS.md`](crates/romraider-protocol/PROGRESS.md) |
-| **romraider-defs**      | Парсер + резолв ECU/log_defs XML, scaling      | 🟢 70%     | [`crates/romraider-defs/PROGRESS.md`](crates/romraider-defs/PROGRESS.md)         |
+| **romraider-defs**      | Парсер + резолв ECU/log_defs XML, scaling      | 🟢 75%     | [`crates/romraider-defs/PROGRESS.md`](crates/romraider-defs/PROGRESS.md)         |
 | **romraider-rom**       | ROM-image, decode/encode, checksum             | 🟢 70%     | [`crates/romraider-rom/PROGRESS.md`](crates/romraider-rom/PROGRESS.md)           |
 | **romraider-logger**    | Backend логгера + plugins                      | 🔴 10%     | [`crates/romraider-logger/PROGRESS.md`](crates/romraider-logger/PROGRESS.md)     |
 | **romraider-cli**       | Headless CLI (debug + smoke-tests)             | 🟢 80%     | [`crates/romraider-cli/PROGRESS.md`](crates/romraider-cli/PROGRESS.md)           |
-| **romraider-gui**       | egui-редактор + (будущий) логгер UI            | 🟡 60%     | [`crates/romraider-gui/PROGRESS.md`](crates/romraider-gui/PROGRESS.md)           |
+| **romraider-gui**       | egui-редактор + (будущий) логгер UI            | 🟡 65%     | [`crates/romraider-gui/PROGRESS.md`](crates/romraider-gui/PROGRESS.md)           |
 
 **Легенда:** 🟢 ≥60% — 🟡 30–60% — 🔴 <30%
 
@@ -38,7 +38,8 @@
 | 11    | Compare ROMs в GUI (diff coloring + Values/Diff)  | (закоммичено)    |
 | 12    | Heatmap-раскраска ячеек (cool→warm по value)      | (закоммичено)    |
 | 13    | Undo/Redo + Edit-меню + Ctrl+Z/Y хоткеи           | (закоммичено)    |
-| 14    | Tooltip ячеек (addr/raw/real/Δ/formula)           | следующий коммит |
+| 14    | Tooltip ячеек (addr/raw/real/Δ/formula)           | (закоммичено)    |
+| 15    | Switch + BitwiseSwitch UI (radio + checkboxes)    | следующий коммит |
 
 ## Что работает прямо сейчас (E2E сценарии)
 
@@ -78,10 +79,12 @@
 3. ~~**Compare two ROMs**~~ ✅ Slice 11
 4. ~~**Heatmap-раскраска**~~ ✅ Slice 12
 5. ~~**Undo/Redo**~~ ✅ Slice 13 (history=100, drag = много мелких шагов; coalescing — потом)
-6. ~~**Tooltip для ячеек**~~ ✅ Slice 14 (addr/raw/real/Δ/formula; `<description>` в tooltip — потом)
-7. **Switch-таблицы UI** ([gui+rom](crates/romraider-rom/PROGRESS.md)) — много ECU-настроек скрыты в bit-флагах
+6. ~~**Tooltip для ячеек**~~ ✅ Slice 14
+7. ~~**Switch-таблицы UI**~~ ✅ Slice 15 (radio + checkbox; multi-byte bitwise — отложен)
 8. **Coalescing undo** при drag (один шаг на drag, а не на каждое промежуточное значение)
 9. **Description в cell tooltip** — копировать описание таблицы в hover-popup
+
+С точки зрения editor-критпути для редактирования прошивок Subaru — основное закрыто. Дальше открываются другие домены: **logger backend**, **dump-rom через SSM**, **J2534**.
 
 Для **дампа и реflash** — отдельный долгий путь:
 
@@ -111,7 +114,7 @@
 
 ## Метрики
 
-- **Тестов в воркспейсе:** 114 (passing, 0 failed) на момент `slice-14` (+2 unit на format_byte в gui)
-- **Строк Rust-кода:** ~6000 (не считая XML-фикстур)
+- **Тестов в воркспейсе:** 119 (passing, 0 failed) на момент `slice-15` (+5 unit: 3 parser + 1 typed + 1 resolve для switch/bitwise)
+- **Строк Rust-кода:** ~6200 (не считая XML-фикстур)
 - **Зависимостей (workspace deps в `Cargo.toml`):** 17
-- **Коммитов:** 14 фич-коммитов + начальный + LICENSE + PROGRESS-документация
+- **Коммитов:** 15 фич-коммитов + начальный + LICENSE + PROGRESS-документация

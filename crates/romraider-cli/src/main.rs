@@ -244,13 +244,15 @@ fn print_resolved_table(t: &ResolvedTable, indent: usize, sample_byte: Option<f6
 fn debug_kind(k: romraider_defs::TableKind) -> &'static str {
     use romraider_defs::TableKind::*;
     match k {
-        OneD        => "1D",
-        TwoD        => "2D",
-        ThreeD      => "3D",
-        XAxis       => "X-Axis",
-        YAxis       => "Y-Axis",
-        StaticXAxis => "SX-Axis",
-        StaticYAxis => "SY-Axis",
+        OneD          => "1D",
+        TwoD          => "2D",
+        ThreeD        => "3D",
+        XAxis         => "X-Axis",
+        YAxis         => "Y-Axis",
+        StaticXAxis   => "SX-Axis",
+        StaticYAxis   => "SY-Axis",
+        Switch        => "Switch",
+        BitwiseSwitch => "BSwitch",
     }
 }
 

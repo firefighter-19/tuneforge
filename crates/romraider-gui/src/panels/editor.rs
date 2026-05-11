@@ -459,6 +459,12 @@ impl EditorPanel {
                 Some(TableKind::StaticXAxis) | Some(TableKind::StaticYAxis) => {
                     render_static_axis(ui, table);
                 }
+                Some(TableKind::Switch) => {
+                    render_switch(ui, &mut rom_state.rom, undo_log, table);
+                }
+                Some(TableKind::BitwiseSwitch) => {
+                    render_bitwise_switch(ui, &mut rom_state.rom, undo_log, table);
+                }
                 None => {
                     ui.colored_label(egui::Color32::YELLOW, "Table kind unknown after resolution.");
                 }
@@ -951,6 +957,121 @@ fn cell_speed(scaling: Option<&CompiledScaling>, precision: usize) -> f64 {
         .unwrap_or(if precision == 0 { 1.0 } else { 10f64.powi(-(precision as i32)) })
 }
 
+fn render_switch(
+    ui:       &mut egui::Ui,
+    rom:      &mut RomImage,
+    undo_log: &mut UndoLog,
+    table:    &ResolvedTable,
+) {
+    let Some(addr) = table.storage_address else {
+        ui.colored_label(egui::Color32::YELLOW, "Switch table is missing storageaddress.");
+        return;
+    };
+    if table.states.is_empty() {
+        ui.colored_label(egui::Color32::YELLOW, "Switch table has no <state> entries.");
+        return;
+    }
+    // Размер берём из первой state.data (после parse в байты).
+    let first_size = match table.states[0].data_bytes() {
+        Ok(b) if !b.is_empty() => b.len(),
+        _ => {
+            ui.colored_label(egui::Color32::LIGHT_RED, "Switch state[0].data malformed.");
+            return;
+        }
+    };
+    let current = match rom.read(addr, first_size) {
+        Ok(b)  => b.to_vec(),
+        Err(e) => {
+            ui.colored_label(egui::Color32::LIGHT_RED, format!("Read failed: {e}"));
+            return;
+        }
+    };
+
+    let mut new_data: Option<Vec<u8>> = None;
+    let mut matched = false;
+    ui.vertical(|ui| {
+        for state in &table.states {
+            let Ok(bytes) = state.data_bytes() else { continue };
+            let selected = bytes == current;
+            if selected { matched = true; }
+            let response = ui.radio(selected, &state.name);
+            if response.clicked() && !selected {
+                new_data = Some(bytes);
+            }
+        }
+        if !matched {
+            ui.colored_label(
+                egui::Color32::YELLOW,
+                format!("Current bytes {} don't match any state", romraider_core::bytes::hex_dump(&current)),
+            );
+        }
+    });
+
+    if let Some(after) = new_data {
+        if rom.write(addr, &after).is_ok() {
+            undo_log.record(addr, current, after);
+        }
+    }
+}
+
+fn render_bitwise_switch(
+    ui:       &mut egui::Ui,
+    rom:      &mut RomImage,
+    undo_log: &mut UndoLog,
+    table:    &ResolvedTable,
+) {
+    let Some(addr) = table.storage_address else {
+        ui.colored_label(egui::Color32::YELLOW, "BitwiseSwitch table is missing storageaddress.");
+        return;
+    };
+    if table.bits.is_empty() {
+        ui.colored_label(egui::Color32::YELLOW, "BitwiseSwitch table has no <bit> entries.");
+        return;
+    }
+    let current = match rom.read(addr, 1) {
+        Ok(b)  => b[0],
+        Err(e) => {
+            ui.colored_label(egui::Color32::LIGHT_RED, format!("Read failed: {e}"));
+            return;
+        }
+    };
+
+    let mut new_value = current;
+    ui.vertical(|ui| {
+        for bit in &table.bits {
+            let Ok(pos) = bit.bit_position() else {
+                ui.colored_label(egui::Color32::YELLOW, format!("Invalid bit position: {}", bit.position));
+                continue;
+            };
+            if pos >= 8 {
+                ui.colored_label(
+                    egui::Color32::YELLOW,
+                    format!("{} — bit position {} > 7 (multi-byte bitwise not supported)", bit.name, pos),
+                );
+                continue;
+            }
+            let mask = 1u8 << pos;
+            let mut on = (new_value & mask) != 0;
+            if ui
+                .checkbox(&mut on, format!("bit {} — {}", pos, bit.name))
+                .changed()
+            {
+                if on {
+                    new_value |= mask;
+                } else {
+                    new_value &= !mask;
+                }
+            }
+        }
+    });
+
+    if new_value != current {
+        if rom.write(addr, &[new_value]).is_ok() {
+            undo_log.record(addr, vec![current], vec![new_value]);
+        }
+    }
+}
+
 fn render_static_axis(ui: &mut egui::Ui, table: &ResolvedTable) {
     if table.data.is_empty() {
         ui.label("Static axis has no labels.");
@@ -981,13 +1102,15 @@ fn precision_from_format(format: Option<&str>) -> usize {
 
 fn debug_kind(k: Option<TableKind>) -> &'static str {
     match k {
-        Some(TableKind::OneD)        => "1D",
-        Some(TableKind::TwoD)        => "2D",
-        Some(TableKind::ThreeD)      => "3D",
-        Some(TableKind::XAxis)       => "X Axis",
-        Some(TableKind::YAxis)       => "Y Axis",
-        Some(TableKind::StaticXAxis) => "Static X Axis",
-        Some(TableKind::StaticYAxis) => "Static Y Axis",
+        Some(TableKind::OneD)          => "1D",
+        Some(TableKind::TwoD)          => "2D",
+        Some(TableKind::ThreeD)        => "3D",
+        Some(TableKind::XAxis)         => "X Axis",
+        Some(TableKind::YAxis)         => "Y Axis",
+        Some(TableKind::StaticXAxis)   => "Static X Axis",
+        Some(TableKind::StaticYAxis)   => "Static Y Axis",
+        Some(TableKind::Switch)        => "Switch",
+        Some(TableKind::BitwiseSwitch) => "BitwiseSwitch",
         None => "?",
     }
 }

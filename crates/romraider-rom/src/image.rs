@@ -170,7 +170,10 @@ fn table_cell_count(table: &ResolvedTable) -> Option<usize> {
         Some(TableKind::TwoD) | Some(TableKind::XAxis) | Some(TableKind::YAxis) => sx.or(sy),
         Some(TableKind::OneD) => Some(1),
         Some(TableKind::StaticXAxis) | Some(TableKind::StaticYAxis) => Some(0),
-        None => sx.or(sy), // kind не задан — лучше что-то, чем падать
+        // Switch/BitwiseSwitch не читаются через read_table — у них своя
+        // схема, см. `editor::render_switch`/`render_bitwise_switch`.
+        Some(TableKind::Switch) | Some(TableKind::BitwiseSwitch) => None,
+        None => sx.or(sy),
     }
 }
 
@@ -202,6 +205,8 @@ mod tests {
             scalings:        Vec::<ResolvedScaling>::new(),
             axes:            Vec::new(),
             data:            Vec::new(),
+            states:          Vec::new(),
+            bits:            Vec::new(),
             description:     None,
         }
     }

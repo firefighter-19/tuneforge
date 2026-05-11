@@ -185,8 +185,65 @@ pub struct TableDef {
     #[serde(default, rename = "data")]
     pub data: Vec<String>,
 
+    /// Для `type="Switch"` — список именованных состояний (`<state name="On" data="01"/>`).
+    #[serde(default, rename = "state")]
+    pub states: Vec<SwitchState>,
+
+    /// Для `type="BitwiseSwitch"` — флаги по битам (`<bit name="AC" position="0"/>`).
+    #[serde(default, rename = "bit")]
+    pub bits: Vec<SwitchBit>,
+
     #[serde(default)]
     pub description: Option<String>,
+}
+
+/// `<state>` внутри `<table type="Switch">`. `data` — hex-строка (одна или
+/// несколько байт), задающая значение, которое надо записать при выборе.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SwitchState {
+    #[serde(rename = "@name")]
+    pub name: String,
+
+    #[serde(rename = "@data")]
+    pub data: String,
+}
+
+impl SwitchState {
+    /// Распарсить `data` ("01", "0A", "0001") в байты. Нечётная длина
+    /// pad-ится ведущим нулём; пустая строка → `Ok(vec![])`.
+    pub fn data_bytes(&self) -> Result<Vec<u8>, std::num::ParseIntError> {
+        let cleaned = self.data.trim().trim_start_matches("0x").trim_start_matches("0X");
+        if cleaned.is_empty() {
+            return Ok(Vec::new());
+        }
+        let padded: String = if cleaned.len() % 2 == 1 {
+            format!("0{cleaned}")
+        } else {
+            cleaned.to_string()
+        };
+        (0..padded.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&padded[i..i + 2], 16))
+            .collect()
+    }
+}
+
+/// `<bit>` внутри `<table type="BitwiseSwitch">`. `position` ∈ `0..8`
+/// (мы поддерживаем только 1-байтные bitwise-таблицы).
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SwitchBit {
+    #[serde(rename = "@name")]
+    pub name: String,
+
+    #[serde(rename = "@position")]
+    pub position: String,
+}
+
+impl SwitchBit {
+    /// Распарсить `position` в `u8` (`0..=7`).
+    pub fn bit_position(&self) -> Result<u8, std::num::ParseIntError> {
+        self.position.trim().parse::<u8>()
+    }
 }
 
 /// `<scaling>`-узел внутри `<table>`: inline-определение или ссылка на

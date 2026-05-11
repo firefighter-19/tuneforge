@@ -20,12 +20,18 @@ pub enum TableKind {
     YAxis,
     StaticXAxis,
     StaticYAxis,
+    /// `<table type="Switch">` — один из заранее заданных стейтов (`<state>`).
+    Switch,
+    /// `<table type="BitwiseSwitch">` — bitmap флагов (`<bit position="N">`).
+    BitwiseSwitch,
 }
 
 impl FromStr for TableKind {
     type Err = DefError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // Java сравнивает type через `equalsIgnoreCase` (см. TableScaleUnmarshaller),
+        // поэтому матчим case-insensitively на «Switch» / «BitwiseSwitch».
         match s {
             "1D"            => Ok(Self::OneD),
             "2D"            => Ok(Self::TwoD),
@@ -34,7 +40,11 @@ impl FromStr for TableKind {
             "Y Axis"        => Ok(Self::YAxis),
             "Static X Axis" => Ok(Self::StaticXAxis),
             "Static Y Axis" => Ok(Self::StaticYAxis),
-            other => Err(DefError::UnknownTableType(other.to_string())),
+            other => match other.to_ascii_lowercase().as_str() {
+                "switch"        => Ok(Self::Switch),
+                "bitwiseswitch" => Ok(Self::BitwiseSwitch),
+                _ => Err(DefError::UnknownTableType(other.to_string())),
+            },
         }
     }
 }
@@ -104,6 +114,14 @@ mod tests {
             assert!(TableKind::from_str(s).is_ok(), "{s}");
         }
         assert!(TableKind::from_str("Schmaxis").is_err());
+    }
+
+    #[test]
+    fn table_kind_parses_switch_case_insensitive() {
+        assert_eq!(TableKind::from_str("Switch").unwrap(),        TableKind::Switch);
+        assert_eq!(TableKind::from_str("switch").unwrap(),        TableKind::Switch);
+        assert_eq!(TableKind::from_str("BitwiseSwitch").unwrap(), TableKind::BitwiseSwitch);
+        assert_eq!(TableKind::from_str("bitwiseswitch").unwrap(), TableKind::BitwiseSwitch);
     }
 
     #[test]

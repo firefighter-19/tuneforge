@@ -163,6 +163,65 @@ mod tests {
     }
 
     #[test]
+    fn parses_switch_table_with_states() {
+        let xml = r##"
+            <roms>
+              <rom>
+                <romid><xmlid>R</xmlid></romid>
+                <table type="Switch" name="Iridium Spark" storageaddress="0x1234" size="1">
+                  <state name="On"  data="01"/>
+                  <state name="Off" data="00"/>
+                  <state name="Maybe" data="42"/>
+                </table>
+              </rom>
+            </roms>
+        "##;
+        let doc = parse_str(xml).unwrap();
+        let t   = &doc.roms[0].tables[0];
+        assert_eq!(t.kind.as_deref(), Some("Switch"));
+        assert_eq!(t.states.len(),    3);
+        assert_eq!(t.states[0].name, "On");
+        assert_eq!(t.states[0].data, "01");
+        assert_eq!(t.states[0].data_bytes().unwrap(), vec![0x01]);
+        assert_eq!(t.states[2].data_bytes().unwrap(), vec![0x42]);
+    }
+
+    #[test]
+    fn parses_bitwise_switch_with_bits() {
+        let xml = r##"
+            <roms>
+              <rom>
+                <romid><xmlid>R</xmlid></romid>
+                <table type="BitwiseSwitch" name="Engine Flags" storageaddress="0xABCD">
+                  <bit name="AC Enabled" position="0"/>
+                  <bit name="Cruise"      position="3"/>
+                  <bit name="Sport Mode"  position="7"/>
+                </table>
+              </rom>
+            </roms>
+        "##;
+        let doc = parse_str(xml).unwrap();
+        let t   = &doc.roms[0].tables[0];
+        assert_eq!(t.kind.as_deref(), Some("BitwiseSwitch"));
+        assert_eq!(t.bits.len(), 3);
+        assert_eq!(t.bits[0].bit_position().unwrap(), 0);
+        assert_eq!(t.bits[1].bit_position().unwrap(), 3);
+        assert_eq!(t.bits[2].bit_position().unwrap(), 7);
+    }
+
+    #[test]
+    fn switch_state_data_bytes_handles_edge_cases() {
+        use crate::ecu::SwitchState;
+        let mk = |s: &str| SwitchState { name: "n".into(), data: s.into() };
+        assert_eq!(mk("01").data_bytes().unwrap(),   vec![0x01]);
+        assert_eq!(mk("0x0A").data_bytes().unwrap(), vec![0x0A]);
+        assert_eq!(mk("A").data_bytes().unwrap(),    vec![0x0A]); // нечётная длина — pad
+        assert_eq!(mk("0102").data_bytes().unwrap(), vec![0x01, 0x02]);
+        assert_eq!(mk("  0F  ").data_bytes().unwrap(), vec![0x0F]); // trim
+        assert!(mk("XY").data_bytes().is_err());
+    }
+
+    #[test]
     fn lookup_helpers_find_by_xmlid_and_scalingbase_name() {
         let xml = r#"
             <roms>

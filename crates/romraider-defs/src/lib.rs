@@ -16,7 +16,8 @@ pub mod resolve;
 pub mod typed;
 
 pub use ecu::{
-    EcuDefinition, RomDefinition, RomId, RomsDocument, ScalingBase, ScalingRef, TableDef,
+    EcuDefinition, RomDefinition, RomId, RomsDocument, ScalingBase, ScalingRef, SwitchBit,
+    SwitchState, TableDef,
 };
 pub use error::{DefError, DefResult};
 pub use expression::CompiledScaling;

@@ -117,8 +117,8 @@ Desktop GUI на `eframe`/`egui`: открыть ROM, выбрать опред�
 | Copy/Paste значений в Excel-формате           | `Table.copy/paste` + `Transferable`  | —                                    |   ❌   |
 | Multi-cell selection + bulk-edit (+10%, =N)   | `TableMenuItem` actions              | —                                    |   ❌   |
 | Undo/Redo для редактирования (с history limit) | undo-manager                        | `UndoLog` (MAX=100), записи на каждый `write_back` | ✅ |
-| Switch-таблицы UI (radio-buttons)             | `TableSwitchView`                    | —                                    |   ❌   |
-| Bitwise switch UI (checkboxes для битов)      | `TableBitwiseSwitchView`             | —                                    |   ❌   |
+| Switch-таблицы UI (radio-buttons)             | `TableSwitchView`                    | `render_switch` + radio-group + undo-aware write | ✅ |
+| Bitwise switch UI (checkboxes для битов)      | `TableBitwiseSwitchView`             | `render_bitwise_switch` + checkbox per bit | ✅ |
 | Reset to base values                          | `Table.resetToOriginal`              | —                                    |   ❌   |
 | Tab-keyboard navigation между ячейками        | Swing default                        | partial via DragValue                |  🟡   |
 | **Tooltip на hover** — addr/raw/real/Δ/formula | `Table.getDescription` popup        | `CellTooltip` + `cell_tooltip_ui` через `on_hover_ui` | ✅ |

@@ -47,6 +47,8 @@ production-формата.
 | `<scaling>` inline-or-by-base                 | `TableScaleUnmarshaller`             | `ScalingRef`               |   ✅   |
 | `<scalingbase>` верхнего уровня               | `Scale`-templates                    | `ScalingBase`              |   ✅   |
 | `<data>` метки для Static-осей                | `unmarshallStaticData`               | `TableDef.data: Vec<String>` |   ✅  |
+| `<state>` для `type="Switch"`                 | `addPresetValue`                     | `TableDef.states: Vec<SwitchState>` + `data_bytes()` | ✅ |
+| `<bit>` для `type="BitwiseSwitch"`            | `setPresetValues`                    | `TableDef.bits: Vec<SwitchBit>` + `bit_position()` | ✅ |
 | Парс из reader/string/file                    | `DocumentBuilder.parse`              | `parse_reader/str/file`    |   ✅   |
 | Helper-методы (`find_rom_by_xml_id`, `find_scaling_base`) | inline в `Rom.java`     | `RomsDocument` impl        |   ✅   |
 | Обнаружение malformed XML                     | `SAXException`                       | `DefError::Xml`            |   ✅   |
@@ -68,7 +70,7 @@ production-формата.
 
 | Фича                                          | Java-аналог                       | Rust                          | Статус |
 | --------------------------------------------- | --------------------------------- | ----------------------------- | :----: |
-| `TableKind` enum (1D/2D/3D/X/Y/Static)        | `Table.Type` enum                 | `typed::TableKind`            |   ✅   |
+| `TableKind` enum (1D/2D/3D/X/Y/Static/Switch/BitwiseSwitch) | `Table.Type` enum    | `typed::TableKind` (Switch/BitwiseSwitch case-insensitive) | ✅ |
 | `StorageType` enum (9 типов)                  | `Settings.STORAGE_TYPE_*` constants | `typed::StorageType`        |   ✅   |
 | Endian enum                                   | hardcoded в `ByteUtil`            | `romraider_core::Endian`      |   ✅   |
 | Парс `storageaddress="0xC11D4"` → Address     | `RomAttributeParser.parseHexString`| `Address::from_str`          |   ✅   |

@@ -54,6 +54,10 @@ pub struct ResolvedTable {
     pub scalings:        Vec<ResolvedScaling>,
     pub axes:            Vec<ResolvedTable>,
     pub data:            Vec<String>,
+    /// Для `kind == Switch` — список именованных состояний.
+    pub states:          Vec<crate::ecu::SwitchState>,
+    /// Для `kind == BitwiseSwitch` — список бит-флагов.
+    pub bits:            Vec<crate::ecu::SwitchBit>,
     pub description:     Option<String>,
 }
 
@@ -243,6 +247,8 @@ impl<'a> Resolver<'a> {
             scalings,
             axes,
             data: raw.data.clone(),
+            states: raw.states.clone(),
+            bits: raw.bits.clone(),
             description: raw.description.clone(),
         })
     }
@@ -309,6 +315,16 @@ fn merge_table(parent: &TableDef, child: &TableDef) -> TableDef {
             parent.data.clone()
         } else {
             child.data.clone()
+        },
+        states: if child.states.is_empty() {
+            parent.states.clone()
+        } else {
+            child.states.clone()
+        },
+        bits: if child.bits.is_empty() {
+            parent.bits.clone()
+        } else {
+            child.bits.clone()
         },
         description: or_clone(&child.description, &parent.description),
     }
@@ -481,6 +497,43 @@ mod tests {
         let s   = &res[0].tables[0].scalings[0];
         assert_eq!(s.units.as_deref(),      Some("override"));
         assert_eq!(s.expression.as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn switch_table_resolves_states_and_bits() {
+        let xml = r##"
+            <roms>
+              <rom>
+                <romid><xmlid>BASE</xmlid></romid>
+                <table type="Switch" name="Iridium" storageaddress="0x10">
+                  <state name="On"  data="01"/>
+                  <state name="Off" data="00"/>
+                </table>
+                <table type="BitwiseSwitch" name="Flags" storageaddress="0x20">
+                  <bit name="AC" position="0"/>
+                  <bit name="CC" position="1"/>
+                </table>
+              </rom>
+              <rom base="BASE">
+                <romid><xmlid>CHILD</xmlid></romid>
+                <table name="Iridium" storageaddress="0xDEAD"/>
+              </rom>
+            </roms>
+        "##;
+        let doc = parse_str(xml).unwrap();
+        let res = resolve(&doc).unwrap();
+        let child = res.iter().find(|r| r.xml_id == "CHILD").unwrap();
+
+        let sw = child.tables.iter().find(|t| t.name == "Iridium").unwrap();
+        assert_eq!(sw.kind, Some(TableKind::Switch));
+        assert_eq!(sw.storage_address, Some(Address::new(0xDEAD)));
+        assert_eq!(sw.states.len(), 2, "child наследует states от BASE");
+        assert_eq!(sw.states[0].name, "On");
+
+        let bw = child.tables.iter().find(|t| t.name == "Flags").unwrap();
+        assert_eq!(bw.kind, Some(TableKind::BitwiseSwitch));
+        assert_eq!(bw.bits.len(), 2);
+        assert_eq!(bw.bits[0].bit_position().unwrap(), 0);
     }
 
     #[test]
