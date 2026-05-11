@@ -121,8 +121,8 @@
 
 ### Критический путь — реальные ROM
 - [x] ~~Реализовать Subaru классический checksum (Slice 9)~~ — `subaru_classic::fix`/`verify` готовы
-- [ ] **Auto-detect Subaru classic в GUI** — при `File → Save ROM As…` сначала прогнать `subaru_classic::fix` если в def есть таблицы `"checksum fix*"`
-- [ ] **GUI-feedback от `verify`** — после загрузки ROM показать список невалидных записей (если есть)
+- [x] ~~Auto-fix Subaru classic в GUI при `Save As`~~ — сделано в Slice 10
+- [x] ~~GUI-feedback от `verify`~~ — статус-индикатор в editor-панели (Slice 10)
 - [ ] **`ram_offset` field в `ResolvedTable`** — для прошивок где ROM маппится в другую область памяти ECU
 - [ ] **CLI команды `verify-checksum` / `fix-checksum`** — для batch-проверки скриптами
 

@@ -71,6 +71,10 @@ Desktop GUI на `eframe`/`egui`: открыть ROM, выбрать опред�
 | File → Open ROM…                              | `ECUEditor.openRom`        | через `rfd::FileDialog::pick_file` | ✅ |
 | File → Open Def…                              | `DefinitionManager`        | через `rfd::FileDialog`         |   ✅   |
 | File → Save ROM As…                           | `ECUEditor.saveRom`        | `editor::save_rom_as`           |   ✅   |
+| Авто-fix Subaru-checksum при сохранении        | `Rom.saveFile` + popup     | `save_rom_as` зовёт `subaru_classic::fix` |   ✅   |
+| Status-индикатор checksum (N/M ✓/✗)           | popup при ошибке           | `render_status` + `checksum_summary` |   ✅   |
+| Кнопка «Fix now» при инвалидных                | popup-dialog               | `fix_checksums_now`             |   ✅   |
+| Notice-сообщение «Saved to …»                  | таскбар JFrame             | `self.notice` поле + render     |   ✅   |
 | Quit                                          | `ECUEditor.close`          | `ViewportCommand::Close`        |   ✅   |
 | File → Save (in-place, не As…)                | `ECUEditor.saveRom`        | — (есть только Save As)         |   ❌   |
 | File → Close ROM                              | `ECUEditor.closeRom`       | —                               |   ❌   |

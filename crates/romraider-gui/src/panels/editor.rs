@@ -13,8 +13,8 @@ use romraider_core::Endian;
 use romraider_defs::{
     parse_file, resolve, CompiledScaling, ResolvedRom, ResolvedTable, StorageType, TableKind,
 };
-use romraider_rom::RomImage;
-use tracing::warn;
+use romraider_rom::{subaru_classic, RomImage};
+use tracing::{info, warn};
 
 #[derive(Default)]
 pub struct EditorPanel {
@@ -23,6 +23,20 @@ pub struct EditorPanel {
     selected_rom_id:     Option<String>,
     selected_table_name: Option<String>,
     error:               Option<String>,
+    /// Кратковременное сообщение в статусной строке (например, «Saved to …»).
+    notice:              Option<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ChecksumSummary {
+    valid: usize,
+    total: usize,
+}
+
+impl ChecksumSummary {
+    fn all_valid(self) -> bool {
+        self.valid == self.total
+    }
 }
 
 struct RomState {
@@ -39,8 +53,9 @@ impl EditorPanel {
     pub fn load_rom(&mut self, path: PathBuf) {
         match RomImage::open(&path) {
             Ok(rom) => {
-                self.rom   = Some(RomState { path, rom });
-                self.error = None;
+                self.rom    = Some(RomState { path, rom });
+                self.error  = None;
+                self.notice = None;
             }
             Err(e) => {
                 warn!(?e, "rom open failed");
@@ -57,6 +72,7 @@ impl EditorPanel {
                 self.selected_rom_id     = None;
                 self.selected_table_name = None;
                 self.error               = None;
+                self.notice              = None;
             }
             Err(e) => {
                 warn!(?e, "def load failed");
@@ -81,10 +97,31 @@ impl EditorPanel {
             self.error = Some("No ROM loaded.".into());
             return;
         };
+
+        // Авто-пересчёт Subaru-classic checksum, если у выбранного ROM-а в def
+        // есть «checksum fix»-таблицы. Без этого ECU отвергнет файл.
+        let mut fixed_msg = String::new();
+        if let (Some(def), Some(rom_id)) = (&self.def, &self.selected_rom_id) {
+            if let Some(rom_def) = def.roms.iter().find(|r| &r.xml_id == rom_id) {
+                match subaru_classic::fix(&mut state.rom, rom_def) {
+                    Ok(0) => {}                                                                  // нет таблиц или нечего обновлять
+                    Ok(n) => fixed_msg = format!(" (auto-fixed {n} checksum entries)"),
+                    Err(e) => {
+                        warn!(?e, "checksum fix failed");
+                        self.error = Some(format!("Checksum auto-fix failed: {e}"));
+                        return;
+                    }
+                }
+            }
+        }
+
         match state.rom.save_as(&path) {
             Ok(()) => {
+                info!(?path, "ROM saved");
+                let display = path.display().to_string();
                 state.path = path;
                 self.error = None;
+                self.notice = Some(format!("Saved to {display}{fixed_msg}"));
             }
             Err(e) => {
                 warn!(?e, "save_as failed");
@@ -93,7 +130,45 @@ impl EditorPanel {
         }
     }
 
+    /// Вычислить сводку по checksum-fix-таблицам выбранного ROM. `None`, если
+    /// невозможно (нет ROM/def/выбранного rom_id) или в def нет таких таблиц.
+    fn checksum_summary(&self) -> Option<ChecksumSummary> {
+        let rom    = self.rom.as_ref()?;
+        let def    = self.def.as_ref()?;
+        let rom_id = self.selected_rom_id.as_deref()?;
+        let rom_def = def.roms.iter().find(|r| r.xml_id == rom_id)?;
+
+        let results = subaru_classic::verify(&rom.rom, rom_def).ok()?;
+        if results.is_empty() {
+            return None;
+        }
+        let valid = results.iter().filter(|r| r.valid).count();
+        Some(ChecksumSummary { valid, total: results.len() })
+    }
+
+    /// Пересчитать checksum-fix-таблицы прямо сейчас, не сохраняя файл.
+    fn fix_checksums_now(&mut self) {
+        let Some(state)  = self.rom.as_mut() else { return };
+        let Some(def)    = self.def.as_ref() else { return };
+        let Some(rom_id) = self.selected_rom_id.as_deref() else { return };
+        let Some(rom_def) = def.roms.iter().find(|r| r.xml_id == rom_id) else { return };
+
+        match subaru_classic::fix(&mut state.rom, rom_def) {
+            Ok(n) => {
+                self.error  = None;
+                self.notice = Some(format!("Fixed {n} checksum entries (not yet saved)"));
+            }
+            Err(e) => {
+                warn!(?e, "manual checksum fix failed");
+                self.error = Some(format!("Checksum fix failed: {e}"));
+            }
+        }
+    }
+
     fn render_status(&mut self, ui: &mut egui::Ui) {
+        let summary = self.checksum_summary();
+        let mut fix_clicked = false;
+
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("ROM:").strong());
             match &self.rom {
@@ -115,7 +190,35 @@ impl EditorPanel {
                     .map(|d| d.path.display().to_string())
                     .unwrap_or_else(|| "(not loaded)".into()),
             );
+            if let Some(s) = summary {
+                ui.separator();
+                if s.all_valid() {
+                    ui.colored_label(
+                        egui::Color32::LIGHT_GREEN,
+                        format!("Checksums: {}/{} ✓", s.valid, s.total),
+                    );
+                } else {
+                    ui.colored_label(
+                        egui::Color32::LIGHT_RED,
+                        format!("Checksums: {}/{} ✗", s.valid, s.total),
+                    );
+                    if ui.button("Fix now").clicked() {
+                        fix_clicked = true;
+                    }
+                }
+            }
         });
+        if fix_clicked {
+            self.fix_checksums_now();
+        }
+        if let Some(msg) = self.notice.clone() {
+            ui.horizontal(|ui| {
+                ui.colored_label(egui::Color32::LIGHT_BLUE, msg);
+                if ui.button("✕").clicked() {
+                    self.notice = None;
+                }
+            });
+        }
         if let Some(err) = self.error.clone() {
             ui.horizontal(|ui| {
                 ui.colored_label(egui::Color32::LIGHT_RED, err);
