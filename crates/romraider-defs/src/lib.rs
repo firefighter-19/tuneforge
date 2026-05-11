@@ -1,18 +1,18 @@
 //! Парсер XML-определений RomRaider.
 //!
-//! Совместимость с эталонным форматом из `../RomRaider/definitions`:
-//! `cars_def.dtd`, `ecu_defs.dtd`, `logger.dtd`, `profile.dtd`. Эти DTD
-//! не модифицируются — они и есть источник истины. Здесь лежит только
-//! Rust-маппинг и валидация.
+//! Совместимость с эталонным форматом из апстрим-репозитория
+//! [`RomRaider-Definitions`](https://github.com/RomRaider/RomRaider-Definitions).
+//! Здесь — Rust-маппинг XML и его базовая валидация. Резолв наследования,
+//! парсинг адресов в `u32` и eval scaling-выражений — в последующих слайсах.
 
 #![forbid(unsafe_code)]
 
 pub mod ecu;
 pub mod error;
-pub mod logger;
-pub mod scaling;
+pub mod parser;
 
-pub use ecu::{AxisDef, EcuDefinition, TableDef, TableKind};
+pub use ecu::{
+    EcuDefinition, RomDefinition, RomId, RomsDocument, ScalingBase, ScalingRef, TableDef,
+};
 pub use error::{DefError, DefResult};
-pub use logger::{DtcDefinition, LoggerDefinition, LoggerParameter, LoggerSwitch};
-pub use scaling::{Expression, Scaling};
+pub use parser::{parse_file, parse_reader, parse_str};

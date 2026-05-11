@@ -6,6 +6,7 @@ use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
 use romraider_core::bytes;
+use romraider_defs::{RomDefinition, RomsDocument};
 use romraider_io::serial::{SerialConfig, SerialTransport};
 use romraider_io::Transport;
 use romraider_protocol::ssm::{self, EcuInitResponse};
@@ -37,6 +38,11 @@ enum Cmd {
     InspectRom {
         path: PathBuf,
     },
+
+    /// Прочитать XML-определение ECU (`<roms>`) и показать сводку.
+    InspectDef {
+        path: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -49,6 +55,7 @@ fn main() -> Result<()> {
         Cmd::Ports => list_ports(),
         Cmd::SsmInit { port, baud, timeout_ms } => ssm_init(&port, baud, Duration::from_millis(timeout_ms)),
         Cmd::InspectRom { path } => inspect_rom(&path),
+        Cmd::InspectDef { path } => inspect_def(&path),
     }
 }
 
@@ -99,3 +106,44 @@ fn inspect_rom(path: &PathBuf) -> Result<()> {
     println!("head:  {}", bytes::hex_dump(head));
     Ok(())
 }
+
+fn inspect_def(path: &PathBuf) -> Result<()> {
+    let doc = romraider_defs::parse_file(path)
+        .with_context(|| format!("parsing {}", path.display()))?;
+    print_def_summary(path, &doc);
+    Ok(())
+}
+
+fn print_def_summary(path: &PathBuf, doc: &RomsDocument) {
+    println!("File:           {}", path.display());
+    println!("Scaling bases:  {}", doc.scaling_bases.len());
+    for s in &doc.scaling_bases {
+        let units = s.units.as_deref().unwrap_or("-");
+        println!("  {:30} units={:<12} expr={}", s.name, units, s.expression);
+    }
+    println!();
+    println!("ROMs:           {}", doc.roms.len());
+    for (i, rom) in doc.roms.iter().enumerate() {
+        print_rom_summary(i + 1, rom);
+    }
+}
+
+fn print_rom_summary(idx: usize, rom: &RomDefinition) {
+    let id        = rom.romid.as_ref();
+    let xml_id    = id.and_then(|r| r.xml_id.as_deref()).unwrap_or("?");
+    let ecu_id    = id.and_then(|r| r.ecu_id.as_deref()).unwrap_or("-");
+    let make      = id.and_then(|r| r.make.as_deref()).unwrap_or("-");
+    let model     = id.and_then(|r| r.model.as_deref()).unwrap_or("-");
+    let submodel  = id.and_then(|r| r.submodel.as_deref()).unwrap_or("-");
+    let base      = rom.base.as_deref().unwrap_or("(none)");
+    let n_tables  = rom.tables.len();
+    let n_nested  = rom.tables.iter().map(|t| t.nested.len()).sum::<usize>();
+
+    println!(
+        "  [{idx}] xmlid={xml_id:<14} ecuid={ecu_id:<12} {make} {model} {submodel}"
+    );
+    println!(
+        "      base={base:<14} tables={n_tables} (nested axes/inner tables: {n_nested})"
+    );
+}
+
