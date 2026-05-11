@@ -103,8 +103,9 @@ production-формата.
 | `<parameter>` (offset/storagetype/expr/metric)| `EcuParameterImpl`                     | `LogParameter`                  |   ✅   |
 | `<alt>` альтернативные адреса                 | `EcuAlternateParameter`                | `Alt`                           |   ✅   |
 | `find_ecu(id)` / `find_convert_factor(type)`  | inline                                 | `LoggerDocument` impl           |   ✅   |
-| Резолв `include="ssmbase"` (merge параметров) | `EcuParameterImpl.applyInclude`        | —                               |   ❌   |
-| Eval `[value]/4`-формул (другой синтаксис чем `x`) | JEP с переменной `value`         | — (надо адаптировать meval)     |   ❌   |
+| Резолв `include="ssmbase"` (merge параметров) | `EcuParameterImpl.applyInclude`        | `LoggerDocument::resolve_ecu` (HashSet cycle-detect, child overrides by id) | ✅ |
+| Eval `[value]/4`-формул (другой синтаксис чем `x`) | JEP с переменной `value`         | `compile_log_expr` ([value]→x preprocessor) | ✅ |
+| `LogParameter::compile()` (offset→Address, storage→enum) | `EcuParameterImpl` ctor         | `CompiledLogParameter`          |   ✅   |
 | Switches (`<switch>`) — bit-флаги             | `EcuSwitchImpl`                        | —                               |   ❌   |
 | DTC коды (`<dtcode>`)                         | `EcuDataConverterImpl`                 | —                               |   ❌   |
 | `<ecuparam>` — параметры специфичные ECU      | `EcuParameterImpl`                     | —                               |   ❌   |

@@ -117,6 +117,25 @@ fn eval_with_x(expr: &meval::Expr, x: f64) -> f64 {
     eval(expr, x).unwrap_or(f64::NAN)
 }
 
+/// Скомпилировать выражение из `log_defs.xml`-формата. В отличие от
+/// scaling-формул в ROM-определениях, логгер использует `[value]` как
+/// плейсхолдер сырого значения. Здесь мы подменяем `[value]` на `(x)`
+/// и дальше используем общий [`parse`] / [`eval_with_x`] pipeline.
+///
+/// Поддерживается без переменных, кроме `[value]` (= `x`). `GetLogParam("…")`
+/// и другие cross-references пока не поддерживаются — соответствующие формулы
+/// упадут при компиляции, и параметр придётся пропустить.
+pub fn compile_log_expr(expr_str: &str) -> DefResult<meval::Expr> {
+    let substituted = expr_str.replace("[value]", "(x)");
+    parse(&substituted)
+}
+
+/// Eval скомпилированного log-выражения. Возвращает `NaN` при ошибке.
+#[must_use]
+pub fn eval_log_expr(expr: &meval::Expr, value: f64) -> f64 {
+    eval_with_x(expr, value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,6 +216,30 @@ mod tests {
         s.expression = None;
         let err = s.compile().unwrap_err();
         assert!(matches!(err, DefError::MissingRequiredField("scaling.expression")));
+    }
+
+    #[test]
+    fn compile_log_expr_handles_value_placeholder() {
+        let e = compile_log_expr("[value]/4").unwrap();
+        assert!((eval_log_expr(&e, 100.0) - 25.0).abs() < 1e-9);
+
+        let e = compile_log_expr("([value]-128)*100/128").unwrap();
+        assert!((eval_log_expr(&e, 0.0)   - (-100.0)).abs() < 1e-9);
+        assert!((eval_log_expr(&e, 128.0) -    0.0  ).abs() < 1e-9);
+        assert!((eval_log_expr(&e, 256.0) -  100.0  ).abs() < 1e-9);
+    }
+
+    #[test]
+    fn compile_log_expr_supports_leading_dot_decimals() {
+        // Такие же formula-quirks как у ROM-defs.
+        let e = compile_log_expr("[value]*.06894757").unwrap();
+        assert!((eval_log_expr(&e, 100.0) - 6.894757).abs() < 1e-6);
+    }
+
+    #[test]
+    fn compile_log_expr_invalid_returns_error() {
+        let err = compile_log_expr("[value] +& 1").unwrap_err();
+        assert!(matches!(err, DefError::InvalidScaling { .. }));
     }
 
     #[test]

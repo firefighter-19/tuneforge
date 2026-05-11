@@ -10,10 +10,10 @@
 | **romraider-core**      | Address, Endian, bytes-utils, errors           | 🟢 75%     | [`crates/romraider-core/PROGRESS.md`](crates/romraider-core/PROGRESS.md)         |
 | **romraider-io**        | Transport-trait + serial/elm327/j2534          | 🟡 40%     | [`crates/romraider-io/PROGRESS.md`](crates/romraider-io/PROGRESS.md)             |
 | **romraider-protocol**  | SSM/OBD/DS2/NCS диалекты                       | 🟡 30%     | [`crates/romraider-protocol/PROGRESS.md`](crates/romraider-protocol/PROGRESS.md) |
-| **romraider-defs**      | Парсер + резолв ECU/log_defs XML, scaling      | 🟢 75%     | [`crates/romraider-defs/PROGRESS.md`](crates/romraider-defs/PROGRESS.md)         |
+| **romraider-defs**      | Парсер + резолв ECU/log_defs XML, scaling      | 🟢 85%     | [`crates/romraider-defs/PROGRESS.md`](crates/romraider-defs/PROGRESS.md)         |
 | **romraider-rom**       | ROM-image, decode/encode, checksum             | 🟢 70%     | [`crates/romraider-rom/PROGRESS.md`](crates/romraider-rom/PROGRESS.md)           |
-| **romraider-logger**    | Backend логгера + plugins                      | 🔴 10%     | [`crates/romraider-logger/PROGRESS.md`](crates/romraider-logger/PROGRESS.md)     |
-| **romraider-cli**       | Headless CLI (debug + smoke-tests)             | 🟢 80%     | [`crates/romraider-cli/PROGRESS.md`](crates/romraider-cli/PROGRESS.md)           |
+| **romraider-logger**    | Backend логгера + plugins                      | 🟡 45%     | [`crates/romraider-logger/PROGRESS.md`](crates/romraider-logger/PROGRESS.md)     |
+| **romraider-cli**       | Headless CLI (debug + smoke-tests + logger)    | 🟢 85%     | [`crates/romraider-cli/PROGRESS.md`](crates/romraider-cli/PROGRESS.md)           |
 | **romraider-gui**       | egui-редактор + (будущий) логгер UI            | 🟡 65%     | [`crates/romraider-gui/PROGRESS.md`](crates/romraider-gui/PROGRESS.md)           |
 
 **Легенда:** 🟢 ≥60% — 🟡 30–60% — 🔴 <30%
@@ -39,7 +39,8 @@
 | 12    | Heatmap-раскраска ячеек (cool→warm по value)      | (закоммичено)    |
 | 13    | Undo/Redo + Edit-меню + Ctrl+Z/Y хоткеи           | (закоммичено)    |
 | 14    | Tooltip ячеек (addr/raw/real/Δ/formula)           | (закоммичено)    |
-| 15    | Switch + BitwiseSwitch UI (radio + checkboxes)    | следующий коммит |
+| 15    | Switch + BitwiseSwitch UI (radio + checkboxes)    | (закоммичено)    |
+| 16    | Logger backbone: resolve include + [value] + CLI  | следующий коммит |
 
 ## Что работает прямо сейчас (E2E сценарии)
 
@@ -95,11 +96,11 @@
 
 Для **полноценного логгера**:
 
-10. **`LoggerSession::run` цикл** ([logger](crates/romraider-logger/PROGRESS.md))
-11. **Резолв `include="ssmbase16"` для LogParam** ([defs](crates/romraider-defs/PROGRESS.md))
-12. **Eval `[value]`-синтаксиса формул** ([defs](crates/romraider-defs/PROGRESS.md))
-13. **XY-график подвязан к broadcast** ([gui](crates/romraider-gui/PROGRESS.md))
-14. **CLI `logger` команда** ([cli](crates/romraider-cli/PROGRESS.md))
+10. ~~**`LoggerSession::poll_once` цикл**~~ ✅ Slice 16 — sync + async broadcast
+11. ~~**Резолв `include="ssmbase16"`**~~ ✅ Slice 16
+12. ~~**Eval `[value]`-синтаксиса формул**~~ ✅ Slice 16
+13. **XY-график подвязан к broadcast** ([gui](crates/romraider-gui/PROGRESS.md)) — следующий шаг
+14. ~~**CLI `logger` команда**~~ ✅ Slice 16
 
 ## Принципы
 
@@ -114,7 +115,7 @@
 
 ## Метрики
 
-- **Тестов в воркспейсе:** 119 (passing, 0 failed) на момент `slice-15` (+5 unit: 3 parser + 1 typed + 1 resolve для switch/bitwise)
-- **Строк Rust-кода:** ~6200 (не считая XML-фикстур)
+- **Тестов в воркспейсе:** 127 (passing, 0 failed) на момент `slice-16` (+8: 3 compile_log_expr + 2 resolve_ecu integration + 3 LoggerSession::poll_once)
+- **Строк Rust-кода:** ~6700 (не считая XML-фикстур)
 - **Зависимостей (workspace deps в `Cargo.toml`):** 17
-- **Коммитов:** 15 фич-коммитов + начальный + LICENSE + PROGRESS-документация
+- **Коммитов:** 16 фич-коммитов + начальный + LICENSE + PROGRESS-документация

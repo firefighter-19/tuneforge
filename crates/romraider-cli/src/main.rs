@@ -12,6 +12,7 @@ use romraider_defs::{
 };
 use romraider_io::serial::{SerialConfig, SerialTransport};
 use romraider_io::Transport;
+use romraider_logger::{LoggerSession, SessionConfig};
 use romraider_protocol::ssm::{self, EcuInitResponse};
 use romraider_rom::RomImage;
 
@@ -40,6 +41,42 @@ enum Cmd {
     /// Загрузить ROM-файл и вывести базовую инфу.
     InspectRom {
         path: PathBuf,
+    },
+
+    /// Headless-логгер: опрашивает ECU по SSM, пишет CSV-датлог. По
+    /// умолчанию длительность бесконечная — прерывайте Ctrl+C.
+    Logger {
+        #[arg(short, long)]
+        port: String,
+        #[arg(short, long, default_value_t = 4800)]
+        baud: u32,
+
+        /// `log_defs.xml` с определениями параметров.
+        #[arg(long)]
+        def: PathBuf,
+
+        /// ECU `id` для резолва (template `base` или конкретный hex-ID).
+        #[arg(long, default_value = "base")]
+        ecu: String,
+
+        /// Список параметров по `id`, через запятую: `--params "Engine Speed,Throttle Opening Angle"`.
+        #[arg(long, value_delimiter = ',', num_args = 1..)]
+        params: Vec<String>,
+
+        /// Интервал между опросами, мс.
+        #[arg(long, default_value_t = 100)]
+        interval_ms: u64,
+
+        /// Сколько секунд опрашивать; `0` = бесконечно.
+        #[arg(long, default_value_t = 0)]
+        duration_secs: u64,
+
+        /// Куда писать CSV-датлог.
+        #[arg(long)]
+        out: PathBuf,
+
+        #[arg(long, default_value_t = 1500)]
+        timeout_ms: u64,
     },
 
     /// Загрузить ROM-файл вместе с XML-определением и распечатать значения
@@ -112,7 +149,99 @@ fn main() -> Result<()> {
         Cmd::ReadTable { rom, def, rom_id, table } => {
             read_table_cmd(&rom, &def, &rom_id, &table)
         }
+        Cmd::Logger {
+            port, baud, def, ecu, params, interval_ms, duration_secs, out, timeout_ms,
+        } => logger_cmd(
+            &port, baud, &def, &ecu, &params, interval_ms, duration_secs, &out,
+            Duration::from_millis(timeout_ms),
+        ),
     }
+}
+
+fn logger_cmd(
+    port:          &str,
+    baud:          u32,
+    def_path:      &PathBuf,
+    ecu_id:        &str,
+    param_ids:     &[String],
+    interval_ms:   u64,
+    duration_secs: u64,
+    out_path:      &PathBuf,
+    timeout:       Duration,
+) -> Result<()> {
+    if param_ids.is_empty() {
+        anyhow::bail!("at least one --params id is required");
+    }
+
+    // 1. Парс log_defs.xml + резолв ECU (через include-цепочку).
+    let doc = romraider_defs::parse_log_file(def_path)
+        .with_context(|| format!("parsing {}", def_path.display()))?;
+    let resolved = doc
+        .resolve_ecu(ecu_id)
+        .with_context(|| format!("resolving log-ECU `{ecu_id}`"))?;
+    tracing::info!(ecu = %ecu_id, total_params = resolved.parameters.len(), "log-ECU resolved");
+
+    // 2. Скомпилировать выбранные параметры.
+    let mut session = LoggerSession::new(SessionConfig {
+        timeout,
+        ..SessionConfig::default()
+    });
+    for id in param_ids {
+        let p = resolved
+            .find_parameter(id)
+            .ok_or_else(|| anyhow::anyhow!("parameter `{id}` not found in ECU `{ecu_id}`"))?;
+        let compiled = p
+            .compile()
+            .with_context(|| format!("compiling parameter `{id}`"))?;
+        session.subscribe(compiled);
+    }
+
+    // 3. CSV-датлог.
+    let mut datalog = romraider_logger::datalog::DatalogWriter::create(out_path)
+        .with_context(|| format!("opening {}", out_path.display()))?;
+
+    // 4. Открыть serial.
+    let mut cfg = SerialConfig::ssm(port);
+    cfg.baud_rate = baud;
+    let mut transport = SerialTransport::open(&cfg)
+        .with_context(|| format!("opening serial {port}@{baud}"))?;
+    transport.purge()?;
+
+    // 5. Loop.
+    let interval = Duration::from_millis(interval_ms);
+    let deadline = if duration_secs > 0 {
+        Some(std::time::Instant::now() + Duration::from_secs(duration_secs))
+    } else {
+        None
+    };
+    let mut count = 0u64;
+    eprintln!("Starting log to {} (interval {}ms)…", out_path.display(), interval_ms);
+    loop {
+        let started = std::time::Instant::now();
+        match session.poll_once(&mut transport) {
+            Ok(sample) => {
+                datalog.write_sample(&sample)?;
+                count += 1;
+                if count % 10 == 0 {
+                    eprintln!("  {count} samples written");
+                }
+            }
+            Err(e) => {
+                eprintln!("poll error: {e}");
+            }
+        }
+        if let Some(d) = deadline {
+            if std::time::Instant::now() >= d {
+                break;
+            }
+        }
+        if let Some(rem) = interval.checked_sub(started.elapsed()) {
+            std::thread::sleep(rem);
+        }
+    }
+    datalog.flush()?;
+    eprintln!("Done. {count} samples written to {}", out_path.display());
+    Ok(())
 }
 
 fn list_ports() -> Result<()> {

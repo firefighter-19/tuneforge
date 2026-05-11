@@ -59,7 +59,7 @@ backend + плагинные адаптеры.
 
 | Фича                                          | Java-аналог                       | Rust                             | Статус |
 | --------------------------------------------- | --------------------------------- | -------------------------------- | :----: |
-| `LoggerSession` — главный цикл                | `LoggerController`                | `session::LoggerSession` (заглушка) | 🟡 |
+| `LoggerSession` — главный цикл                | `LoggerController`                | `session::LoggerSession` с `poll_once` (sync) + `run` (async broadcast) | ✅ |
 | `SessionConfig` (poll interval, timeout)      | `LoggerSettings`                  | `session::SessionConfig`         |   ✅   |
 | Broadcast канал семплов подписчикам           | Java listener-pattern             | `tokio::sync::broadcast`         |   ✅   |
 | `Sample`/`SampleValue` структуры              | `LoggerData`/`LoggerDataValue`    | `sample::{Sample,SampleValue}`   |   ✅   |
@@ -69,9 +69,9 @@ backend + плагинные адаптеры.
 
 | Фича                                          | Java-аналог                          | Rust          | Статус |
 | --------------------------------------------- | ------------------------------------ | ------------- | :----: |
-| Сборка multi-address SSM-запроса из подписок  | `Query.addAddress` + `QueryManager`  | —             |   ❌   |
-| Отправка + парс через `Transport`             | `LoggerIoImpl.send`                  | —             |   ❌   |
-| Применение scaling к каждому полю             | `EcuParameterImpl.getResult`         | — (есть в defs::CompiledScaling, но не вшито в цикл) | 🟡 |
+| Сборка multi-address SSM-запроса из подписок  | `Query.addAddress` + `QueryManager`  | `LoggerSession::poll_once` (stride-by-storage_type) | ✅ |
+| Отправка + парс через `Transport`             | `LoggerIoImpl.send`                  | `ssm::read_addresses` через Transport | ✅ |
+| Применение scaling к каждому полю             | `EcuParameterImpl.getResult`         | `CompiledLogParameter::evaluate` | ✅ |
 | Полудуплексный handshake                      | `LoggerControllerImpl.refresh`       | —             |   ❌   |
 | Auto-detect частоты (max poll rate)           | inline в `LoggerController`          | —             |   ❌   |
 | Retry on read-timeout                         | inline                               | —             |   ❌   |
@@ -83,7 +83,7 @@ backend + плагинные адаптеры.
 | CSV-writer                                    | `FileLoggerImpl`             | `datalog::DatalogWriter`   |   ✅   |
 | Header с именами параметров                   | `FileLogger.writeHeader`     | `DatalogWriter::write_header` |  ✅   |
 | Timestamp в ms                                | `FileLogger.writeData`       | `DatalogWriter::write_sample` |  ✅   |
-| Подключение к `LoggerSession::run` цикл       | `FileLoggerListener`         | —                          |   ❌   |
+| Подключение к `LoggerSession::run` цикл       | `FileLoggerListener`         | inline в `LoggerSession::run`  | ✅   |
 | Авто-флаш / ротация по размеру/времени        | inline                       | —                          |   ❌   |
 | Datalog playback (читать .csv обратно)        | `PlaybackManager`            | —                          |   ❌   |
 | RomRaider-совместимый формат                  | RomRaider columns/headers    | —                          |  🟡   |

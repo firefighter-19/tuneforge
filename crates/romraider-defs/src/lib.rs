@@ -20,10 +20,10 @@ pub use ecu::{
     SwitchState, TableDef,
 };
 pub use error::{DefError, DefResult};
-pub use expression::CompiledScaling;
+pub use expression::{compile_log_expr, eval_log_expr, CompiledScaling};
 pub use logger::{
-    parse_log_file, parse_log_reader, parse_log_str, Alt, ConvertFactor, EcuTools, LogParameter,
-    LogProtocol, LogProtocols, LoggerDocument, LoggerEcu,
+    parse_log_file, parse_log_reader, parse_log_str, Alt, CompiledLogParameter, ConvertFactor,
+    EcuTools, LogParameter, LogProtocol, LogProtocols, LoggerDocument, LoggerEcu, ResolvedLogEcu,
 };
 pub use parser::{parse_file, parse_reader, parse_str};
 pub use resolve::{resolve, ResolvedRom, ResolvedScaling, ResolvedTable};

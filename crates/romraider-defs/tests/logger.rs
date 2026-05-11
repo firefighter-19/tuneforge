@@ -127,6 +127,58 @@ fn concrete_ecu_can_be_found_by_hex_id() {
 }
 
 #[test]
+fn resolve_ecu_merges_include_chain() {
+    // На реальном log_defs: A2WC522S-эквивалент → ssmbase16 → ssmbase.
+    // Берём первый concrete-ECU (есть `include="ssmbase16"`) и проверяем,
+    // что после резолва он наследует все 156 ssmbase-параметров + 2 from ssmbase16.
+    let doc = load();
+    let any_concrete_id = doc
+        .logprotocols
+        .logprotocols
+        .iter()
+        .flat_map(|p| p.ecus.iter())
+        .find(|e| !e.is_template())
+        .and_then(|e| {
+            if e.include.as_deref() == Some("ssmbase16") {
+                Some(e.id.clone())
+            } else {
+                None
+            }
+        })
+        .expect("expected at least one ssmbase16-based concrete ECU");
+
+    let resolved = doc
+        .resolve_ecu(&any_concrete_id)
+        .expect("resolve_ecu should succeed");
+    assert_eq!(resolved.id, any_concrete_id);
+    // ssmbase (156) + ssmbase16 (2 уникальных) = 158
+    assert!(
+        resolved.parameters.len() >= 158,
+        "expected >=158 params, got {}",
+        resolved.parameters.len()
+    );
+
+    // Engine Speed точно должен быть в наследовании.
+    let rpm = resolved
+        .find_parameter("Engine Speed")
+        .expect("Engine Speed inherited");
+    assert_eq!(rpm.offset, "#000E");
+}
+
+#[test]
+fn compile_log_parameter_engine_speed_evaluates() {
+    // Engine Speed формула: [value]/4 → byte 4000 → 1000 RPM.
+    let doc = load();
+    let base = doc.find_ecu("base").unwrap();
+    let rpm  = base.find_parameter("Engine Speed").unwrap();
+    let c    = rpm.compile().unwrap();
+    assert_eq!(c.address.raw(),    0x000E);
+    assert_eq!(c.storage_type,     romraider_defs::StorageType::UInt16);
+    assert!((c.evaluate(4000.0) - 1000.0).abs() < 1e-9);
+    assert!((c.evaluate(0.0)    -    0.0).abs() < 1e-9);
+}
+
+#[test]
 fn total_template_parameters_match_snapshot() {
     // Smoke-test: суммарно во всех шаблонах должно быть много параметров.
     let doc   = load();

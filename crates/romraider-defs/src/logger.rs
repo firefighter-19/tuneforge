@@ -9,12 +9,17 @@
 //! Этот модуль — **сырой парс**. Резолв `include`-наследования и компиляция
 //! `expr="[value]/4"` в считающую функцию — следующие слайсы.
 
+use std::collections::HashSet;
 use std::io::Read;
 use std::path::Path;
+use std::str::FromStr;
 
+use romraider_core::Address;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{DefError, DefResult};
+use crate::expression::{compile_log_expr, eval_log_expr};
+use crate::typed::StorageType;
 
 /// Корневой `<ecus>`-документ из `log_defs.xml`.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,6 +49,87 @@ impl LoggerDocument {
             .iter()
             .flat_map(|p| p.ecus.iter())
             .find(|e| e.id == id)
+    }
+
+    /// Найти ECU по `type=` атрибуту (это «имя шаблона» вроде `ssmbase16`).
+    #[must_use]
+    pub fn find_ecu_by_type(&self, type_name: &str) -> Option<&LoggerEcu> {
+        self.logprotocols
+            .logprotocols
+            .iter()
+            .flat_map(|p| p.ecus.iter())
+            .find(|e| e.kind.as_deref() == Some(type_name))
+    }
+
+    /// Резолв ECU по `id`: обход цепочки `include="…"`, merge параметров.
+    /// Child override-ит параметры с тем же `id`. Возвращает плоский
+    /// `ResolvedLogEcu` с полным списком доступных параметров.
+    pub fn resolve_ecu(&self, id: &str) -> DefResult<ResolvedLogEcu> {
+        let ecu = self.find_ecu(id).ok_or_else(|| DefError::BaseNotFound {
+            kind: "log-ecu",
+            name: id.to_string(),
+        })?;
+
+        // Цепочка от ребёнка к корню: [self, parent_template, grandparent_template, ...]
+        let mut chain: Vec<&LoggerEcu> = vec![ecu];
+        let mut visited = HashSet::<String>::new();
+        visited.insert(id.to_string());
+
+        let mut current = ecu;
+        while let Some(parent_type) = current.include.as_deref() {
+            if !visited.insert(parent_type.to_string()) {
+                return Err(DefError::Cycle {
+                    kind: "log-include",
+                    name: parent_type.to_string(),
+                });
+            }
+            let parent = self.find_ecu_by_type(parent_type).ok_or_else(|| {
+                DefError::BaseNotFound {
+                    kind: "log-include",
+                    name: parent_type.to_string(),
+                }
+            })?;
+            chain.push(parent);
+            current = parent;
+        }
+
+        // Мерджим параметры: root → child. Child перекрывает по `id`.
+        let mut params: Vec<LogParameter> = Vec::new();
+        for ancestor in chain.iter().rev() {
+            for p in &ancestor.parameters {
+                if let Some(existing) = params.iter_mut().find(|x| x.id == p.id) {
+                    *existing = p.clone();
+                } else {
+                    params.push(p.clone());
+                }
+            }
+        }
+
+        Ok(ResolvedLogEcu {
+            id:         ecu.id.clone(),
+            name:       ecu.name.clone(),
+            include:    ecu.include.clone(),
+            kind:       ecu.kind.clone(),
+            parameters: params,
+        })
+    }
+}
+
+/// ECU с полностью разрешённым include-наследованием. Удобен для подписок:
+/// `parameters` содержит финальный набор без дубликатов.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolvedLogEcu {
+    pub id:         String,
+    pub name:       String,
+    pub include:    Option<String>,
+    pub kind:       Option<String>,
+    pub parameters: Vec<LogParameter>,
+}
+
+impl ResolvedLogEcu {
+    #[must_use]
+    pub fn find_parameter(&self, id: &str) -> Option<&LogParameter> {
+        self.parameters.iter().find(|p| p.id == id)
     }
 }
 
@@ -173,6 +259,57 @@ pub struct LogParameter {
     /// Альтернативные адреса под этот же логический параметр у разных прошивок.
     #[serde(default, rename = "alt")]
     pub alts: Vec<Alt>,
+}
+
+impl LogParameter {
+    /// Парс `offset="#000E"` → [`Address`]. Поддерживает с `#` и без.
+    pub fn parse_offset(&self) -> DefResult<Address> {
+        let s = self.offset.trim().trim_start_matches('#');
+        u32::from_str_radix(s, 16)
+            .map(Address::new)
+            .map_err(|e| DefError::InvalidValue {
+                field:  "offset",
+                value:  self.offset.clone(),
+                reason: e.to_string(),
+            })
+    }
+
+    /// Скомпилировать параметр в форму, готовую к runtime-eval. Парсит адрес,
+    /// `storage_type` (default `uint8`) и выражение через `[value]`-адаптер.
+    pub fn compile(&self) -> DefResult<CompiledLogParameter> {
+        let address     = self.parse_offset()?;
+        let st_str      = self.storage_type.as_deref().unwrap_or("uint8");
+        let storage_type = StorageType::from_str(st_str)?;
+        let expr_str    = self
+            .expr
+            .as_deref()
+            .ok_or(DefError::MissingRequiredField("log-parameter.expr"))?;
+        let expression  = compile_log_expr(expr_str)?;
+        Ok(CompiledLogParameter {
+            source: self.clone(),
+            address,
+            storage_type,
+            expression,
+        })
+    }
+}
+
+/// Скомпилированный logger-параметр: всё для runtime опроса/декодирования
+/// готово, ничего больше парсить не нужно.
+#[derive(Debug, Clone)]
+pub struct CompiledLogParameter {
+    pub source:       LogParameter,
+    pub address:      Address,
+    pub storage_type: StorageType,
+    expression:       meval::Expr,
+}
+
+impl CompiledLogParameter {
+    /// Применить scaling-формулу к сырому байт-значению.
+    #[must_use]
+    pub fn evaluate(&self, raw_value: f64) -> f64 {
+        eval_log_expr(&self.expression, raw_value)
+    }
 }
 
 /// Альтернативный адрес параметра под конкретную прошивку.

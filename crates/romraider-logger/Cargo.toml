@@ -16,8 +16,11 @@ romraider-defs     = { workspace = true }
 romraider-io       = { workspace = true }
 romraider-protocol = { workspace = true }
 
-thiserror = { workspace = true }
-tracing   = { workspace = true }
-tokio     = { workspace = true }
-serde     = { workspace = true }
+thiserror  = { workspace = true }
+tracing    = { workspace = true }
+tokio      = { workspace = true }
+serde      = { workspace = true }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+romraider-io = { workspace = true, features = ["mock"] }

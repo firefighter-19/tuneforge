@@ -43,7 +43,7 @@ ROM-таблиц без GUI. Удобен как:
 | `verify-checksum` / `fix-checksum`            | `--rom <bin> --def <xml>`                   | проверка/пересчёт checksum-ов            |   ❌   |
 | `compare-roms`                                | `--a <bin1> --b <bin2> --def <xml>`         | diff двух ROM-файлов по таблицам         |   ❌   |
 | `convert-def`                                 | `--from xdf --to xml <input>`               | импорт XDF/VDF/BMW в наш формат          |   ❌   |
-| `logger`                                      | `--port <p> --params <id1,id2,…> --out <csv>` | headless логгер в CSV                  |   ❌   |
+| `logger`                                      | `--port <p> --def <log_defs.xml> --ecu <id> --params <id1,id2> --out <csv> [--duration-secs N --interval-ms M]` | headless логгер в CSV через SSM | ✅ |
 | `read-dtc`                                    | `--port <p>`                                | чтение DTC-кодов                         |   ❌   |
 | `flash-rom`                                   | `--port <p> --rom <bin>`                    | reflash (через J2534, опасная операция!) |   ❌   |
 | `print-tree`                                  | `--def <xml> --rom-id <id> [--format json]` | дерево таблиц в JSON для других скриптов |   ❌   |
