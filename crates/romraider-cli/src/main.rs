@@ -42,6 +42,25 @@ enum Cmd {
         path: PathBuf,
     },
 
+    /// Загрузить ROM-файл вместе с XML-определением и распечатать значения
+    /// одной таблицы (raw + scaled, с осями для 3D).
+    ReadTable {
+        /// Путь к бинарному файлу прошивки.
+        rom: PathBuf,
+
+        /// Путь к XML с определениями (`<roms>`).
+        #[arg(long)]
+        def: PathBuf,
+
+        /// `xmlid` ROM-а внутри определения (например, `A2WC522S`).
+        #[arg(long)]
+        rom_id: String,
+
+        /// Имя таблицы для чтения.
+        #[arg(long)]
+        table: String,
+    },
+
     /// Прочитать `log_defs.xml` (`<ecus>`) и показать сводку.
     ///
     /// С флагом `--ecu <id>` фокусируется на одном ECU: list of параметров
@@ -90,6 +109,9 @@ fn main() -> Result<()> {
             inspect_def(&path, resolve, rom.as_deref(), sample_byte)
         }
         Cmd::InspectLog { path, ecu } => inspect_log(&path, ecu.as_deref()),
+        Cmd::ReadTable { rom, def, rom_id, table } => {
+            read_table_cmd(&rom, &def, &rom_id, &table)
+        }
     }
 }
 
@@ -244,6 +266,124 @@ fn debug_storage(s: romraider_defs::StorageType) -> &'static str {
         Float  => "float",
         Hex    => "hex",
         Char   => "char",
+    }
+}
+
+fn read_table_cmd(rom_path: &PathBuf, def_path: &PathBuf, rom_id: &str, table_name: &str) -> Result<()> {
+    let doc = romraider_defs::parse_file(def_path)
+        .with_context(|| format!("parsing {}", def_path.display()))?;
+    let resolved = resolve(&doc).context("resolving inheritance")?;
+    let rom_def = resolved
+        .iter()
+        .find(|r| r.xml_id == rom_id)
+        .ok_or_else(|| anyhow::anyhow!("ROM `{rom_id}` not found in {}", def_path.display()))?;
+    let table = rom_def
+        .tables
+        .iter()
+        .find(|t| t.name == table_name)
+        .ok_or_else(|| anyhow::anyhow!("table `{table_name}` not found in ROM `{rom_id}`"))?;
+
+    let rom = RomImage::open(rom_path)
+        .with_context(|| format!("opening {}", rom_path.display()))?;
+
+    print_read_table(&rom, table)
+}
+
+fn print_read_table(rom: &RomImage, table: &ResolvedTable) -> Result<()> {
+    let storage = table.storage_type.map(|s| debug_storage(s)).unwrap_or("?");
+    let endian  = match table.endian {
+        Some(romraider_core::Endian::Big)    => "big",
+        Some(romraider_core::Endian::Little) => "little",
+        None                                 => "?",
+    };
+    let dims = match (table.size_x, table.size_y) {
+        (Some(x), Some(y)) => format!("{x}x{y}"),
+        (Some(x), None)    => x.to_string(),
+        (None, Some(y))    => y.to_string(),
+        _ => "?".into(),
+    };
+    let addr = table.storage_address.map_or_else(|| "?".into(), |a| format!("{a}"));
+    println!(
+        "Table {} ({:?}) — {} {} {} @ {}",
+        table.name,
+        table.kind,
+        storage,
+        endian,
+        dims,
+        addr,
+    );
+
+    let raw = rom.read_table(table).context("reading main table cells")?;
+    let scaled_units = table.scalings.first().and_then(|s| s.units.as_deref()).unwrap_or("");
+    let scaling      = table.scalings.first().map(|s| s.compile()).transpose()?;
+
+    println!();
+    println!("Cells ({}):", raw.len());
+    print_grid(&raw, scaling.as_ref(), table.size_x, scaled_units);
+
+    // Оси: count берём из соответствующего размера родителя.
+    for axis in &table.axes {
+        print_axis(rom, axis, table.size_x, table.size_y);
+    }
+    Ok(())
+}
+
+fn print_grid(
+    raw:      &[f64],
+    scaling:  Option<&romraider_defs::CompiledScaling>,
+    size_x:   Option<u32>,
+    units:    &str,
+) {
+    let cols = size_x.map_or(raw.len(), |n| n as usize).max(1);
+    for (i, &v) in raw.iter().enumerate() {
+        let real = scaling.map_or(v, |c| c.to_real(v));
+        if i % cols == 0 && i > 0 {
+            println!();
+        }
+        print!("{:>10.3}  ", real);
+    }
+    println!();
+    if !units.is_empty() {
+        println!("units: {units}");
+    }
+}
+
+fn print_axis(
+    rom:           &RomImage,
+    axis:          &ResolvedTable,
+    parent_size_x: Option<u32>,
+    parent_size_y: Option<u32>,
+) {
+    let count = match axis.kind {
+        Some(romraider_defs::TableKind::XAxis) => parent_size_x,
+        Some(romraider_defs::TableKind::YAxis) => parent_size_y,
+        _ => None,
+    };
+    let Some(count) = count.map(|n| n as usize) else {
+        println!("\nAxis {} ({:?}): size not derivable from parent — skip", axis.name, axis.kind);
+        return;
+    };
+
+    match rom.read_cells(axis, count) {
+        Ok(raw) => {
+            let units = axis.scalings.first().and_then(|s| s.units.as_deref()).unwrap_or("");
+            let scaling = axis
+                .scalings
+                .first()
+                .and_then(|s| s.compile().ok());
+            println!("\n{:?} {} ({} cells, units={}):", axis.kind, axis.name, count, units);
+            let values: Vec<f64> = raw
+                .iter()
+                .map(|x| scaling.as_ref().map_or(*x, |c| c.to_real(*x)))
+                .collect();
+            for v in &values {
+                print!("{:>10.3}  ", v);
+            }
+            println!();
+        }
+        Err(e) => {
+            println!("\nAxis {} read failed: {e}", axis.name);
+        }
     }
 }
 

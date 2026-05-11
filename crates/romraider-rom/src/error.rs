@@ -10,6 +10,15 @@ pub enum RomError {
     #[error("address {addr} is outside the ROM image (size {size} bytes)")]
     AddressOutOfRange { addr: u32, size: usize },
 
+    #[error("table `{name}` is missing required field `{field}` after resolution")]
+    TableMissingField { name: String, field: &'static str },
+
+    #[error("decode buffer size mismatch: got {got} bytes, expected {expected}")]
+    DecodeSizeMismatch { got: usize, expected: usize },
+
+    #[error("decode size overflow: count={count} × stride={stride} > usize::MAX")]
+    DecodeOverflow { count: usize, stride: usize },
+
     #[error("checksum module `{0}` not implemented")]
     UnsupportedChecksum(String),
 

@@ -1,8 +1,10 @@
 use std::path::Path;
 
 use romraider_core::{bytes, Address};
+use romraider_defs::{ResolvedTable, StorageType, TableKind};
 use tracing::debug;
 
+use crate::decode::decode_cells;
 use crate::error::{RomError, RomResult};
 
 /// ROM-образ — простой буфер с операциями чтения/записи по адресу.
@@ -71,5 +73,147 @@ impl RomImage {
     #[must_use]
     pub fn raw(&self) -> &[u8] {
         &self.bytes
+    }
+
+    /// Прочитать `count` ячеек по адресу/типу/endian-у из таблицы. Возвращает
+    /// «сырые» f64 — без применения scaling-формул.
+    ///
+    /// Подходит и для основной таблицы, и для осей (для оси `count` обычно
+    /// берётся из `size_x`/`size_y` родителя — этот метод не делает выводов
+    /// о размере сам, а принимает явный аргумент).
+    pub fn read_cells(&self, table: &ResolvedTable, count: usize) -> RomResult<Vec<f64>> {
+        let storage_type = table
+            .storage_type
+            .ok_or_else(|| RomError::TableMissingField {
+                name:  table.name.clone(),
+                field: "storage_type",
+            })?;
+        let endian = table.endian.ok_or_else(|| RomError::TableMissingField {
+            name:  table.name.clone(),
+            field: "endian",
+        })?;
+        let address = table.storage_address.ok_or_else(|| RomError::TableMissingField {
+            name:  table.name.clone(),
+            field: "storage_address",
+        })?;
+        let stride = storage_type.byte_size();
+        let total = stride
+            .checked_mul(count)
+            .ok_or(RomError::DecodeOverflow { count, stride })?;
+        let bytes = self.read(address, total)?;
+        decode_cells(bytes, storage_type, endian, count)
+    }
+
+    /// Прочитать таблицу целиком — count выводится из `kind` и `size_x`/`size_y`:
+    /// - `3D`: `size_x * size_y`
+    /// - `2D`/`X Axis`/`Y Axis`: `size_x` или `size_y` (что задано)
+    /// - `1D`: 1
+    /// - `Static *`: 0 (нет байтов в ROM)
+    ///
+    /// Для осей внутри `3D`-таблицы это API часто бесполезно (их размер живёт
+    /// у родителя); в таком случае используйте [`Self::read_cells`] с явным
+    /// `count` из parent's `size_x`/`size_y`.
+    pub fn read_table(&self, table: &ResolvedTable) -> RomResult<Vec<f64>> {
+        let count = table_cell_count(table).ok_or_else(|| RomError::TableMissingField {
+            name:  table.name.clone(),
+            field: "size_x or size_y",
+        })?;
+        self.read_cells(table, count)
+    }
+}
+
+/// Сколько ячеек ожидается прочитать из таблицы исходя из `kind` и `size_*`.
+/// Возвращает `Some(0)` для статических осей (нет байт), `None` — если данных
+/// для расчёта недостаточно.
+fn table_cell_count(table: &ResolvedTable) -> Option<usize> {
+    let sx = table.size_x.map(|v| v as usize);
+    let sy = table.size_y.map(|v| v as usize);
+    match table.kind {
+        Some(TableKind::ThreeD) => Some(sx? * sy?),
+        Some(TableKind::TwoD) | Some(TableKind::XAxis) | Some(TableKind::YAxis) => sx.or(sy),
+        Some(TableKind::OneD) => Some(1),
+        Some(TableKind::StaticXAxis) | Some(TableKind::StaticYAxis) => Some(0),
+        None => sx.or(sy), // kind не задан — лучше что-то, чем падать
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use romraider_core::Endian;
+    use romraider_defs::ResolvedScaling;
+
+    fn table(
+        kind:    TableKind,
+        st:      StorageType,
+        endian:  Endian,
+        addr:    u32,
+        sx:      Option<u32>,
+        sy:      Option<u32>,
+    ) -> ResolvedTable {
+        ResolvedTable {
+            name:            "t".into(),
+            kind:            Some(kind),
+            category:        None,
+            storage_type:    Some(st),
+            endian:          Some(endian),
+            storage_address: Some(Address::new(addr)),
+            size_x:          sx,
+            size_y:          sy,
+            user_level:      None,
+            log_param:       None,
+            scalings:        Vec::<ResolvedScaling>::new(),
+            axes:            Vec::new(),
+            data:            Vec::new(),
+            description:     None,
+        }
+    }
+
+    #[test]
+    fn read_2d_uint16_big_endian() {
+        let rom = RomImage::from_bytes(vec![
+            0x00, 0x00, // padding
+            0x00, 0x10, 0x00, 0x20, 0x00, 0x40, 0x00, 0x80, // 4 cells
+        ]);
+        let t = table(TableKind::TwoD, StorageType::UInt16, Endian::Big, 2, Some(4), None);
+        let cells = rom.read_table(&t).unwrap();
+        assert_eq!(cells, vec![16.0, 32.0, 64.0, 128.0]);
+    }
+
+    #[test]
+    fn read_3d_table_size_is_x_times_y() {
+        let rom = RomImage::from_bytes(vec![0x00u8, 0x01, 0x02, 0x03, 0x04, 0x05]);
+        let t = table(TableKind::ThreeD, StorageType::UInt8, Endian::Big, 0, Some(3), Some(2));
+        let cells = rom.read_table(&t).unwrap();
+        assert_eq!(cells, vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0]);
+    }
+
+    #[test]
+    fn missing_storage_type_returns_typed_error() {
+        let rom = RomImage::from_bytes(vec![0u8; 8]);
+        let mut t = table(TableKind::TwoD, StorageType::UInt8, Endian::Big, 0, Some(4), None);
+        t.storage_type = None;
+        let err = rom.read_table(&t).unwrap_err();
+        assert!(matches!(err, RomError::TableMissingField { field: "storage_type", .. }));
+    }
+
+    #[test]
+    fn read_table_address_out_of_range() {
+        let rom = RomImage::from_bytes(vec![0u8; 4]);
+        let t = table(TableKind::TwoD, StorageType::UInt8, Endian::Big, 0, Some(8), None);
+        let err = rom.read_table(&t).unwrap_err();
+        assert!(matches!(err, RomError::AddressOutOfRange { .. }));
+    }
+
+    #[test]
+    fn read_cells_axis_with_explicit_count() {
+        let rom = RomImage::from_bytes(vec![
+            0x3F, 0xC0, 0x00, 0x00, // 1.5
+            0x40, 0x00, 0x00, 0x00, // 2.0
+            0x40, 0x40, 0x00, 0x00, // 3.0
+        ]);
+        let axis = table(TableKind::XAxis, StorageType::Float, Endian::Big, 0, None, None);
+        let cells = rom.read_cells(&axis, 3).unwrap();
+        assert_eq!(cells, vec![1.5, 2.0, 3.0]);
     }
 }
