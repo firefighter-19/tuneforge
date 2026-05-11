@@ -79,7 +79,7 @@ Desktop GUI на `eframe`/`egui`: открыть ROM, выбрать опред�
 | File → Save (in-place, не As…)                | `ECUEditor.saveRom`        | — (есть только Save As)         |   ❌   |
 | File → Close ROM                              | `ECUEditor.closeRom`       | —                               |   ❌   |
 | File → Recent (последние открытые)            | `Settings.recentRoms`      | —                               |   ❌   |
-| Edit → Undo / Redo                            | undo-manager               | —                               |   ❌   |
+| Edit → Undo / Redo                            | undo-manager               | `UndoLog` + Edit-меню + Ctrl+Z/Y/Shift+Z | ✅ |
 | Help → About                                  | `AboutForm`                | —                               |   ❌   |
 | Settings dialog                               | `SettingsForm`             | —                               |   ❌   |
 | Multi-document interface (несколько ROM)      | `MDIDesktopPane`           | — (одна таблица в фокусе)       |   ❌   |
@@ -116,7 +116,7 @@ Desktop GUI на `eframe`/`egui`: открыть ROM, выбрать опред�
 | Min/Max validation при вводе                  | `Scale.min/max` clamp                | —                                    |   ❌   |
 | Copy/Paste значений в Excel-формате           | `Table.copy/paste` + `Transferable`  | —                                    |   ❌   |
 | Multi-cell selection + bulk-edit (+10%, =N)   | `TableMenuItem` actions              | —                                    |   ❌   |
-| Undo для редактирования                       | undo-manager                         | —                                    |   ❌   |
+| Undo/Redo для редактирования (с history limit) | undo-manager                        | `UndoLog` (MAX=100), записи на каждый `write_back` | ✅ |
 | Switch-таблицы UI (radio-buttons)             | `TableSwitchView`                    | —                                    |   ❌   |
 | Bitwise switch UI (checkboxes для битов)      | `TableBitwiseSwitchView`             | —                                    |   ❌   |
 | Reset to base values                          | `Table.resetToOriginal`              | —                                    |   ❌   |

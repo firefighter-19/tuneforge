@@ -14,7 +14,7 @@
 | **romraider-rom**       | ROM-image, decode/encode, checksum             | 🟢 70%     | [`crates/romraider-rom/PROGRESS.md`](crates/romraider-rom/PROGRESS.md)           |
 | **romraider-logger**    | Backend логгера + plugins                      | 🔴 10%     | [`crates/romraider-logger/PROGRESS.md`](crates/romraider-logger/PROGRESS.md)     |
 | **romraider-cli**       | Headless CLI (debug + smoke-tests)             | 🟢 80%     | [`crates/romraider-cli/PROGRESS.md`](crates/romraider-cli/PROGRESS.md)           |
-| **romraider-gui**       | egui-редактор + (будущий) логгер UI            | 🟡 50%     | [`crates/romraider-gui/PROGRESS.md`](crates/romraider-gui/PROGRESS.md)           |
+| **romraider-gui**       | egui-редактор + (будущий) логгер UI            | 🟡 55%     | [`crates/romraider-gui/PROGRESS.md`](crates/romraider-gui/PROGRESS.md)           |
 
 **Легенда:** 🟢 ≥60% — 🟡 30–60% — 🔴 <30%
 
@@ -36,7 +36,8 @@
 | 9     | Subaru classic checksum (`checksum fix` tables)   | (закоммичено)    |
 | 10    | Auto-fix checksum в GUI Save + status-индикатор   | (закоммичено)    |
 | 11    | Compare ROMs в GUI (diff coloring + Values/Diff)  | (закоммичено)    |
-| 12    | Heatmap-раскраска ячеек (cool→warm по value)      | следующий коммит |
+| 12    | Heatmap-раскраска ячеек (cool→warm по value)      | (закоммичено)    |
+| 13    | Undo/Redo + Edit-меню + Ctrl+Z/Y хоткеи           | следующий коммит |
 
 ## Что работает прямо сейчас (E2E сценарии)
 
@@ -74,10 +75,11 @@
 1. ~~**Subaru классический checksum**~~ ✅ Slice 9
 2. ~~**Авто-fix Subaru checksum** + индикатор valid/invalid~~ ✅ Slice 10
 3. ~~**Compare two ROMs**~~ ✅ Slice 11
-4. ~~**Heatmap-раскраска**~~ ✅ Slice 12 (tooltip-ы для ячеек — потом)
-5. **Undo/Redo** ([gui](crates/romraider-gui/PROGRESS.md)) — без них боязно править
+4. ~~**Heatmap-раскраска**~~ ✅ Slice 12
+5. ~~**Undo/Redo**~~ ✅ Slice 13 (history=100, drag = много мелких шагов; coalescing — потом)
 6. **Switch-таблицы UI** ([gui+rom](crates/romraider-rom/PROGRESS.md)) — много ECU-настроек скрыты в bit-флагах
 7. **Tooltip для ячеек** — описание из `<description>` + raw/real value + formula
+8. **Coalescing undo** при drag (один шаг на drag, а не на каждое промежуточное значение)
 
 Для **дампа и реflash** — отдельный долгий путь:
 
@@ -107,7 +109,7 @@
 
 ## Метрики
 
-- **Тестов в воркспейсе:** 107 (passing, 0 failed) на момент `slice-12` (+4 unit на heatmap_range/heat_color в gui)
-- **Строк Rust-кода:** ~5700 (не считая XML-фикстур)
+- **Тестов в воркспейсе:** 112 (passing, 0 failed) на момент `slice-13` (+5 unit на UndoLog в gui)
+- **Строк Rust-кода:** ~5900 (не считая XML-фикстур)
 - **Зависимостей (workspace deps в `Cargo.toml`):** 17
-- **Коммитов:** 12 фич-коммитов + начальный + LICENSE + PROGRESS-документация
+- **Коммитов:** 13 фич-коммитов + начальный + LICENSE + PROGRESS-документация

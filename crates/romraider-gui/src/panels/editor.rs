@@ -6,14 +6,14 @@
 //! 3. Левая колонка — picker ROM-ID + дерево таблиц по `category`.
 //! 4. Центр — сетка значений выбранной таблицы со scaling и осями (для 3D).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
 
-use romraider_core::Endian;
+use romraider_core::{Address, Endian};
 use romraider_defs::{
     parse_file, resolve, CompiledScaling, ResolvedRom, ResolvedTable, StorageType, TableKind,
 };
-use romraider_rom::{subaru_classic, RomImage};
+use romraider_rom::{encode_cells, subaru_classic, RomImage};
 use tracing::{info, warn};
 
 #[derive(Default)]
@@ -31,6 +31,75 @@ pub struct EditorPanel {
     display_mode:        DisplayMode,
     /// Подсвечивать ли ячейки cool→warm градиентом по значению (когда нет compare).
     heatmap_enabled:     bool,
+    /// Журнал изменений для Undo/Redo.
+    undo_log:            UndoLog,
+}
+
+const MAX_UNDO_HISTORY: usize = 100;
+
+const SHORTCUT_UNDO:   egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Z);
+const SHORTCUT_REDO_Y: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Y);
+const SHORTCUT_REDO_Z: egui::KeyboardShortcut = egui::KeyboardShortcut::new(
+    egui::Modifiers { shift: true, command: true, ..egui::Modifiers::NONE },
+    egui::Key::Z,
+);
+
+#[derive(Debug, Default)]
+struct UndoLog {
+    undo: VecDeque<EditAction>,
+    redo: VecDeque<EditAction>,
+}
+
+#[derive(Debug, Clone)]
+struct EditAction {
+    address: Address,
+    before:  Vec<u8>,
+    after:   Vec<u8>,
+}
+
+impl UndoLog {
+    fn record(&mut self, address: Address, before: Vec<u8>, after: Vec<u8>) {
+        if before == after {
+            return; // no-op
+        }
+        self.undo.push_back(EditAction { address, before, after });
+        if self.undo.len() > MAX_UNDO_HISTORY {
+            self.undo.pop_front();
+        }
+        self.redo.clear();
+    }
+
+    /// Применить откат к ROM. `true` если что-то было откачено.
+    fn undo(&mut self, rom: &mut RomImage) -> bool {
+        let Some(action) = self.undo.pop_back() else { return false };
+        if rom.write(action.address, &action.before).is_err() {
+            // Не удалось — возвращаем запись на место, чтобы не потерять.
+            self.undo.push_back(action);
+            return false;
+        }
+        self.redo.push_back(action);
+        true
+    }
+
+    fn redo(&mut self, rom: &mut RomImage) -> bool {
+        let Some(action) = self.redo.pop_back() else { return false };
+        if rom.write(action.address, &action.after).is_err() {
+            self.redo.push_back(action);
+            return false;
+        }
+        self.undo.push_back(action);
+        true
+    }
+
+    fn clear(&mut self) {
+        self.undo.clear();
+        self.redo.clear();
+    }
+
+    fn can_undo(&self) -> bool { !self.undo.is_empty() }
+    fn can_redo(&self) -> bool { !self.redo.is_empty() }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -71,11 +140,30 @@ impl EditorPanel {
                 self.rom    = Some(RomState { path, rom });
                 self.error  = None;
                 self.notice = None;
+                // Новый ROM = чистая история (старые undo-байты относятся к другому файлу).
+                self.undo_log.clear();
             }
             Err(e) => {
                 warn!(?e, "rom open failed");
                 self.error = Some(format!("Failed to open ROM: {e}"));
             }
+        }
+    }
+
+    pub fn can_undo(&self) -> bool { self.undo_log.can_undo() && self.rom.is_some() }
+    pub fn can_redo(&self) -> bool { self.undo_log.can_redo() && self.rom.is_some() }
+
+    pub fn undo_action(&mut self) {
+        let Some(state) = self.rom.as_mut() else { return };
+        if !self.undo_log.undo(&mut state.rom) {
+            self.notice = Some("Nothing to undo".into());
+        }
+    }
+
+    pub fn redo_action(&mut self) {
+        let Some(state) = self.rom.as_mut() else { return };
+        if !self.undo_log.redo(&mut state.rom) {
+            self.notice = Some("Nothing to redo".into());
         }
     }
 
@@ -117,6 +205,7 @@ impl EditorPanel {
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui) {
+        self.handle_shortcuts(ui);
         self.render_status(ui);
 
         egui::SidePanel::left("editor-sidebar")
@@ -125,6 +214,14 @@ impl EditorPanel {
             .show_inside(ui, |ui| self.render_sidebar(ui));
 
         egui::CentralPanel::default().show_inside(ui, |ui| self.render_content(ui));
+    }
+
+    fn handle_shortcuts(&mut self, ui: &mut egui::Ui) {
+        let undo   = ui.input_mut(|i| i.consume_shortcut(&SHORTCUT_UNDO));
+        let redo_y = ui.input_mut(|i| i.consume_shortcut(&SHORTCUT_REDO_Y));
+        let redo_z = ui.input_mut(|i| i.consume_shortcut(&SHORTCUT_REDO_Z));
+        if undo   { self.undo_action(); }
+        if redo_y || redo_z { self.redo_action(); }
     }
 
     pub fn save_rom_as(&mut self, path: PathBuf) {
@@ -346,18 +443,19 @@ impl EditorPanel {
         ui.separator();
 
         let heatmap = self.heatmap_enabled;
+        let undo_log = &mut self.undo_log;
         egui::ScrollArea::both()
             .auto_shrink([false, false])
             .show(ui, |ui| match table.kind {
-                Some(TableKind::ThreeD) => {
-                    render_3d(ui, &mut rom_state.rom, compare_rom, table, mode, heatmap)
-                }
+                Some(TableKind::ThreeD) => render_3d(
+                    ui, &mut rom_state.rom, undo_log, compare_rom, table, mode, heatmap,
+                ),
                 Some(TableKind::TwoD)
                 | Some(TableKind::OneD)
                 | Some(TableKind::XAxis)
-                | Some(TableKind::YAxis) => {
-                    render_flat(ui, &mut rom_state.rom, compare_rom, table, mode, heatmap)
-                }
+                | Some(TableKind::YAxis) => render_flat(
+                    ui, &mut rom_state.rom, undo_log, compare_rom, table, mode, heatmap,
+                ),
                 Some(TableKind::StaticXAxis) | Some(TableKind::StaticYAxis) => {
                     render_static_axis(ui, table);
                 }
@@ -441,6 +539,7 @@ fn render_table_header(ui: &mut egui::Ui, t: &ResolvedTable) {
 fn render_3d(
     ui:          &mut egui::Ui,
     rom:         &mut RomImage,
+    undo_log:    &mut UndoLog,
     compare_rom: Option<&RomImage>,
     table:       &ResolvedTable,
     mode:        DisplayMode,
@@ -528,13 +627,14 @@ fn render_3d(
         });
 
     if changed {
-        write_back(rom, table, &display, scaling.as_ref());
+        write_back(rom, undo_log, table, &display, scaling.as_ref());
     }
 }
 
 fn render_flat(
     ui:          &mut egui::Ui,
     rom:         &mut RomImage,
+    undo_log:    &mut UndoLog,
     compare_rom: Option<&RomImage>,
     table:       &ResolvedTable,
     mode:        DisplayMode,
@@ -594,7 +694,7 @@ fn render_flat(
         });
 
     if changed {
-        write_back(rom, table, &display, scaling.as_ref());
+        write_back(rom, undo_log, table, &display, scaling.as_ref());
     }
 }
 
@@ -711,9 +811,11 @@ fn lerp_u8(a: u8, b: u8, t: f64) -> u8 {
     (a + (b - a) * t).clamp(0.0, 255.0).round() as u8
 }
 
-/// Сконвертировать «real» значения обратно в байт-репрезентацию и записать.
+/// Сконвертировать «real» значения обратно в байт-репрезентацию, записать в ROM
+/// и зарегистрировать изменение в `undo_log` (для Ctrl+Z).
 fn write_back(
     rom:      &mut RomImage,
+    undo_log: &mut UndoLog,
     table:    &ResolvedTable,
     display:  &[f64],
     scaling:  Option<&CompiledScaling>,
@@ -725,9 +827,26 @@ fn write_back(
             None    => v,
         })
         .collect();
-    if let Err(e) = rom.write_cells(table, &raw_back) {
+
+    // Кодируем заранее, чтобы получить «after»-байты для undo.
+    let (Some(addr), Some(st), Some(end)) =
+        (table.storage_address, table.storage_type, table.endian)
+    else {
+        return;
+    };
+    let after  = encode_cells(&raw_back, st, end);
+    let before = match rom.read(addr, after.len()) {
+        Ok(b)  => b.to_vec(),
+        Err(e) => {
+            warn!(?e, "write-back: read failed");
+            return;
+        }
+    };
+    if let Err(e) = rom.write(addr, &after) {
         warn!(?e, "write-back failed");
+        return;
     }
+    undo_log.record(addr, before, after);
 }
 
 fn cell_speed(scaling: Option<&CompiledScaling>, precision: usize) -> f64 {
@@ -844,5 +963,84 @@ mod tests {
         let cold = heat_color(0.0, 0.0, 1.0);
         let hot  = heat_color(1.0, 0.0, 1.0);
         assert_ne!(cold, hot);
+    }
+
+    #[test]
+    fn undo_log_records_and_undoes() {
+        let mut log = UndoLog::default();
+        let mut rom = RomImage::from_bytes(vec![0u8; 16]);
+        let addr    = Address::new(0);
+        let before  = vec![0, 0, 0, 0];
+        let after   = vec![1, 2, 3, 4];
+
+        rom.write(addr, &after).unwrap();
+        log.record(addr, before.clone(), after.clone());
+
+        assert!(log.can_undo());
+        assert!(!log.can_redo());
+
+        assert!(log.undo(&mut rom));
+        assert_eq!(&rom.raw()[0..4], &before[..]);
+        assert!(log.can_redo());
+        assert!(!log.can_undo());
+
+        assert!(log.redo(&mut rom));
+        assert_eq!(&rom.raw()[0..4], &after[..]);
+    }
+
+    #[test]
+    fn undo_log_clears_redo_on_new_action() {
+        let mut log = UndoLog::default();
+        let mut rom = RomImage::from_bytes(vec![0u8; 4]);
+        let addr    = Address::new(0);
+
+        log.record(addr, vec![0], vec![1]);
+        log.undo(&mut rom);
+        assert!(log.can_redo());
+
+        log.record(addr, vec![0], vec![2]);
+        assert!(!log.can_redo(), "redo stack must clear after new record");
+    }
+
+    #[test]
+    fn undo_log_caps_at_max_history() {
+        let mut log = UndoLog::default();
+        for i in 0..MAX_UNDO_HISTORY + 50 {
+            log.record(Address::new(0), vec![i as u8], vec![(i + 1) as u8]);
+        }
+        assert_eq!(log.undo.len(), MAX_UNDO_HISTORY);
+    }
+
+    #[test]
+    fn undo_log_ignores_no_op() {
+        let mut log = UndoLog::default();
+        log.record(Address::new(0), vec![1, 2], vec![1, 2]);
+        assert!(!log.can_undo());
+    }
+
+    #[test]
+    fn multiple_undo_redo_steps() {
+        let mut log = UndoLog::default();
+        let mut rom = RomImage::from_bytes(vec![0u8; 4]);
+        let addr    = Address::new(0);
+
+        rom.write(addr, &[1, 0, 0, 0]).unwrap();
+        log.record(addr, vec![0, 0, 0, 0], vec![1, 0, 0, 0]);
+        rom.write(addr, &[1, 2, 0, 0]).unwrap();
+        log.record(addr, vec![1, 0, 0, 0], vec![1, 2, 0, 0]);
+        rom.write(addr, &[1, 2, 3, 0]).unwrap();
+        log.record(addr, vec![1, 2, 0, 0], vec![1, 2, 3, 0]);
+
+        log.undo(&mut rom);
+        assert_eq!(rom.raw(), &[1, 2, 0, 0]);
+        log.undo(&mut rom);
+        assert_eq!(rom.raw(), &[1, 0, 0, 0]);
+        log.undo(&mut rom);
+        assert_eq!(rom.raw(), &[0, 0, 0, 0]);
+        assert!(!log.can_undo());
+
+        log.redo(&mut rom);
+        log.redo(&mut rom);
+        assert_eq!(rom.raw(), &[1, 2, 0, 0]);
     }
 }

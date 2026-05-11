@@ -78,6 +78,24 @@ impl eframe::App for App {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 });
+                ui.menu_button("Edit", |ui| {
+                    let can_undo = self.editor.can_undo();
+                    let can_redo = self.editor.can_redo();
+                    if ui
+                        .add_enabled(can_undo, egui::Button::new("Undo  (Ctrl+Z)"))
+                        .clicked()
+                    {
+                        ui.close_menu();
+                        self.editor.undo_action();
+                    }
+                    if ui
+                        .add_enabled(can_redo, egui::Button::new("Redo  (Ctrl+Y)"))
+                        .clicked()
+                    {
+                        ui.close_menu();
+                        self.editor.redo_action();
+                    }
+                });
                 ui.separator();
                 ui.selectable_value(&mut self.active, Tab::Editor, "Editor");
                 ui.selectable_value(&mut self.active, Tab::Logger, "Logger");
