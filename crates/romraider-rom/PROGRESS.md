@@ -84,19 +84,21 @@
 
 | Фича                                          | Java-аналог                      | Rust                                  | Статус |
 | --------------------------------------------- | -------------------------------- | ------------------------------------- | :----: |
-| `ChecksumModule` trait + регистр              | `Calculator` interface           | `checksum::ChecksumModule`            |   ✅   |
-| Регистр модулей по имени                      | `ChecksumFactory`                | `checksum::by_name`                   |   ✅   |
-| Subaru STD checksum (SH7055)                  | `ChecksumSTD` / `CalculateSTD`   | `subaru_8bit::Subaru8Bit` (заглушка) |   🟡   |
-| Subaru ALT (SH7058)                           | `ChecksumALT2` / `CalculateALT2` | `subaru_32bit::Subaru32Bit` (заглушка)|  🟡   |
-| Subaru 32-bit (SH7059)                        | `ChecksumALT`                    | —                                     |   ❌   |
+| `ChecksumModule` trait (для Nissan/BMW/GM family) | `Calculator` interface       | `checksum::ChecksumModule`            |   ✅   |
+| Регистр модулей по имени                      | `ChecksumFactory`                | `checksum::by_name` (пока пустой)     |  🟡   |
+| **Subaru классический (`checksum fix`-таблицы)** | `maps.RomChecksum.calculateRomChecksum` | `checksum::subaru_classic` (`CHECK_TOTAL`, `calculate_diff`, `fix`, `verify`) | ✅ |
+| Subaru — slot-disabled (`start=end=0`)        | `RomChecksum.calculateRomChecksum` | `subaru_classic::fix` (skip)        |   ✅   |
+| Subaru — `EntryStatus` для UI-feedback        | inline в Java                    | `subaru_classic::EntryStatus`         |   ✅   |
 | BMW/Audi Motronic (single)                    | `ChecksumMOTRONICSINGLE`         | —                                     |   ❌   |
 | BMW/Audi Motronic (double)                    | `ChecksumMOTRONICDOUBLE`         | —                                     |   ❌   |
 | GM E38 PCM                                    | `ChecksumE38PCM`                 | —                                     |   ❌   |
 | XOR checksum                                  | `ChecksumBYTEXOR`                | —                                     |   ❌   |
 | COPY (mirror area)                            | `ChecksumCOPY`                   | —                                     |   ❌   |
-| Nissan checksum                               | `NissanChecksum` / `NcsCoDec`    | —                                     |   ❌   |
-| `verify()` перед сохранением                  | `RomChecksum.verifyChecksums`    | (trait method есть, реализаций нет)   |   ❌   |
-| `fix()` пересчёт при изменениях               | `RomChecksum.calculateChecksums` | (trait method есть, реализаций нет)   |   ❌   |
+| Nissan STD                                    | `ChecksumSTD` / `CalculateSTD`   | —                                     |   ❌   |
+| Nissan ALT                                    | `ChecksumALT`                    | —                                     |   ❌   |
+| Nissan ALT2 (с SKIPLOC)                       | `ChecksumALT2` / `CalculateALT2` | —                                     |   ❌   |
+| Nissan codec (`NcsCoDec`)                     | `NcsCoDec`                       | —                                     |   ❌   |
+| `ram_offset` для memory-mapped ROM            | `Table.getRamOffset`             | —                                     |   ❌   |
 
 ### Switch-таблицы (on/off enum-значения)
 
@@ -118,9 +120,11 @@
 ## TODO
 
 ### Критический путь — реальные ROM
-- [ ] **Реализовать Subaru STD/ALT2 checksums** — без них `save_as` после редактирования даёт ROM, который ECU не примет
-- [ ] **Auto-detect checksum-модуля по `<rom><checksum>`** — порт из `RomChecksum.java`
-- [ ] **`verify()` после загрузки + `fix()` перед сохранением** — UX-цепочка «открыл, отредактировал, сохранил, ECU принял»
+- [x] ~~Реализовать Subaru классический checksum (Slice 9)~~ — `subaru_classic::fix`/`verify` готовы
+- [ ] **Auto-detect Subaru classic в GUI** — при `File → Save ROM As…` сначала прогнать `subaru_classic::fix` если в def есть таблицы `"checksum fix*"`
+- [ ] **GUI-feedback от `verify`** — после загрузки ROM показать список невалидных записей (если есть)
+- [ ] **`ram_offset` field в `ResolvedTable`** — для прошивок где ROM маппится в другую область памяти ECU
+- [ ] **CLI команды `verify-checksum` / `fix-checksum`** — для batch-проверки скриптами
 
 ### Расширение покрытия
 - [ ] **Switch-таблицы** — отображение и редактирование bit-флагов

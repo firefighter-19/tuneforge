@@ -11,7 +11,7 @@
 | **romraider-io**        | Transport-trait + serial/elm327/j2534          | 🟡 40%     | [`crates/romraider-io/PROGRESS.md`](crates/romraider-io/PROGRESS.md)             |
 | **romraider-protocol**  | SSM/OBD/DS2/NCS диалекты                       | 🟡 30%     | [`crates/romraider-protocol/PROGRESS.md`](crates/romraider-protocol/PROGRESS.md) |
 | **romraider-defs**      | Парсер + резолв ECU/log_defs XML, scaling      | 🟢 70%     | [`crates/romraider-defs/PROGRESS.md`](crates/romraider-defs/PROGRESS.md)         |
-| **romraider-rom**       | ROM-image, decode/encode, checksum             | 🟡 60%     | [`crates/romraider-rom/PROGRESS.md`](crates/romraider-rom/PROGRESS.md)           |
+| **romraider-rom**       | ROM-image, decode/encode, checksum             | 🟢 70%     | [`crates/romraider-rom/PROGRESS.md`](crates/romraider-rom/PROGRESS.md)           |
 | **romraider-logger**    | Backend логгера + plugins                      | 🔴 10%     | [`crates/romraider-logger/PROGRESS.md`](crates/romraider-logger/PROGRESS.md)     |
 | **romraider-cli**       | Headless CLI (debug + smoke-tests)             | 🟢 80%     | [`crates/romraider-cli/PROGRESS.md`](crates/romraider-cli/PROGRESS.md)           |
 | **romraider-gui**       | egui-редактор + (будущий) логгер UI            | 🟡 35%     | [`crates/romraider-gui/PROGRESS.md`](crates/romraider-gui/PROGRESS.md)           |
@@ -32,7 +32,8 @@
 | 5     | Парс `log_defs.xml` (логгер-определения)          | `3fd5e80`     |
 | 6     | ROM bytes ↔ resolved table (read_table)           | `4588fb0`     |
 | 7     | GUI MVP: open ROM/def, picker, read-only грид     | `9500ec4`     |
-| 8     | GUI editing: DragValue + write-back, Save As      | следующий коммит |
+| 8     | GUI editing: DragValue + write-back, Save As      | (закоммичено)    |
+| 9     | Subaru classic checksum (`checksum fix` tables)   | следующий коммит |
 
 ## Что работает прямо сейчас (E2E сценарии)
 
@@ -67,11 +68,12 @@
 Минимальный набор, чтобы можно было РЕАЛЬНО открыть прошивку, поправить
 карту и залить обратно:
 
-1. **Subaru STD/ALT2 checksum** ([rom](crates/romraider-rom/PROGRESS.md)) — без них сохранённый ROM невалиден
+1. ~~**Subaru классический checksum**~~ ✅ Slice 9 — алгоритм готов, осталось вшить вызов в GUI Save-flow
 2. **Compare two ROMs** ([gui](crates/romraider-gui/PROGRESS.md)) — стандартный workflow тюнера
 3. **Heatmap-раскраска + tooltip** ([gui](crates/romraider-gui/PROGRESS.md)) — без них таблицу глазами не отсканировать
 4. **Undo/Redo** ([gui](crates/romraider-gui/PROGRESS.md)) — без них боязно править
 5. **Switch-таблицы UI** ([gui+rom](crates/romraider-rom/PROGRESS.md)) — много ECU-настроек скрыты в bit-флагах
+6. **Авто-fix Subaru checksum при сохранении в GUI** + индикатор valid/invalid после загрузки
 
 Для **дампа и реflash** — отдельный долгий путь:
 
@@ -101,7 +103,7 @@
 
 ## Метрики
 
-- **Тестов в воркспейсе:** 93 (passing, 0 failed) на момент `slice-8`
-- **Строк Rust-кода:** ~5000 (не считая XML-фикстур)
-- **Зависимостей (workspace deps в `Cargo.toml`):** 16 (минимум для области)
-- **Коммитов:** 8 фич-коммитов + начальный + LICENSE
+- **Тестов в воркспейсе:** 103 (passing, 0 failed) на момент `slice-9` (+10 vs slice-8: 5 unit + 5 integration в checksum)
+- **Строк Rust-кода:** ~5300 (не считая XML-фикстур)
+- **Зависимостей (workspace deps в `Cargo.toml`):** 17 (rfd добавлен в slice-7)
+- **Коммитов:** 9 фич-коммитов + начальный + LICENSE + PROGRESS-документация

@@ -1,30 +1,36 @@
 //! Алгоритмы пересчёта контрольных сумм.
 //!
-//! Каждая семья ECU использует свой алгоритм. В Java-RomRaider они живут в
-//! `com.romraider.maps.checksum.*` и подключаются по имени из ECU-определения
-//! (`<rom>` → `<scalingbase>` или явный `<checksum>`-узел).
+//! У апстрима алгоритмы живут в двух местах:
+//! - `com.romraider.maps.checksum.*` — Nissan-style (STD/ALT/ALT2), BMW
+//!   Motronic, GM E38, BYTEXOR, COPY. Конфигурируются через `<checksum>`
+//!   элемент в ROM-определении и регистрируются через [`ChecksumModule`].
+//! - `com.romraider.maps.RomChecksum.java` — Subaru-style: жёстко зашитый
+//!   алгоритм, ищущий **таблицы с именем `"checksum fix*"`**, в которых
+//!   лежат `(start, end, diff)`-тройки. Реализован у нас как free-функции
+//!   в [`subaru_classic`] — без конфигурации через `<checksum>`.
+//!
+//! Trait [`ChecksumModule`] зарезервирован под Nissan/BMW/GM (будут
+//! отдельными слайсами). Сейчас регистр пуст.
 
-use crate::image::RomImage;
 use crate::error::{RomError, RomResult};
+use crate::image::RomImage;
 
-mod subaru_8bit;
-mod subaru_32bit;
+pub mod subaru_classic;
 
-/// Контракт всех модулей checksum.
+/// Контракт «конфигурируемого» checksum-модуля (Nissan/BMW/GM family).
+///
+/// Subaru-classic под него не подходит — там вообще нет конфигурации,
+/// см. [`subaru_classic::fix`].
 pub trait ChecksumModule: Send + Sync {
     fn name(&self) -> &'static str;
     fn verify(&self, rom: &RomImage) -> RomResult<()>;
     fn fix(&self, rom: &mut RomImage) -> RomResult<()>;
 }
 
-/// Реестр известных модулей.
+/// Реестр известных модулей (пока пуст — заполняется по мере добавления семей).
 #[must_use]
-pub fn by_name(name: &str) -> Option<Box<dyn ChecksumModule>> {
-    match name {
-        "subaru_8bit"   => Some(Box::new(subaru_8bit::Subaru8Bit)),
-        "subaru_32bit"  => Some(Box::new(subaru_32bit::Subaru32Bit)),
-        _ => None,
-    }
+pub fn by_name(_name: &str) -> Option<Box<dyn ChecksumModule>> {
+    None
 }
 
 #[allow(dead_code)]
