@@ -30,9 +30,25 @@ impl eframe::App for App {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("File", |ui| {
                     if ui.button("Open ROM…").clicked() {
-                        self.editor.request_open();
                         ui.close_menu();
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("ROM image", &["bin", "rom", "hex"])
+                            .add_filter("Any", &["*"])
+                            .pick_file()
+                        {
+                            self.editor.load_rom(path);
+                        }
                     }
+                    if ui.button("Open Def…").clicked() {
+                        ui.close_menu();
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("ECU definitions XML", &["xml"])
+                            .pick_file()
+                        {
+                            self.editor.load_def(path);
+                        }
+                    }
+                    ui.separator();
                     if ui.button("Quit").clicked() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }

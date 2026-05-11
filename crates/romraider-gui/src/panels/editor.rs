@@ -1,45 +1,441 @@
+//! ROM editor panel — read-only MVP.
+//!
+//! Workflow:
+//! 1. File → Open ROM…       (через rfd)
+//! 2. File → Open Def…       (XML с `<roms>`)
+//! 3. Левая колонка — picker ROM-ID + дерево таблиц по `category`.
+//! 4. Центр — сетка значений выбранной таблицы со scaling и осями (для 3D).
+
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use romraider_core::Endian;
+use romraider_defs::{
+    parse_file, resolve, CompiledScaling, ResolvedRom, ResolvedTable, StorageType, TableKind,
+};
 use romraider_rom::RomImage;
 use tracing::warn;
 
 #[derive(Default)]
 pub struct EditorPanel {
-    rom:  Option<(PathBuf, RomImage)>,
-    open_requested: bool,
-    error: Option<String>,
+    rom:                 Option<RomState>,
+    def:                 Option<DefState>,
+    selected_rom_id:     Option<String>,
+    selected_table_name: Option<String>,
+    error:               Option<String>,
+}
+
+struct RomState {
+    path: PathBuf,
+    rom:  RomImage,
+}
+
+struct DefState {
+    path: PathBuf,
+    roms: Vec<ResolvedRom>,
 }
 
 impl EditorPanel {
-    pub fn request_open(&mut self) {
-        self.open_requested = true;
+    pub fn load_rom(&mut self, path: PathBuf) {
+        match RomImage::open(&path) {
+            Ok(rom) => {
+                self.rom   = Some(RomState { path, rom });
+                self.error = None;
+            }
+            Err(e) => {
+                warn!(?e, "rom open failed");
+                self.error = Some(format!("Failed to open ROM: {e}"));
+            }
+        }
+    }
+
+    pub fn load_def(&mut self, path: PathBuf) {
+        let result = parse_file(&path).and_then(|doc| resolve(&doc));
+        match result {
+            Ok(roms) => {
+                self.def                 = Some(DefState { path, roms });
+                self.selected_rom_id     = None;
+                self.selected_table_name = None;
+                self.error               = None;
+            }
+            Err(e) => {
+                warn!(?e, "def load failed");
+                self.error = Some(format!("Failed to load definitions: {e}"));
+            }
+        }
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui) {
-        if self.open_requested {
-            self.open_requested = false;
-            // TODO: подключить rfd::FileDialog. Пока — placeholder, чтобы не тянуть
-            // лишнюю крейт-зависимость до того, как UI реально нужен.
-            warn!("file picker not wired yet");
-            self.error = Some("File picker is not implemented in the skeleton".into());
-        }
+        self.render_status(ui);
 
-        ui.heading("ROM Editor");
+        egui::SidePanel::left("editor-sidebar")
+            .min_width(220.0)
+            .resizable(true)
+            .show_inside(ui, |ui| self.render_sidebar(ui));
+
+        egui::CentralPanel::default().show_inside(ui, |ui| self.render_content(ui));
+    }
+
+    fn render_status(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("ROM:").strong());
+            ui.label(
+                self.rom
+                    .as_ref()
+                    .map(|r| r.path.display().to_string())
+                    .unwrap_or_else(|| "(not loaded)".into()),
+            );
+            ui.separator();
+            ui.label(egui::RichText::new("Def:").strong());
+            ui.label(
+                self.def
+                    .as_ref()
+                    .map(|d| d.path.display().to_string())
+                    .unwrap_or_else(|| "(not loaded)".into()),
+            );
+        });
+        if let Some(err) = self.error.clone() {
+            ui.horizontal(|ui| {
+                ui.colored_label(egui::Color32::LIGHT_RED, err);
+                if ui.button("✕").clicked() {
+                    self.error = None;
+                }
+            });
+        }
+        ui.separator();
+    }
+
+    fn render_sidebar(&mut self, ui: &mut egui::Ui) {
+        let Some(def) = self.def.as_ref() else {
+            ui.label("Use File → Open Def… to load XML definitions.");
+            return;
+        };
+
+        let current = self.selected_rom_id.clone().unwrap_or_default();
+        egui::ComboBox::from_label("ROM")
+            .selected_text(&current)
+            .width(180.0)
+            .show_ui(ui, |ui| {
+                for rom in &def.roms {
+                    let label = rom_label(rom);
+                    ui.selectable_value(
+                        &mut self.selected_rom_id,
+                        Some(rom.xml_id.clone()),
+                        label,
+                    );
+                }
+            });
+
         ui.separator();
 
-        match &self.rom {
-            Some((path, rom)) => {
-                ui.label(format!("File:  {}", path.display()));
-                ui.label(format!("Size:  {} KiB", rom.size() / 1024));
-                ui.label(format!("Dirty: {}", rom.is_dirty()));
-            }
-            None => {
-                ui.label("No ROM loaded. Use File → Open ROM…");
-            }
-        }
+        let Some(rom_id) = self.selected_rom_id.clone() else {
+            return;
+        };
+        let Some(rom_def) = def.roms.iter().find(|r| r.xml_id == rom_id) else {
+            ui.colored_label(egui::Color32::YELLOW, "ROM ID not found in defs");
+            return;
+        };
+        render_table_tree(ui, rom_def, &mut self.selected_table_name);
+    }
 
-        if let Some(err) = &self.error {
-            ui.colored_label(egui::Color32::LIGHT_RED, err);
+    fn render_content(&self, ui: &mut egui::Ui) {
+        let Some(rom) = self.rom.as_ref() else {
+            ui.label("Use File → Open ROM… to load a firmware binary.");
+            return;
+        };
+        let Some(def) = self.def.as_ref() else {
+            ui.label("Load a definition file (File → Open Def…) to view tables.");
+            return;
+        };
+        let Some(rom_id) = self.selected_rom_id.as_ref() else {
+            ui.label("Pick a ROM ID in the sidebar.");
+            return;
+        };
+        let Some(table_name) = self.selected_table_name.as_ref() else {
+            ui.label("Pick a table in the sidebar.");
+            return;
+        };
+
+        let Some(rom_def) = def.roms.iter().find(|r| r.xml_id == *rom_id) else {
+            ui.colored_label(egui::Color32::LIGHT_RED, "Selected ROM ID not found.");
+            return;
+        };
+        let Some(table) = rom_def.tables.iter().find(|t| t.name == *table_name) else {
+            ui.colored_label(egui::Color32::LIGHT_RED, "Selected table not found.");
+            return;
+        };
+
+        render_table_header(ui, table);
+        ui.separator();
+
+        egui::ScrollArea::both()
+            .auto_shrink([false, false])
+            .show(ui, |ui| match table.kind {
+                Some(TableKind::ThreeD) => render_3d(ui, &rom.rom, table),
+                Some(TableKind::TwoD)
+                | Some(TableKind::OneD)
+                | Some(TableKind::XAxis)
+                | Some(TableKind::YAxis) => render_flat(ui, &rom.rom, table),
+                Some(TableKind::StaticXAxis) | Some(TableKind::StaticYAxis) => {
+                    render_static_axis(ui, table);
+                }
+                None => {
+                    ui.colored_label(egui::Color32::YELLOW, "Table kind unknown after resolution.");
+                }
+            });
+    }
+}
+
+fn rom_label(rom: &ResolvedRom) -> String {
+    let make  = rom.romid.make.as_deref().unwrap_or("");
+    let model = rom.romid.model.as_deref().unwrap_or("");
+    let sub   = rom.romid.submodel.as_deref().unwrap_or("");
+    let bits: Vec<&str> = [make, model, sub].into_iter().filter(|s| !s.is_empty()).collect();
+    if bits.is_empty() {
+        rom.xml_id.clone()
+    } else {
+        format!("{}  ({})", rom.xml_id, bits.join(" "))
+    }
+}
+
+fn render_table_tree(
+    ui:        &mut egui::Ui,
+    rom_def:   &ResolvedRom,
+    selection: &mut Option<String>,
+) {
+    let mut by_cat: BTreeMap<String, Vec<&ResolvedTable>> = BTreeMap::new();
+    for t in &rom_def.tables {
+        let cat = t.category.clone().unwrap_or_else(|| "Uncategorized".into());
+        by_cat.entry(cat).or_default().push(t);
+    }
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            for (cat, tables) in &by_cat {
+                egui::CollapsingHeader::new(cat)
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        for t in tables {
+                            let selected = selection.as_deref() == Some(t.name.as_str());
+                            if ui.selectable_label(selected, &t.name).clicked() {
+                                *selection = Some(t.name.clone());
+                            }
+                        }
+                    });
+            }
+        });
+}
+
+fn render_table_header(ui: &mut egui::Ui, t: &ResolvedTable) {
+    ui.heading(&t.name);
+    ui.horizontal_wrapped(|ui| {
+        ui.label(format!("kind: {}", debug_kind(t.kind)));
+        ui.separator();
+        ui.label(format!("storage: {}", debug_storage(t.storage_type)));
+        ui.separator();
+        ui.label(format!("endian: {}", debug_endian(t.endian)));
+        ui.separator();
+        ui.label(format!(
+            "address: {}",
+            t.storage_address
+                .map_or_else(|| "?".into(), |a| format!("{a}"))
+        ));
+        ui.separator();
+        ui.label(format!(
+            "dims: {}×{}",
+            t.size_x.map_or("?".into(), |x| x.to_string()),
+            t.size_y.map_or("?".into(), |y| y.to_string()),
+        ));
+        if let Some(scaling) = t.scalings.first() {
+            ui.separator();
+            ui.label(format!("units: {}", scaling.units.as_deref().unwrap_or("-")));
         }
+    });
+    if let Some(desc) = &t.description {
+        ui.label(egui::RichText::new(desc).italics().weak());
+    }
+}
+
+fn render_3d(ui: &mut egui::Ui, rom: &RomImage, table: &ResolvedTable) {
+    let (Some(size_x), Some(size_y)) = (table.size_x, table.size_y) else {
+        ui.colored_label(egui::Color32::YELLOW, "3D table is missing sizex/sizey.");
+        return;
+    };
+    let size_x = size_x as usize;
+    let size_y = size_y as usize;
+
+    let data = match rom.read_table(table) {
+        Ok(d) => d,
+        Err(e) => {
+            ui.colored_label(egui::Color32::LIGHT_RED, format!("Read failed: {e}"));
+            return;
+        }
+    };
+    let scaling   = compile_first_scaling(table);
+    let precision = precision_from_format(table.scalings.first().and_then(|s| s.format.as_deref()));
+
+    let x_axis = table.axes.iter().find(|a| a.kind == Some(TableKind::XAxis));
+    let y_axis = table.axes.iter().find(|a| a.kind == Some(TableKind::YAxis));
+    let x_values = x_axis.and_then(|a| rom.read_cells(a, size_x).ok());
+    let y_values = y_axis.and_then(|a| rom.read_cells(a, size_y).ok());
+    let x_scaling = x_axis.and_then(compile_first_scaling);
+    let y_scaling = y_axis.and_then(compile_first_scaling);
+    let x_precision = precision_from_format(
+        x_axis.and_then(|a| a.scalings.first().and_then(|s| s.format.as_deref())),
+    );
+    let y_precision = precision_from_format(
+        y_axis.and_then(|a| a.scalings.first().and_then(|s| s.format.as_deref())),
+    );
+
+    egui::Grid::new("table-3d-grid")
+        .striped(true)
+        .spacing([4.0, 2.0])
+        .show(ui, |ui| {
+            // Top-left corner + X axis header
+            ui.label("");
+            if let Some(xs) = &x_values {
+                for x in xs {
+                    let v = apply(x_scaling.as_ref(), *x);
+                    ui.label(egui::RichText::new(format!("{v:.*}", x_precision)).strong());
+                }
+            } else {
+                for i in 0..size_x {
+                    ui.label(egui::RichText::new(i.to_string()).strong());
+                }
+            }
+            ui.end_row();
+
+            // Data rows with Y-axis labels on the left
+            for y in 0..size_y {
+                if let Some(ys) = &y_values {
+                    let v = apply(y_scaling.as_ref(), ys[y]);
+                    ui.label(egui::RichText::new(format!("{v:.*}", y_precision)).strong());
+                } else {
+                    ui.label(egui::RichText::new(y.to_string()).strong());
+                }
+                for x in 0..size_x {
+                    let raw    = data.get(y * size_x + x).copied().unwrap_or(f64::NAN);
+                    let scaled = apply(scaling.as_ref(), raw);
+                    ui.label(format!("{scaled:.*}", precision));
+                }
+                ui.end_row();
+            }
+        });
+}
+
+fn render_flat(ui: &mut egui::Ui, rom: &RomImage, table: &ResolvedTable) {
+    let count = table
+        .size_x
+        .or(table.size_y)
+        .map(|v| v as usize)
+        .or(Some(1));
+    let count = match count {
+        Some(0) | None => {
+            ui.label("Empty table.");
+            return;
+        }
+        Some(n) => n,
+    };
+
+    let data = match rom.read_cells(table, count) {
+        Ok(d) => d,
+        Err(e) => {
+            ui.colored_label(egui::Color32::LIGHT_RED, format!("Read failed: {e}"));
+            return;
+        }
+    };
+    let scaling   = compile_first_scaling(table);
+    let precision = precision_from_format(table.scalings.first().and_then(|s| s.format.as_deref()));
+
+    egui::Grid::new("table-flat-grid")
+        .striped(true)
+        .spacing([6.0, 2.0])
+        .show(ui, |ui| {
+            for (i, v) in data.iter().enumerate() {
+                if i > 0 && i % 8 == 0 {
+                    ui.end_row();
+                }
+                let scaled = apply(scaling.as_ref(), *v);
+                ui.label(format!("{scaled:.*}", precision));
+            }
+            ui.end_row();
+        });
+}
+
+fn render_static_axis(ui: &mut egui::Ui, table: &ResolvedTable) {
+    if table.data.is_empty() {
+        ui.label("Static axis has no labels.");
+        return;
+    }
+    egui::Grid::new("table-static-grid").show(ui, |ui| {
+        for (i, label) in table.data.iter().enumerate() {
+            ui.label(egui::RichText::new(i.to_string()).strong());
+            ui.label(label);
+            ui.end_row();
+        }
+    });
+}
+
+fn compile_first_scaling(table: &ResolvedTable) -> Option<CompiledScaling> {
+    table.scalings.first().and_then(|s| s.compile().ok())
+}
+
+fn apply(scaling: Option<&CompiledScaling>, value: f64) -> f64 {
+    scaling.map_or(value, |c| c.to_real(value))
+}
+
+fn precision_from_format(format: Option<&str>) -> usize {
+    let Some(f) = format else { return 2 };
+    let Some(idx) = f.find('.') else { return 0 };
+    f[idx + 1..].chars().filter(|c| *c == '0' || *c == '#').count()
+}
+
+fn debug_kind(k: Option<TableKind>) -> &'static str {
+    match k {
+        Some(TableKind::OneD)        => "1D",
+        Some(TableKind::TwoD)        => "2D",
+        Some(TableKind::ThreeD)      => "3D",
+        Some(TableKind::XAxis)       => "X Axis",
+        Some(TableKind::YAxis)       => "Y Axis",
+        Some(TableKind::StaticXAxis) => "Static X Axis",
+        Some(TableKind::StaticYAxis) => "Static Y Axis",
+        None => "?",
+    }
+}
+
+fn debug_storage(s: Option<StorageType>) -> &'static str {
+    match s {
+        Some(StorageType::UInt8)  => "uint8",
+        Some(StorageType::Int8)   => "int8",
+        Some(StorageType::UInt16) => "uint16",
+        Some(StorageType::Int16)  => "int16",
+        Some(StorageType::UInt32) => "uint32",
+        Some(StorageType::Int32)  => "int32",
+        Some(StorageType::Float)  => "float",
+        Some(StorageType::Hex)    => "hex",
+        Some(StorageType::Char)   => "char",
+        None => "?",
+    }
+}
+
+fn debug_endian(e: Option<Endian>) -> &'static str {
+    match e {
+        Some(Endian::Big)    => "big",
+        Some(Endian::Little) => "little",
+        None => "?",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn precision_picks_zeros_and_hashes_after_decimal() {
+        assert_eq!(precision_from_format(Some("0.00")),   2);
+        assert_eq!(precision_from_format(Some("#0.000")), 3);
+        assert_eq!(precision_from_format(Some("0")),      0);
+        assert_eq!(precision_from_format(Some("0.0##")),  3);
+        assert_eq!(precision_from_format(None),           2);
     }
 }
