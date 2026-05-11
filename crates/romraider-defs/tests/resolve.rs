@@ -124,3 +124,49 @@ fn all_roms_resolve_without_errors() {
     assert_eq!(r1.len(), 2);
     assert_eq!(r2.len(), 3);
 }
+
+#[test]
+fn psi_relative_scaling_compiles_and_evaluates_end_to_end() {
+    // Полный путь: parse XML → resolve inheritance → compile expression → eval.
+    let resolved = load("scalingbase_test.xml");
+    let child    = resolved.iter().find(|r| r.xml_id == "A2WC522S").unwrap();
+    let tb_a     = child.tables.iter().find(|t| t.name == "Target Boost A").unwrap();
+
+    let psi = tb_a
+        .scalings
+        .iter()
+        .find(|s| s.name.as_deref() == Some("BoostTarget_psirelativesealevel"))
+        .expect("psi scaling resolved by name");
+    let compiled = psi.compile().expect("scaling compiles");
+
+    // Формула: (x-760) * 0.01933677.
+    assert!(compiled.to_real(760.0).abs() < 1e-9, "atmospheric → 0");
+    let at_800 = compiled.to_real(800.0);
+    assert!((at_800 - 40.0 * 0.01933677).abs() < 1e-9);
+
+    // Обратная проверка round-trip.
+    let real = compiled.to_real(900.0);
+    let back = compiled.to_byte(real);
+    assert!((back - 900.0).abs() < 1e-6);
+}
+
+#[test]
+fn x_axis_throttle_scaling_compiles_via_inline_definition() {
+    // X Axis "Throttle Plate Opening Angle" определён inline (без scalingbase).
+    // Цепочка: child A2WC522S наследует ось от 32BITBASE.
+    let resolved = load("scalingbase_test.xml");
+    let child    = resolved.iter().find(|r| r.xml_id == "A2WC522S").unwrap();
+    let tb_a     = child.tables.iter().find(|t| t.name == "Target Boost A").unwrap();
+
+    let x_axis = tb_a
+        .axes
+        .iter()
+        .find(|a| a.kind == Some(romraider_defs::TableKind::XAxis))
+        .unwrap();
+    let scaling  = &x_axis.scalings[0]; // inline scaling: x/.84
+    let compiled = scaling.compile().expect("compiles");
+
+    // 0.84 в стиле throttle: byte=84 → real ≈ 100.
+    let real = compiled.to_real(84.0);
+    assert!((real - 100.0).abs() < 1e-9);
+}

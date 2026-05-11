@@ -53,6 +53,11 @@ enum Cmd {
         /// Если задано — фильтровать вывод резолва только по этому ROM (`xmlid`).
         #[arg(long)]
         rom: Option<String>,
+
+        /// Если задано — компилировать первую scaling каждой таблицы и
+        /// показать преобразование этого «байтового» значения в real-world.
+        #[arg(long)]
+        sample_byte: Option<f64>,
     },
 }
 
@@ -66,7 +71,9 @@ fn main() -> Result<()> {
         Cmd::Ports => list_ports(),
         Cmd::SsmInit { port, baud, timeout_ms } => ssm_init(&port, baud, Duration::from_millis(timeout_ms)),
         Cmd::InspectRom { path } => inspect_rom(&path),
-        Cmd::InspectDef { path, resolve, rom } => inspect_def(&path, resolve, rom.as_deref()),
+        Cmd::InspectDef { path, resolve, rom, sample_byte } => {
+            inspect_def(&path, resolve, rom.as_deref(), sample_byte)
+        }
     }
 }
 
@@ -118,7 +125,12 @@ fn inspect_rom(path: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-fn inspect_def(path: &PathBuf, do_resolve: bool, rom_filter: Option<&str>) -> Result<()> {
+fn inspect_def(
+    path:        &PathBuf,
+    do_resolve:  bool,
+    rom_filter:  Option<&str>,
+    sample_byte: Option<f64>,
+) -> Result<()> {
     let doc = romraider_defs::parse_file(path)
         .with_context(|| format!("parsing {}", path.display()))?;
     print_def_summary(path, &doc);
@@ -128,7 +140,7 @@ fn inspect_def(path: &PathBuf, do_resolve: bool, rom_filter: Option<&str>) -> Re
         println!("=== RESOLVED ===");
         let it = resolved.iter().filter(|r| rom_filter.is_none_or(|f| r.xml_id == f));
         for rom in it {
-            print_resolved_rom(rom);
+            print_resolved_rom(rom, sample_byte);
         }
     }
     Ok(())
@@ -148,41 +160,46 @@ fn print_def_summary(path: &PathBuf, doc: &RomsDocument) {
     }
 }
 
-fn print_resolved_rom(rom: &ResolvedRom) {
+fn print_resolved_rom(rom: &ResolvedRom, sample_byte: Option<f64>) {
     let ecu_id = rom.romid.ecu_id.as_deref().unwrap_or("-");
     println!();
     println!("ROM {} (ecuid={ecu_id})  tables={}", rom.xml_id, rom.tables.len());
     for t in &rom.tables {
-        print_resolved_table(t, 1);
+        print_resolved_table(t, 1, sample_byte);
     }
 }
 
-fn print_resolved_table(t: &ResolvedTable, indent: usize) {
-    let pad = "  ".repeat(indent);
-    let kind = t.kind.map_or("?", debug_kind);
-    let addr = t
-        .storage_address
-        .map_or_else(|| "-".into(), |a| format!("{a}"));
-    let storage = t
-        .storage_type
-        .map_or("-", debug_storage);
+fn print_resolved_table(t: &ResolvedTable, indent: usize, sample_byte: Option<f64>) {
+    let pad     = "  ".repeat(indent);
+    let kind    = t.kind.map_or("?", debug_kind);
+    let addr    = t.storage_address.map_or_else(|| "-".into(), |a| format!("{a}"));
+    let storage = t.storage_type.map_or("-", debug_storage);
     let dims = match (t.size_x, t.size_y) {
         (Some(x), Some(y)) => format!("{x}x{y}"),
         (Some(x), None)    => x.to_string(),
         (None, Some(y))    => y.to_string(),
         _ => "-".into(),
     };
-    let units = t
-        .scalings
-        .first()
-        .and_then(|s| s.units.as_deref())
-        .unwrap_or("");
+    let units = t.scalings.first().and_then(|s| s.units.as_deref()).unwrap_or("");
     println!(
         "{pad}{:<6} {:<40} @ {:<10} {:<7} dims={:<8} units={}",
         kind, t.name, addr, storage, dims, units
     );
+
+    if let (Some(byte), Some(scaling)) = (sample_byte, t.scalings.first()) {
+        match scaling.compile() {
+            Ok(c) => {
+                let real = c.to_real(byte);
+                println!("{pad}    [byte={byte} → {real:.4} {units}]");
+            }
+            Err(e) => {
+                println!("{pad}    [scaling did not compile: {e}]");
+            }
+        }
+    }
+
     for axis in &t.axes {
-        print_resolved_table(axis, indent + 1);
+        print_resolved_table(axis, indent + 1, sample_byte);
     }
 }
 
