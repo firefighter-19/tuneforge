@@ -27,6 +27,7 @@ ROM-таблиц без GUI. Удобен как:
 | --------------------------------------------- | ----------------------------------------- | ------------------------------------- | :----: |
 | `ports`                                       | список доступных COM-портов               | `serialport::available_ports`         |   ✅   |
 | `ssm-init --port <p> [--baud N] [--timeout-ms N]` | SSM ECU-Init → SSM ID + ROM ID + caps | `protocol::ssm::ecu_init` через `SerialTransport` | ✅ |
+| `ssm-init --tactrix` (Slice 19/20)            | то же, но через Tactrix Openport 2.0 (USB-bulk) | `ssm_init_tactrix` через `TactrixTransport` | ✅ |
 | `inspect-rom <file>`                          | размер + первые 16 байт ROM-файла         | `RomImage::open`                      |   ✅   |
 | `inspect-def <file>`                          | сводка по XML: convert-factors + ROMs     | `defs::parse_file`                    |   ✅   |
 | `inspect-def --resolve [--rom <xmlid>]`       | + материализованные таблицы               | `defs::resolve`                       |   ✅   |
@@ -38,7 +39,7 @@ ROM-таблиц без GUI. Удобен как:
 
 | Команда (могла бы быть)                       | Аргументы                                   | Зачем                                    | Статус |
 | --------------------------------------------- | ------------------------------------------- | ---------------------------------------- | :----: |
-| `dump-rom`                                    | `--port <p> --start 0x000000 --length N --output <bin> [--chunk-size 128]` | дамп прошивки с ECU по SSM `ReadBlock` с прогрессом каждые 5% | ✅ |
+| `dump-rom`                                    | `--port <p>` / `--tactrix` `--start 0x000000 --length N --output <bin> [--chunk-size 128]` | дамп через SSM `ReadBlock`. Для serial — multi-chunk; для Tactrix — session-per-chunk через `reset_channel` + ecu_init на каждый chunk (workaround анти-fuzz). **Не пригоден для полного дампа Subaru SH7058** — ECU отдаёт stub-`0xFF` вместо ROM; реальный путь — kernel-upload (Slice 21) | 🟡 |
 | `write-table`                                 | `--rom <bin> --def <xml> --rom-id <id> --table <name> --values <csv>` | bulk-редактирование таблицы без GUI | ❌ |
 | `verify-checksum` / `fix-checksum`            | `--rom <bin> --def <xml>`                   | проверка/пересчёт checksum-ов            |   ❌   |
 | `compare-roms`                                | `--a <bin1> --b <bin2> --def <xml>`         | diff двух ROM-файлов по таблицам         |   ❌   |

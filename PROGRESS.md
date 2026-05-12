@@ -8,13 +8,13 @@
 | Крейт                   | Назначение                                     | Готовность | PROGRESS                                              |
 | ----------------------- | ---------------------------------------------- | :--------: | ----------------------------------------------------- |
 | **romraider-core**      | Address, Endian, bytes-utils, errors           | 🟢 75%     | [`crates/romraider-core/PROGRESS.md`](crates/romraider-core/PROGRESS.md)         |
-| **romraider-io**        | Transport-trait + serial/elm327/j2534/tactrix  | 🟡 55%     | [`crates/romraider-io/PROGRESS.md`](crates/romraider-io/PROGRESS.md)             |
-| **romraider-protocol**  | SSM/OBD/DS2/NCS диалекты                       | 🟡 40%     | [`crates/romraider-protocol/PROGRESS.md`](crates/romraider-protocol/PROGRESS.md) |
-| **romraider-defs**      | Парсер + резолв ECU/log_defs XML, scaling      | 🟢 85%     | [`crates/romraider-defs/PROGRESS.md`](crates/romraider-defs/PROGRESS.md)         |
-| **romraider-rom**       | ROM-image, decode/encode, checksum             | 🟢 70%     | [`crates/romraider-rom/PROGRESS.md`](crates/romraider-rom/PROGRESS.md)           |
+| **romraider-io**        | Transport-trait + serial/elm327/j2534/tactrix  | 🟢 65%     | [`crates/romraider-io/PROGRESS.md`](crates/romraider-io/PROGRESS.md)             |
+| **romraider-protocol**  | SSM/OBD/DS2/NCS диалекты                       | 🟡 45%     | [`crates/romraider-protocol/PROGRESS.md`](crates/romraider-protocol/PROGRESS.md) |
+| **romraider-defs**      | Парсер + резолв ECU/log_defs XML, scaling      | 🟢 88%     | [`crates/romraider-defs/PROGRESS.md`](crates/romraider-defs/PROGRESS.md)         |
+| **romraider-rom**       | ROM-image, decode/encode, checksum             | 🟢 75%     | [`crates/romraider-rom/PROGRESS.md`](crates/romraider-rom/PROGRESS.md)           |
 | **romraider-logger**    | Backend логгера + plugins                      | 🟡 45%     | [`crates/romraider-logger/PROGRESS.md`](crates/romraider-logger/PROGRESS.md)     |
-| **romraider-cli**       | Headless CLI (debug + smoke-tests + logger + dump-rom) | 🟢 90% | [`crates/romraider-cli/PROGRESS.md`](crates/romraider-cli/PROGRESS.md)         |
-| **romraider-gui**       | egui-редактор + логгер с live XY-плотом        | 🟡 70%     | [`crates/romraider-gui/PROGRESS.md`](crates/romraider-gui/PROGRESS.md)           |
+| **romraider-cli**       | Headless CLI (debug + smoke-tests + logger + dump-rom + tactrix) | 🟢 90% | [`crates/romraider-cli/PROGRESS.md`](crates/romraider-cli/PROGRESS.md) |
+| **romraider-gui**       | egui-редактор (diff/heatmap/undo/changes) + логгер | 🟢 75%   | [`crates/romraider-gui/PROGRESS.md`](crates/romraider-gui/PROGRESS.md)           |
 
 **Легенда:** 🟢 ≥60% — 🟡 30–60% — 🔴 <30%
 
@@ -43,7 +43,9 @@
 | 16    | Logger backbone: resolve include + [value] + CLI  | (закоммичено)    |
 | 17    | GUI live XY-plot: worker thread + mpsc + Plot     | (закоммичено)    |
 | 18    | SSM ReadBlock + CLI dump-rom (+MockTransport fix) | (закоммичено)    |
-| 19    | TactrixTransport (USB-bulk via rusb, ati/ata/ato) | следующий коммит |
+| 19    | TactrixTransport (rusb, ati/ata/ato/atf/att/atc/atz) — live SSM init на 2007 Forester XT | следующий коммит |
+| 20    | Live `ssm-init --tactrix` end-to-end (ROM `4E42504007`, SSM_ID `A2 10 11`, 96 cap-байт) | следующий коммит |
+| 22    | Defs integration на реальной фикстуре (1 МБ SH7058 ROM): float-endian fix, multi-byte switch parser, GUI modified-highlight + Changes-since-open | следующий коммит |
 
 ## Что работает прямо сейчас (E2E сценарии)
 
@@ -67,11 +69,23 @@
    cargo run -p romraider-cli -- read-table firmware.bin --def def.xml --rom-id A2WC522S --table "Target Boost A"
    ```
 
-4. **SSM ECU-init на реальном железе:**
+4. **SSM ECU-init на реальном железе (Tactrix Openport 2.0 + 2007 Forester XT):**
    ```bash
-   cargo run -p romraider-cli -- ssm-init --port /dev/cu.usbserial-XXX
+   cargo run -p romraider-cli -- ssm-init --tactrix
    ```
-   ⚠️ Не тестировал на живой машине — только на mock-транспорте.
+   ✅ Подтверждено на живой машине 2026-05-11. ROM `4E42504007`, SSM `A2 10 11`,
+   96 байт capabilities; round-trip ~600 ms через K-Line @ 4800 baud.
+
+5. **Редактирование реальной прошивки в GUI:**
+   ```bash
+   cargo run -p romraider-gui
+   # File → Open ROM → fixtures/forester-xt-2007-4E42504007.bin
+   # Open Def → /Applications/RomRaider/definitions/ecu_defs.xml
+   # → выбрать ROM A8DK100P → редактировать Target Boost / Wastegate Duty
+   ```
+   ✅ 807 resolved tables режутся корректно, осей читаются как float-BE (Subaru-fix),
+   изменённые ячейки подсвечены жёлтым, клик по `● modified` → окно
+   «Changes since open» со сводкой Before/After/Δ по таблицам.
 
 ## Critical path к «по-настоящему пригоден для тюнинга»
 
@@ -92,10 +106,18 @@
 
 Для **дампа и реflash** — отдельный долгий путь:
 
-6. ~~**SSM ReadBlock + dump-rom CLI**~~ ✅ Slice 18
-7. **J2534 Open/Connect/ReadMsgs/WriteMsgs** ([io](crates/romraider-io/PROGRESS.md)) — для современных Subaru через CAN
-8. **J2534 LibraryLocator** под Win/Linux ([io](crates/romraider-io/PROGRESS.md))
-9. **RamTune** — отдельный модуль для flash (опасно, тестировать на ECU-доноре)
+6. ~~**SSM ReadBlock + dump-rom CLI**~~ ✅ Slice 18 (на mock); ⚠️ на реальном Subaru
+   `ReadBlock` (0xA0) **возвращает stub-0xFF** из-за анти-fuzz защиты ECU — для
+   реального дампа нужен kernel-upload (см. Slice 21 ниже).
+7. **Slice 21 — kernel-upload для SH7058** (приоритет — реализовать Mac-native dump):
+   - GPLv3 изолированный крейт `romraider-kernel`
+   - Reference: [fenugrec/nisprog](https://github.com/fenugrec/nisprog) (C, GPLv3)
+   - Pre-compiled kernel `ssmk_SH7058_*.bin` из [npkern](https://github.com/fenugrec/npkern/tree/master/precompiled)
+   - Sequence: KWP2000 SID 0x81 → 0x10 → 0x27 (seed/key 16-round Feistel) → 0x34/0x36 (upload) → 0x31 (start)
+   - Verify dump byte-by-byte vs `fixtures/forester-xt-2007-4E42504007.bin`
+8. **J2534 Open/Connect/ReadMsgs/WriteMsgs** ([io](crates/romraider-io/PROGRESS.md)) — для современных Subaru через CAN
+9. **J2534 LibraryLocator** под Win/Linux ([io](crates/romraider-io/PROGRESS.md))
+10. **RamTune** — отдельный модуль для flash (опасно, тестировать на ECU-доноре)
 
 Для **полноценного логгера**:
 
@@ -120,7 +142,11 @@
 
 ## Метрики
 
-- **Тестов в воркспейсе:** 145 (passing, 0 failed) на момент `slice-19` (+11: tactrix-frame parser)
-- **Строк Rust-кода:** ~7700 (не считая XML-фикстур)
-- **Зависимостей (workspace deps в `Cargo.toml`):** 18 (rusb добавлен в slice-19)
-- **Коммитов:** 19 фич-коммитов + начальный + LICENSE + PROGRESS-документация
+- **Тестов в воркспейсе:** ~165 (passing, 0 failed) после Slice 22
+  (+15 tactrix-parser, +4 multi-byte switch data, +2 float-BE-fix, +5 на реальной фикстуре)
+- **Строк Rust-кода:** ~8400 (не считая XML/фикстур)
+- **Зависимостей (workspace deps в `Cargo.toml`):** 18 (rusb добавлен в Slice 19)
+- **Тестовых артефактов:** `fixtures/forester-xt-2007-4E42504007.bin` — 1 МБ ground-truth
+  ROM (извлечён из `.srf`-дампа EcuFlash), используется в read-table / GUI / kernel-upload verify
+- **Коммитов:** 22 фич-коммита + начальный + LICENSE + PROGRESS-документация (Slice 19/20/22
+  ещё на staging-е, ждут вашего `git commit`)

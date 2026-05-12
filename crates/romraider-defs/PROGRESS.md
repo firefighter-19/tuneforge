@@ -47,7 +47,7 @@ production-формата.
 | `<scaling>` inline-or-by-base                 | `TableScaleUnmarshaller`             | `ScalingRef`               |   ✅   |
 | `<scalingbase>` верхнего уровня               | `Scale`-templates                    | `ScalingBase`              |   ✅   |
 | `<data>` метки для Static-осей                | `unmarshallStaticData`               | `TableDef.data: Vec<String>` |   ✅  |
-| `<state>` для `type="Switch"`                 | `addPresetValue`                     | `TableDef.states: Vec<SwitchState>` + `data_bytes()` | ✅ |
+| `<state>` для `type="Switch"`                 | `addPresetValue`                     | `TableDef.states: Vec<SwitchState>` + `data_bytes()` (поддерживает hex без разделителя, `0x`-префикс и **multi-byte с пробелами** для `Checksum Fix`-style 168-байтных switch-таблиц) | ✅ |
 | `<bit>` для `type="BitwiseSwitch"`            | `setPresetValues`                    | `TableDef.bits: Vec<SwitchBit>` + `bit_position()` | ✅ |
 | Парс из reader/string/file                    | `DocumentBuilder.parse`              | `parse_reader/str/file`    |   ✅   |
 | Helper-методы (`find_rom_by_xml_id`, `find_scaling_base`) | inline в `Rom.java`     | `RomsDocument` impl        |   ✅   |
@@ -118,6 +118,15 @@ production-формата.
 | VDF импорт                        | `VDFConversionLayer`             | —    |   ❌   |
 | BMW codings импорт                | `BMWCodingConversionLayer`       | —    |   ❌   |
 | Settings persistence (settings.xml)| `DOMSettingsBuilder/Unmarshaller`| —    |   ❌   |
+
+## Slice 22 — bugfix-итерация на реальной фикстуре
+
+- **`SwitchState::data_bytes` поддерживает multi-byte data с пробелами/запятыми** — без
+  этого Subaru-`Checksum Fix` Switch-таблицы (`sizey=168`, data `"00 00 5A A5 …"`) валились
+  с `malformed`. Добавлены unit-тесты на все три формата (`"01"`, `"0x42"`, `"00 00 5A A5"`).
+- Подтверждено резолвом `<rom xmlid="A8DK100P">` (ROM `4E42504007`, 2007 Forester XT,
+  SH7058): **807 resolved tables** наследуются от `16BITBASE` → ROM-base → конкретный ROM.
+  Парсер + resolver справляются без падений.
 
 ## TODO
 

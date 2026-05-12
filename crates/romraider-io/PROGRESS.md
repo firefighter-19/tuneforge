@@ -52,9 +52,11 @@
 | ELM327 — кадрирование `>`-prompt      | inline в `ElmConnection`               | `Elm327::read_until_prompt`       |   ✅   |
 | ELM327 — auto-detect протокола (ATSP) | в `ElmConnectionManager`               | —                                 |   ❌   |
 | J2534 — динамическая загрузка DLL/SO  | `J2534LibraryLocator`                  | `j2534::Library::open` (libloading) |  ✅   |
-| **Tactrix Openport 2.0 (USB-bulk)**   | через J2534 DLL (Windows-only в апстриме) | `tactrix::TactrixTransport` через rusb (libusb), нативно на Mac ARM | ✅ |
-| Tactrix protocol парсер               | inline в Tactrix DLL                   | `tactrix::protocol::parse_frame` + 11 unit-тестов | ✅ |
-| Tactrix handshake (ati/ata/ato)        | inline в Tactrix DLL                   | `TactrixTransport::open` |  ✅   |
+| **Tactrix Openport 2.0 (USB-bulk)**   | через J2534 DLL (Windows-only в апстриме) | `tactrix::TactrixTransport` через rusb (libusb), нативно на Mac ARM (CDC ACM, claim iface 1) | ✅ |
+| Tactrix protocol парсер               | inline в Tactrix DLL                   | `tactrix::protocol::parse_frame` + 15 unit-тестов (ack/identify/error/filter-ack/K-line bin/CAN bin) | ✅ |
+| Tactrix handshake (ati/ata/ato/atf)    | inline в Tactrix DLL                   | `TactrixTransport::open` (ISO-9141 + `NO_CHECKSUM`-flag для SSM K-line) |  ✅   |
+| Tactrix K-line channel reset (atc/ato/atf cycle) | в J2534-stack-е              | `TactrixTransport::reset_channel` — без re-open USB, для session-per-chunk dump | ✅ |
+| Live SSM ECU-init на 2007 Forester XT | через RomRaider Java                   | подтверждено 2026-05-11 (ROM `4E42504007`)  |  ✅   |
 | J2534 — vtable PassThru функций       | `J2534_v0404` через JNA                | `j2534::api::PassThruVtable`      |   ✅   |
 | J2534 — Open/Close устройство         | `J2534Impl.open/close`                 | `Device::open` (stub, unimplemented) | 🟡   |
 | J2534 — Connect/Disconnect канал      | `J2534Impl.connect/disconnect`         | —                                 |   ❌   |
@@ -72,10 +74,34 @@
   параметры в `SerialConfig`, OS-логика на стороне `serialport` crate
 - `TestJ2534*` (тестовые executables) — заменяются `cargo test`
 
+## Важные нюансы, найденные при live-тестировании (Slice 19-20)
+
+- **Subaru SSM K-line через Tactrix требует `ISO-9141` + `ISO9141_NO_CHECKSUM` (flag 0x200)**,
+  не `ISO-14230`. KWP-2000 framing ломает SSM. См. `J2534ConnectionISO9141.java` в Java-апстриме.
+- **Channel-ID в Tactrix wire-protocol == protocol-id**: `aro` после `ato` приходит без digit,
+  присвоение делает J2534-обёртка (`*pChannelID = protocolID;` в dschultzca/j2534). Все
+  последующие команды (`att`, `atc`, `atf`) используют тот же ID, что и protocol.
+- **Обязателен `atf` PASS-фильтр** перед любым TX/RX, иначе Tactrix молча выкидывает RX.
+- **K-line бинарные кадры не содержат timestamp** (только CAN/ISO15765); payload идёт
+  сразу после kind-байта. См. `parse_binary` в `tactrix::protocol`.
+- **Длинные K-line ответы (>32 байт) приходят несколькими `NORM_MSG`-чанками**, обрамлёнными
+  `NORM_MSG_START_IND (0x80)` и `RX_MSG_END_IND (0x40)`. `TactrixTransport::read_frame`
+  склеивает их в один логический фрейм.
+- **🚨 Anti-fuzz защита SH7058 ECU:** прямой SSM2 `ReadBlock` (0xA0) на адресах ROM
+  возвращает **stub `0xFF FF FF …`**, а не реальные байты прошивки. Также после первого
+  успешного RX чтения второй и далее ReadBlock в той же session/channel — игнорируются.
+  Подтверждено через сравнение с EcuFlash-дампом: ROM @ 0x0 реально = `00 00 0B 68 FF FF BF A0`
+  (boot vector), а ReadBlock отдаёт 128×`0xFF`. Поэтому полный дамп через прямой SSM2 невозможен —
+  нужен kernel-upload (см. roadmap Slice 21).
+
 ## TODO
 
 ### Критический путь для работы с реальным железом
-- [ ] **J2534 — реализовать `Device::open/connect/write_msgs/read_msgs`** — нужно для современных Subaru (CAN/ISO15765), а также Tactrix Openport
+- [x] ~~**Native Mac-транспорт для Tactrix OP 2.0**~~ — `TactrixTransport` через rusb, Slice 19
+- [ ] **Slice 21: Kernel-upload-сценарий** — GPLv3 крейт `romraider-kernel`, через npkern/nisprog
+  reference. Sequence: KWP2000 fast-init → SID 0x27 seed/key → SID 0x34/0x36 (upload binary
+  в `0xFFFF3000`) → SID 0x31 startRoutine → kernel-side `SID_DUMP` для streaming ROM @ ~5.4 KB/s
+- [ ] **J2534 — реализовать `Device::open/connect/write_msgs/read_msgs`** — нужно для современных Subaru (CAN/ISO15765)
 - [ ] **J2534 — `LibraryLocator` под Windows** (чтение реестра `HKLM\Software\PassThruSupport.04.04`)
 - [ ] **J2534 — `LibraryLocator` под Linux/Mac** (поиск в `/usr/lib/passthru/` или подобном)
 - [ ] **5-baud init handshake** — некоторые старые ECU требуют, прежде чем SSM-сессия начнётся. Сейчас полагаемся на ELM327, делающий это сам

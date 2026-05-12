@@ -59,6 +59,7 @@
 | Big/little endian                             | `ByteUtil.asInt` flag      | `decode::decode_cells`     |   ✅   |
 | Sign extension для int8/int16                 | Java `byte`/`short` natively| explicit cast               |   ✅   |
 | IEEE-754 float32                              | `Float.intBitsToFloat`     | `f32::from_bits`           |   ✅   |
+| **Float storage всегда big-endian** (Subaru-fix, Slice 22) | inline в Java RR (Subaru-special-case) | `decode_one` форсит `Endian::Big` для `StorageType::Float`, игнорируя `endian="little"` из defs (Subaru-defs объявляют LE, но реальные SH7058 ROMы хранят BE) | ✅ |
 
 ### Encode (f64 → bytes)
 
@@ -68,6 +69,7 @@
 | Clamp в диапазон типа (`u8: 0..=255`)         | inline в `DataCell.setValue` | `encode::encode_one`       |   ✅   |
 | Round-to-nearest                              | `Math.round`                 | `f64::round`               |   ✅   |
 | f32 narrowing для float-cells                 | `Float.floatToIntBits`       | `f32::to_bits`             |   ✅   |
+| **Float encode зеркально с decode** (всегда BE) | inline                     | `encode_one` форсит BE, симметрия для round-trip read→edit→save | ✅ |
 
 ### Чтение/запись таблиц через definition
 
@@ -117,12 +119,22 @@
 | Presets (готовые значения для switch)          | `PresetManager`        | —                           |   ❌   |
 | Compare two ROMs                              | `CompareImagesForm`    | — (это GUI-фича, не rom)    |   ❌   |
 
+## Поведенческие особенности, проверенные на реальной прошивке (Slice 22)
+
+Покрыто фикстурой `fixtures/forester-xt-2007-4E42504007.bin` (1 МБ SH7058 ROM):
+- 3D-таблицы (Target Boost @ `0xC0CC4`, Wastegate Duty) читаются корректно с правильными
+  psi-diff / %-duty значениями
+- X/Y-axes хранятся как **`storagetype="float" endian="little"`** в defs, но физически в
+  ROM лежат как **big-endian** — наш decoder игнорирует defs-атрибут (Java RR делает то же
+  негласно). См. тест `float_decodes_subaru_throttle_axis_bytes`: байты `41 3B 33 33` → 11.7.
+
 ## TODO
 
 ### Критический путь — реальные ROM
 - [x] ~~Реализовать Subaru классический checksum (Slice 9)~~ — `subaru_classic::fix`/`verify` готовы
 - [x] ~~Auto-fix Subaru classic в GUI при `Save As`~~ — сделано в Slice 10
 - [x] ~~GUI-feedback от `verify`~~ — статус-индикатор в editor-панели (Slice 10)
+- [x] ~~Float-endian fix для Subaru SH7058 (Slice 22)~~ — `Endian::Big` всегда для `Float`
 - [ ] **`ram_offset` field в `ResolvedTable`** — для прошивок где ROM маппится в другую область памяти ECU
 - [ ] **CLI команды `verify-checksum` / `fix-checksum`** — для batch-проверки скриптами
 

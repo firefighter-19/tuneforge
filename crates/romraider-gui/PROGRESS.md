@@ -91,6 +91,7 @@ Desktop GUI на `eframe`/`egui`: открыть ROM, выбрать опред�
 | ROM-ID selector (ComboBox)                    | `RomTreeRootNode`                    | `egui::ComboBox` в `render_sidebar`  |   ✅   |
 | Дерево таблиц по категории                    | `RomTree` + `CategoryTreeNode`       | `egui::CollapsingHeader` по `BTreeMap` |  ✅   |
 | Выбор таблицы — `selectable_label`            | `TableTreeNode`                      | `render_table_tree`                  |   ✅   |
+| **Фильтр «таблицы без storage_address» + dedup по имени** | UI не показывает таблицы вне ROM | `render_table_tree` — Subaru defs наследуют 800+ таблиц от base-template; реально в ROM живут только те, у которых resolver проставил адрес. Дубли с одинаковым именем сводятся к одной (Slice 22) | ✅ |
 | Иконки рядом с типами таблиц                  | `RomCellRenderer`                    | —                                    |   ❌   |
 | Поиск по таблицам                             | `TableChooserTreeNode` (Ctrl+F)      | —                                    |   ❌   |
 | Раскраска по user-level                       | `RomCellRenderer`                    | —                                    |   ❌   |
@@ -109,6 +110,8 @@ Desktop GUI на `eframe`/`egui`: открыть ROM, выбрать опред�
 | Редактирование ячеек — `DragValue`            | `DataCellView` с key-listener        | `egui::DragValue` per cell           |   ✅   |
 | Write-back при изменении                      | `Table.setRealValue` + `Rom.setData` | `write_back` через `to_byte`         |   ✅   |
 | Dirty-индикатор `* modified`                  | заголовок окна с `*`                 | в `render_status`                    |   ✅   |
+| **Кликабельный `● modified` → окно изменений**| compareImagesForm-popup              | Slice 22 — `render_changes_window` (collapsing-секции по таблицам, колонки `Cell / Before / After / Δ`, цвет дельты) | ✅ |
+| **Подсветка изменённых ячеек жёлтым** (per-byte vs baseline) | inline UI-pre-2010 RR | Slice 22 — `cell_bg(.., modified)`, snapshot `RomState::original_bytes` при load, reset после успешного `Save As` | ✅ |
 | Precision из `format="0.00"`                  | `Scale.formatter`                    | `precision_from_format`              |   ✅   |
 | Speed из `fine_increment` для DragValue       | стрелки и shift-clicks               | `cell_speed`                         |   ✅   |
 | **Heatmap-раскраска** (cool→warm по value)    | `DataCellView.setColor` + `ColorScaler` | `heat_color` + `heatmap_range` (toggle в статусе) | ✅ |
@@ -181,8 +184,13 @@ Desktop GUI на `eframe`/`egui`: открыть ROM, выбрать опред�
 ## TODO
 
 ### Сразу полезно (UX)
-- [ ] **Heatmap-раскраска ячеек** — для визуального скана таблицы (синий→жёлтый→красный)
-- [ ] **Undo/Redo** — без него UX страдает; нужен log изменений в `editor`
+- [x] ~~**Heatmap-раскраска ячеек**~~ — сделано в Slice 12
+- [x] ~~**Undo/Redo**~~ — сделано в Slice 13
+- [x] ~~**Подсветка изменённых ячеек + git-style diff-window**~~ — Slice 22:
+      жёлтая ячейка для cell != baseline, клик `● modified` → окно «Changes since open»
+      со сводкой Before/After/Δ
+- [x] ~~**Фильтр пустых таблиц + dedup по имени**~~ — Slice 22: скрываем таблицы из base-template,
+      реально не присутствующие в данной ROM
 - [ ] **Recent files** — Settings-style persistence
 - [ ] **In-place Save (Ctrl+S)** — сейчас только Save As
 - [x] ~~**Description tooltip для ячеек**~~ — сделано в Slice 14, но без `<description>` (то лежит в header; добавить в tooltip — TODO)

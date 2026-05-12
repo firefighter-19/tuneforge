@@ -57,7 +57,8 @@
 | ECU-init response decode (SSM ID + ROM ID + caps) | `SSMEcuInitImpl`               | `ssm::decode_ecu_init`        |   ✅   |
 | Read by address (`0xA8`, до 255 байт за раз)  | `SSMProtocol.constructReadMemoryRequest` | `ssm::read_addresses`     |   ✅   |
 | Read by block (`0xA0`) — 1..=254 байт          | `SSMProtocol.constructReadMemoryRequest` | `ssm::read_block` + `READ_BLOCK_MAX` константа | ✅ |
-| Полный дамп ROM с прогресс-callback           | сборка вручную в Java RomRaider  | `ssm::dump_rom(transport, start, length, chunk_size, progress_cb)` | ✅ |
+| Полный дамп ROM с прогресс-callback           | сборка вручную в Java RomRaider  | `ssm::dump_rom(transport, start, length, chunk_size, progress_cb)` с P3-guard `sleep(50ms)` между chunk-ами | ✅ |
+| ⚠️ **Anti-fuzz защита ECU на ReadBlock**       | (не доступно из Java апстрима)   | подтверждено на 2007 Forester XT 2026-05-12: ECU отдаёт `0xFF`-stub вместо реального ROM. Для полного dump нужен kernel-upload (см. roadmap) | 🚨 |
 | Write by address (`0xB8`)                     | `SSMProtocol.constructWriteAddressRequest` | —                       |   ❌   |
 | Write by block (`0xB0`)                       | `SSMProtocol.constructWriteMemoryRequest` | —                        |   ❌   |
 | Response validation (length+checksum)         | `SSMResponseProcessor`            | `ssm::parse_response`         |   ✅   |
@@ -106,7 +107,16 @@
 ## TODO
 
 ### Критически для дампа прошивки
-- [ ] **SSM `Command::ReadBlock` (0xA0)** — батчевое чтение N байт по одному адресу — это нужно для быстрого дампа всей прошивки (см. также logger-context: сейчас умеем только `read_addresses` по 1 байту на адрес)
+- [x] ~~**SSM `Command::ReadBlock` (0xA0)**~~ — реализовано в Slice 18, но
+      **не работает для дампа на 2007 Subaru ECU**: anti-fuzz отдаёт stub-`0xFF`.
+- [ ] **Slice 21: Kernel-upload SH7058 path** (отдельный GPLv3-крейт `romraider-kernel`):
+  - Реализовать KWP2000-фрейминг поверх K-line transport (он близок к SSM2, но
+    с другой структурой `dst src len data... chksm` и другими SID-ами)
+  - SID 0x27 securityAccess — 16-round Feistel seed/key transform (взять из nisprog/ssm_backend.c)
+  - SID 0x10 startDiagnosticSession + SID 0x34/0x36 (uploadRequest + transferData) для заливки kernel
+  - SID 0x31 startRoutine — handover на kernel в RAM @ `0xFFFF3000`
+  - Kernel-side wire protocol (`SID_DUMP` блоками по 32 байта при повышенном baud) — отдельный модуль
+  - Verify byte-by-byte vs `fixtures/forester-xt-2007-4E42504007.bin`
 - [ ] **SSM write address/block** — отдельный слайс, опасный (запись в живой ECU)
 
 ### Critically для расширения покрытия
