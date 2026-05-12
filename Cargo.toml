@@ -9,6 +9,10 @@ members = [
     "crates/romraider-logger",
     "crates/romraider-cli",
     "crates/romraider-gui",
+    # Slice 21: kernel-upload path для Subaru SH7055/SH7058 ROM dump.
+    # Лицензирован под GPL-3.0-or-later (отдельно от workspace default), потому
+    # что прямой port из GPL-3.0 апстрима (fenugrec/nisprog, fenugrec/npkern).
+    "crates/romraider-kernel",
 ]
 
 [workspace.package]
@@ -37,6 +41,7 @@ romraider-protocol = { path = "crates/romraider-protocol" }
 romraider-defs     = { path = "crates/romraider-defs" }
 romraider-rom      = { path = "crates/romraider-rom" }
 romraider-logger   = { path = "crates/romraider-logger" }
+romraider-kernel   = { path = "crates/romraider-kernel" }
 
 # Errors / logging
 thiserror   = "2"

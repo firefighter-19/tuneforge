@@ -1,0 +1,34 @@
+[package]
+name         = "romraider-kernel"
+version      = { workspace = true }
+edition      = { workspace = true }
+rust-version = { workspace = true }
+# ВНИМАНИЕ: этот крейт лицензирован под **GPL-3.0-or-later** (не workspace default
+# `GPL-2.0-or-later`), потому что прямо порт логики из GPL-3.0-only апстрима
+# (`fenugrec/nisprog`, `fenugrec/npkern`). Включаем артефакты-kernel'ы из
+# `npkern/precompiled/` под их оригинальной GPL-3 лицензией.
+license      = "GPL-3.0-or-later"
+authors      = { workspace = true }
+description  = "Kernel-upload path для дампа ROM с Subaru SH7055/SH7058 ECU (port из nisprog, GPL-3.0)"
+
+[lints]
+workspace = true
+
+[dependencies]
+romraider-core     = { workspace = true }
+romraider-io       = { workspace = true }
+# Нужен `ssm::ecu_init` чтобы «разбудить» Subaru ECU из idle перед KWP2000-flow.
+romraider-protocol = { workspace = true, features = ["ssm"] }
+
+thiserror = { workspace = true }
+tracing   = { workspace = true }
+
+[dev-dependencies]
+romraider-io = { workspace = true, features = ["mock"] }
+
+[features]
+default = []
+# `sh7058` / `sh7055` подключают соответствующий precompiled-kernel из `kernels/`
+# в final binary через `include_bytes!`. Один крейт может включать оба.
+sh7058 = []
+sh7055 = []

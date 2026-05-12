@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::error::IoResult;
+use crate::error::{IoError, IoResult};
 
 /// Двунаправленный байтовый канал к ECU или к посреднику (J2534/ELM).
 ///
@@ -19,4 +19,17 @@ pub trait Transport: Send {
 
     /// Чем-то описанный человеку идентификатор канала (для логов и UI).
     fn description(&self) -> &str;
+
+    /// Переключить wire-baud-rate (для kernel-upload-сценария — нужно
+    /// после programming session и kernel handshake, чтобы ускорить дамп
+    /// в 10-13 раз). По умолчанию операция **не поддерживается**:
+    /// transport не умеет — caller должен решать что делать (например,
+    /// продолжить на текущем baud-е).
+    ///
+    /// Реализации (Tactrix, Serial) override-ят и физически перенастраивают
+    /// SCI / FTDI. После успешного вызова все будущие read/write идут
+    /// на новом baud-е.
+    fn set_baud(&mut self, _new_baud: u32) -> IoResult<()> {
+        Err(IoError::UnsupportedOperation("set_baud"))
+    }
 }

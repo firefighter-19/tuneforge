@@ -2567,6 +2567,7 @@ dependencies = [
  "romraider-core",
  "romraider-defs",
  "romraider-io",
+ "romraider-kernel",
  "romraider-logger",
  "romraider-protocol",
  "romraider-rom",
@@ -2623,6 +2624,17 @@ dependencies = [
  "romraider-core",
  "rusb",
  "serialport",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "romraider-kernel"
+version = "0.1.0"
+dependencies = [
+ "romraider-core",
+ "romraider-io",
+ "romraider-protocol",
  "thiserror 2.0.18",
  "tracing",
 ]

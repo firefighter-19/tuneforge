@@ -21,9 +21,17 @@ romraider-io       = { workspace = true, features = ["serial", "tactrix"] }
 romraider-protocol = { workspace = true, features = ["ssm"] }
 romraider-rom      = { workspace = true }
 romraider-logger   = { workspace = true }
+# Kernel-upload путь для дампа ROM — GPL-3.0, opt-in через `--features kernel-upload`.
+romraider-kernel   = { workspace = true, optional = true }
 
 clap     = { workspace = true }
 anyhow   = { workspace = true }
 tracing  = { workspace = true }
 tracing-subscriber = { workspace = true }
 serialport = { workspace = true }
+
+[features]
+default = []
+# Подключает `romraider-kernel` (GPL-3.0) и добавляет `dump-rom-kernel` subcommand.
+# Когда феча выключена, CLI остаётся "чистым" — kernel-upload даже не компилируется.
+kernel-upload = ["dep:romraider-kernel", "romraider-kernel/sh7058", "romraider-kernel/sh7055"]

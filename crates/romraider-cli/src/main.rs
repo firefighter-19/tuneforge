@@ -87,6 +87,55 @@ enum Cmd {
         tactrix: bool,
     },
 
+    /// (feature `kernel-upload`) Дамп прошивки **через RAM-резидентный kernel**
+    /// (npkern). Это единственный надёжный способ снять полный ROM с
+    /// Subaru SH7058 ECU — прямой SSM2 ReadBlock на этих ECU блокируется
+    /// анти-fuzz защитой.
+    #[cfg(feature = "kernel-upload")]
+    DumpRomKernel {
+        /// Куда сохранить дамп.
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Целевой MCU (`sh7058` для 2007 Forester XT, `sh7055` для GD WRX/STI).
+        #[arg(long, default_value = "sh7058")]
+        mcu: String,
+
+        /// Стартовый адрес дампа (выровнен по 32 байтам). По умолчанию `0x0`.
+        #[arg(long, default_value = "0x000000")]
+        start: String,
+
+        /// Сколько байт дампить. `0` = весь ROM (по MCU).
+        #[arg(long, default_value_t = 0)]
+        length: usize,
+
+        #[arg(long, default_value_t = 5000)]
+        timeout_ms: u64,
+    },
+
+    /// Прочитать N байт по последовательным адресам через **SSM2 ReadAddresses
+    /// (0xA8)** — массив отдельных адресов вместо block-read.
+    PeekRom {
+        /// Начальный адрес.
+        #[arg(long, default_value = "0x000000")]
+        start: String,
+
+        /// Сколько байт прочитать (1..=255 за один SSM2 ReadAddresses-запрос).
+        #[arg(long, default_value_t = 16)]
+        count: usize,
+
+        #[arg(long, default_value_t = 2000)]
+        timeout_ms: u64,
+
+        /// Пропустить `ssm::ecu_init` перед чтением (чистый 0xA8 на свежий ECU).
+        #[arg(long)]
+        skip_init: bool,
+
+        /// Пауза (мс) между `ecu_init` и `ReadAddresses` для P3-recovery ECU.
+        #[arg(long, default_value_t = 100)]
+        gap_ms: u64,
+    },
+
     /// Headless-логгер: опрашивает ECU по SSM, пишет CSV-датлог. По
     /// умолчанию длительность бесконечная — прерывайте Ctrl+C.
     Logger {
@@ -208,6 +257,13 @@ fn main() -> Result<()> {
             &port, baud, &start, &length, &output, chunk_size,
             Duration::from_millis(timeout_ms), tactrix,
         ),
+        #[cfg(feature = "kernel-upload")]
+        Cmd::DumpRomKernel { output, mcu, start, length, timeout_ms } => dump_rom_kernel_cmd(
+            &output, &mcu, &start, length, Duration::from_millis(timeout_ms),
+        ),
+        Cmd::PeekRom { start, count, timeout_ms, skip_init, gap_ms } => peek_rom_cmd(
+            &start, count, Duration::from_millis(timeout_ms), skip_init, gap_ms,
+        ),
         Cmd::Logger {
             port, baud, def, ecu, params, interval_ms, duration_secs, out, timeout_ms,
         } => logger_cmd(
@@ -298,7 +354,7 @@ fn dump_rom_tactrix_session_per_chunk(
             attempt += 1;
             // Перед каждым chunk (кроме первого) — пересоздаём K-Line channel.
             if !first_chunk {
-                if let Err(e) = tr.reset_channel(&cfg) {
+                if let Err(e) = tr.reset_channel() {
                     eprintln!("  reset_channel failed (attempt {attempt}): {e:#}");
                     std::thread::sleep(COOLDOWN_RETRY);
                     continue;
@@ -901,6 +957,137 @@ fn print_log_parameter(doc: &LoggerDocument, p: &LogParameter) {
         let st = a.storage_type.as_deref().unwrap_or("-");
         println!("      alt {:<8} {}", st, a.offset);
     }
+}
+
+#[cfg(feature = "kernel-upload")]
+fn dump_rom_kernel_cmd(
+    output:     &PathBuf,
+    mcu:        &str,
+    start:      &str,
+    length:     usize,
+    timeout:    Duration,
+) -> Result<()> {
+    use romraider_kernel::{dump_rom_via_kernel, KernelDumpConfig, McuFamily};
+
+    let mcu_family = match mcu.to_ascii_lowercase().as_str() {
+        "sh7058" | "7058" => McuFamily::Sh7058,
+        "sh7055" | "7055" => McuFamily::Sh7055,
+        other => anyhow::bail!("unknown --mcu `{other}` (expected sh7058 or sh7055)"),
+    };
+    let start_addr = parse_int_or_hex_u32(start).with_context(|| format!("--start `{start}`"))?;
+    let length_val = if length == 0 {
+        mcu_family.rom_size()
+    } else {
+        length
+    };
+
+    // Возвращаемся к ISO9141 + NO_CHECKSUM (как в ssm-init): эмпирически в этом
+    // mode Tactrix пропускает raw K-Line traffic, что позволяет нам послать и
+    // SSM-frame (wake-up), и KWP2000-frame (kernel-upload). ISO14230-mode Tactrix
+    // требует свой fast-init handshake которого мы не делаем — и ECU молчит на
+    // всё в таком случае.
+    let mut tr = open_tactrix()?;
+    let cfg = KernelDumpConfig {
+        mcu:        mcu_family,
+        start_addr,
+        length:     length_val,
+        fast_baud:  None, // TODO: после Tactrix baud-switch API
+        timeout,
+    };
+    eprintln!(
+        "Dumping {} bytes from 0x{:06X} via kernel-upload ({:?}); это занимает ~{} мин на 4800 бод…",
+        length_val, start_addr, mcu_family,
+        // Грубая оценка: ~480 байт/сек после kernel handshake (без baud-switch).
+        (length_val as f64 / 480.0 / 60.0).max(1.0).ceil() as i32,
+    );
+
+    let started = std::time::Instant::now();
+    let mut last_percent = -1i32;
+    let bytes = dump_rom_via_kernel(&mut tr, &cfg, |done, total| {
+        let percent = (done as i64 * 100 / total.max(1) as i64) as i32;
+        if percent != last_percent {
+            let elapsed = started.elapsed().as_secs_f64();
+            let rate    = done as f64 / elapsed.max(1e-6);
+            let eta_s   = (total - done) as f64 / rate.max(1.0);
+            eprintln!(
+                "  {}/{} ({percent}%)  {rate:.0} B/s  ETA {:.0}s",
+                done, total, eta_s,
+            );
+            last_percent = percent;
+        }
+    })
+    .context("kernel-upload dump failed")?;
+    std::fs::write(output, &bytes).with_context(|| format!("writing {}", output.display()))?;
+    eprintln!(
+        "Done in {:.1}s. {} bytes written to {}",
+        started.elapsed().as_secs_f64(), bytes.len(), output.display()
+    );
+    Ok(())
+}
+
+fn peek_rom_cmd(
+    start:     &str,
+    count:     usize,
+    timeout:   Duration,
+    skip_init: bool,
+    gap_ms:    u64,
+) -> Result<()> {
+    if !(1..=255).contains(&count) {
+        anyhow::bail!("--count must be 1..=255 (limit of single SSM2 ReadAddresses)");
+    }
+    let start_addr = parse_int_or_hex_u32(start).with_context(|| format!("--start `{start}`"))?;
+
+    let mut tr = open_tactrix()?;
+
+    if !skip_init {
+        eprintln!("Pinging ECU via SSM ecu_init…");
+        let init = ssm::ecu_init(&mut tr, timeout)
+            .context("SSM ecu_init failed (ignition ON? K-Line wired?)")?;
+        eprintln!("  ECU online: ROM {}", bytes::hex_dump(&init.rom_id));
+        if gap_ms > 0 {
+            eprintln!("Sleeping {gap_ms}ms before ReadAddresses (P3 guard)…");
+            std::thread::sleep(Duration::from_millis(gap_ms));
+        }
+    } else {
+        eprintln!("Skipping ecu_init (clean ReadAddresses on cold ECU)");
+    }
+
+    // Сгенерировать массив sequential адресов.
+    let addresses: Vec<Address> = (0..count)
+        .map(|i| Address::new(start_addr + i as u32))
+        .collect();
+
+    eprintln!(
+        "Reading {} bytes from 0x{:06X} via SSM2 ReadAddresses (0xA8)…",
+        count, start_addr,
+    );
+    let bytes = ssm::read_addresses(&mut tr, &addresses, 0x00, timeout)
+        .context("ReadAddresses failed")?;
+
+    eprintln!("\nResult:");
+    for (i, chunk) in bytes.chunks(16).enumerate() {
+        let offset = start_addr + (i * 16) as u32;
+        let hex: String = chunk
+            .iter()
+            .map(|b| format!("{b:02X}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let ascii: String = chunk
+            .iter()
+            .map(|&b| if (0x20..0x7F).contains(&b) { b as char } else { '.' })
+            .collect();
+        println!("0x{offset:06X}  {hex:<48}  {ascii}");
+    }
+
+    // Если первые 8 байт = `00 00 0B 68 FF FF BF A0` — это SH7058 boot vector,
+    // **рабочий ROM dump** через 0xA8. Если все 0xFF — anti-fuzz блокирует.
+    if bytes.iter().all(|&b| b == 0xFF) {
+        eprintln!("\n⚠️  Все байты 0xFF — похоже, anti-fuzz блокирует 0xA8 для ROM-адресов.");
+        eprintln!("    Нужен другой подход (kernel-upload через замыкание Read Memory).");
+    } else {
+        eprintln!("\n✅ ECU вернул реальные данные. Можно дампить весь ROM через 0xA8.");
+    }
+    Ok(())
 }
 
 fn print_rom_summary(idx: usize, rom: &RomDefinition) {

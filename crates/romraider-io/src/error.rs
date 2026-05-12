@@ -48,6 +48,9 @@ pub enum IoError {
     #[error("Tactrix interface 0 has no IN+OUT bulk endpoint pair")]
     TactrixNoBulkEndpoints,
 
+    #[error("operation not supported by this transport: {0}")]
+    UnsupportedOperation(&'static str),
+
     #[error(transparent)]
     Core(#[from] romraider_core::CoreError),
 }

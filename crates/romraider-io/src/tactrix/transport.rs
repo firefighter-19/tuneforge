@@ -56,6 +56,10 @@ pub struct TactrixTransport {
     desc:    String,
     /// Буфер сырых USB-байт между bulk-read-вызовами (фрейм может прийти кусками).
     rx_buf:  Vec<u8>,
+    /// Текущая конфигурация (protocol, flags, baud, timeout). Хранится для
+    /// [`Self::reset_channel`] и [`Self::set_baud`] — оба пересоздают K-Line
+    /// channel и нуждаются в актуальных protocol/flags.
+    cfg:     TactrixConfig,
 }
 
 impl TactrixTransport {
@@ -115,6 +119,7 @@ impl TactrixTransport {
             channel: 0,
             desc:    format!("Tactrix Openport (VID={:#06X} PID={:#06X})", cfg.vid, cfg.pid),
             rx_buf:  Vec::with_capacity(2048),
+            cfg:     cfg.clone(),
         };
 
         // Идентификация. Tactrix может вернуть несколько фреймов (ari + are),
@@ -162,28 +167,29 @@ impl TactrixTransport {
     }
 
     /// «Перецикловать» K-Line канал на той же USB-сессии: закрыть текущий
-    /// channel (`atc`), снова открыть (`ato`), переустановить PASS-фильтр
-    /// (`atf`). Полезно между запросами при наличии анти-fuzz-защиты на
-    /// стороне Subaru SSM2 ECU («1 ReadBlock на свежий канал»).
-    pub fn reset_channel(&mut self, cfg: &TactrixConfig) -> IoResult<()> {
+    /// channel (`atc`), снова открыть (`ato`) c **текущим `self.cfg`**,
+    /// переустановить PASS-фильтр (`atf`). Полезно между запросами при
+    /// анти-fuzz-защите Subaru SSM2 и для смены baud-rate (см. [`Self::set_baud`]).
+    pub fn reset_channel(&mut self) -> IoResult<()> {
+        let timeout = self.cfg.claim_timeout;
         // Старый канал — закрываем (без `atz`, чтобы USB-сессия осталась живой).
-        let _ = self.send(format!("atc{}\r\n", self.channel).as_bytes(), cfg.claim_timeout);
+        let _ = self.send(format!("atc{}\r\n", self.channel).as_bytes(), timeout);
         // Опционально дать K-Line время "успокоиться".
         std::thread::sleep(Duration::from_millis(50));
         self.rx_buf.clear();
 
-        let proto_id = cfg.protocol.wrapping_sub(b'0');
-        let ato = format!("ato{} {} {} 0\r\n", proto_id, cfg.flags, cfg.baud);
-        self.send(ato.as_bytes(), cfg.claim_timeout)?;
-        let _ = self.wait_for_ack(cfg.claim_timeout)?;
+        let proto_id = self.cfg.protocol.wrapping_sub(b'0');
+        let ato = format!("ato{} {} {} 0\r\n", proto_id, self.cfg.flags, self.cfg.baud);
+        self.send(ato.as_bytes(), timeout)?;
+        let _ = self.wait_for_ack(timeout)?;
         self.channel = proto_id;
 
         let mut atf = Vec::with_capacity(16);
         atf.extend_from_slice(format!("atf{} 1 0 1\r\n", self.channel).as_bytes());
         atf.extend_from_slice(&[0x00, 0x00]);
-        self.send(&atf, cfg.claim_timeout)?;
-        let _ = self.wait_for_filter_ack(cfg.claim_timeout)?;
-        tracing::debug!(channel = self.channel, "Tactrix K-Line channel reset");
+        self.send(&atf, timeout)?;
+        let _ = self.wait_for_filter_ack(timeout)?;
+        tracing::debug!(channel = self.channel, baud = self.cfg.baud, "Tactrix K-Line channel reset");
         Ok(())
     }
 
@@ -401,6 +407,27 @@ impl Transport for TactrixTransport {
 
     fn description(&self) -> &str {
         &self.desc
+    }
+
+    /// Переключить wire-baud-rate. Использует `atc`/`ato`/`atf` cycle через
+    /// [`Self::reset_channel`] — USB сессия остаётся открытой, K-Line канал
+    /// пересоздаётся с новым baud-rate. ECU должен быть готов общаться на
+    /// этом baud-rate **в момент вызова** (это caller-side ответственность —
+    /// сначала kernel-side `SID_CONF 0x01 <brrdiv>`, потом наш `set_baud`).
+    fn set_baud(&mut self, new_baud: u32) -> IoResult<()> {
+        let old_baud = self.cfg.baud;
+        self.cfg.baud = new_baud;
+        match self.reset_channel() {
+            Ok(()) => {
+                tracing::info!(old_baud, new_baud, "Tactrix wire-baud switched");
+                Ok(())
+            }
+            Err(e) => {
+                // Rollback config так чтобы повторный вызов не глюкнул.
+                self.cfg.baud = old_baud;
+                Err(e)
+            }
+        }
     }
 }
 
