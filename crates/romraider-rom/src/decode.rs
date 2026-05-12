@@ -59,8 +59,14 @@ fn decode_one(bytes: &[u8], storage_type: StorageType, endian: Endian) -> f64 {
             f64::from(endian.read_u32(&arr) as i32)
         }
         StorageType::Float => {
+            // ВНИМАНИЕ: для `float` игнорируем явный `endian` из defs и всегда
+            // читаем big-endian. Это эмпирически совпадает с Subaru SH7058 ROM:
+            // байты `41 3B 33 33` декодируются как 11.7 (BE), а defs от RomRaider
+            // часто помечают axis как `endian="little"`, что даёт мусор. Java
+            // RomRaider ведёт себя так же (de-facto), поэтому совпадаем с ним.
+            let _ = endian;
             let arr: [u8; 4] = bytes.try_into().expect("float chunk == 4 bytes");
-            f64::from(f32::from_bits(endian.read_u32(&arr)))
+            f64::from(f32::from_bits(Endian::Big.read_u32(&arr)))
         }
     }
 }
@@ -112,10 +118,11 @@ fn encode_one(value: f64, storage_type: StorageType, endian: Endian, out: &mut V
             out.extend_from_slice(&endian.write_u32(n as u32));
         }
         StorageType::Float => {
-            // Сначала сужаем до f32 — это сама природа хранения; точность
-            // потеряется, но это та же потеря, что и при decode.
+            // Симметрия с `decode_one`: всегда пишем big-endian, чтобы
+            // round-trip read→edit→save сохранял те же байты.
+            let _ = endian;
             let bits = (value as f32).to_bits();
-            out.extend_from_slice(&endian.write_u32(bits));
+            out.extend_from_slice(&Endian::Big.write_u32(bits));
         }
     }
 }
@@ -152,17 +159,25 @@ mod tests {
     }
 
     #[test]
-    fn float_little_endian_round_trip() {
-        // 1.5 в IEEE-754 single: 0x3FC00000 → LE = 00 00 C0 3F
-        let v = decode_cells(&[0x00, 0x00, 0xC0, 0x3F], StorageType::Float, Endian::Little, 1).unwrap();
-        assert_eq!(v, vec![1.5]);
+    fn float_always_big_endian_regardless_of_attr() {
+        // Subaru SH7058 хранит float как BE независимо от того, что defs
+        // объявляет `endian` атрибутом. И с `Endian::Little`, и с `Endian::Big`
+        // декодер должен трактовать байты как big-endian.
+        // 1.5 BE: 3F C0 00 00
+        let bytes = [0x3F, 0xC0, 0x00, 0x00];
+        assert_eq!(decode_cells(&bytes, StorageType::Float, Endian::Big,    1).unwrap(), vec![1.5]);
+        assert_eq!(decode_cells(&bytes, StorageType::Float, Endian::Little, 1).unwrap(), vec![1.5]);
     }
 
     #[test]
-    fn float_big_endian_round_trip() {
-        // 1.5 BE: 3F C0 00 00
-        let v = decode_cells(&[0x3F, 0xC0, 0x00, 0x00], StorageType::Float, Endian::Big, 1).unwrap();
-        assert_eq!(v, vec![1.5]);
+    fn float_decodes_subaru_throttle_axis_bytes() {
+        // Реальные байты из 2007 Forester XT (ROM 4E42504007) @ 0xC0C78:
+        // 41 3B 33 33 → 11.7 (BE float), 41 9C 00 00 → 19.5.
+        let bytes = [0x41, 0x3B, 0x33, 0x33, 0x41, 0x9C, 0x00, 0x00];
+        // defs объявляет `endian="little"` — мы должны его игнорировать.
+        let v = decode_cells(&bytes, StorageType::Float, Endian::Little, 2).unwrap();
+        assert!((v[0] - 11.7).abs() < 1e-3, "got {}", v[0]);
+        assert!((v[1] - 19.5).abs() < 1e-3, "got {}", v[1]);
     }
 
     #[test]
@@ -206,8 +221,10 @@ mod tests {
     }
 
     #[test]
-    fn encode_float_little_endian_round_trip() {
-        let original = [0x00, 0x00, 0xC0, 0x3F]; // 1.5 LE
+    fn encode_float_round_trip_big_endian() {
+        // Float всегда BE при decode/encode: round-trip даёт идентичные байты,
+        // даже если передан Endian::Little.
+        let original = [0x3F, 0xC0, 0x00, 0x00]; // 1.5 BE
         let decoded  = decode_cells(&original, StorageType::Float, Endian::Little, 1).unwrap();
         let encoded  = encode_cells(&decoded, StorageType::Float, Endian::Little);
         assert_eq!(encoded, original);

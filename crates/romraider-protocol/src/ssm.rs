@@ -263,7 +263,13 @@ where
     }
     let mut out = Vec::with_capacity(length);
     progress(0, length);
+    let mut first = true;
     while out.len() < length {
+        if !first {
+            // P3 guard time — без неё некоторые ECU «не успевают» за back-to-back-ReadBlock.
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        first = false;
         let remaining = length - out.len();
         let this_chunk = chunk_size.min(remaining);
         let addr = Address::new(start.raw() + out.len() as u32);

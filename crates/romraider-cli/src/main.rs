@@ -56,7 +56,7 @@ enum Cmd {
     /// Адресный диапазон и размер зависят от ECU — для Subaru SH7055 обычно
     /// `--start 0 --length 524288` (512 KiB).
     DumpRom {
-        #[arg(short, long)]
+        #[arg(short, long, default_value = "")]
         port: String,
         #[arg(short, long, default_value_t = 4800)]
         baud: u32,
@@ -80,6 +80,11 @@ enum Cmd {
 
         #[arg(long, default_value_t = 2000)]
         timeout_ms: u64,
+
+        /// Использовать Tactrix Openport 2.0 (USB-bulk) вместо serial-порта.
+        /// `--port` в этом режиме игнорируется.
+        #[arg(long)]
+        tactrix: bool,
     },
 
     /// Headless-логгер: опрашивает ECU по SSM, пишет CSV-датлог. По
@@ -198,10 +203,10 @@ fn main() -> Result<()> {
             read_table_cmd(&rom, &def, &rom_id, &table)
         }
         Cmd::DumpRom {
-            port, baud, start, length, output, chunk_size, timeout_ms,
+            port, baud, start, length, output, chunk_size, timeout_ms, tactrix,
         } => dump_rom_cmd(
             &port, baud, &start, &length, &output, chunk_size,
-            Duration::from_millis(timeout_ms),
+            Duration::from_millis(timeout_ms), tactrix,
         ),
         Cmd::Logger {
             port, baud, def, ecu, params, interval_ms, duration_secs, out, timeout_ms,
@@ -220,29 +225,169 @@ fn dump_rom_cmd(
     output:     &PathBuf,
     chunk_size: usize,
     timeout:    Duration,
+    tactrix:    bool,
 ) -> Result<()> {
-    let start_addr  = parse_int_or_hex_u32(start).with_context(|| format!("--start `{start}`"))?;
-    let length_val  = parse_int_or_hex_usize(length).with_context(|| format!("--length `{length}`"))?;
+    let start_addr = parse_int_or_hex_u32(start).with_context(|| format!("--start `{start}`"))?;
+    let length_val = parse_int_or_hex_usize(length).with_context(|| format!("--length `{length}`"))?;
     if length_val == 0 {
         anyhow::bail!("--length must be > 0");
     }
 
-    let mut cfg = SerialConfig::ssm(port);
-    cfg.baud_rate = baud;
-    let mut transport = SerialTransport::open(&cfg)
-        .with_context(|| format!("opening serial {port}@{baud}"))?;
-    transport.purge()?;
+    if tactrix {
+        // Subaru SSM2 на 2007 Forester XT (и аналогах) держит только ОДИН
+        // ReadBlock-ответ на сессию: второй и далее ECU игнорирует. Поэтому
+        // для Tactrix-режима делаем «session-per-chunk» — для каждого
+        // chunk заново открываем Tactrix, делаем ecu_init, читаем один блок,
+        // закрываем. Медленно, но единственный надёжный путь без kernel-upload.
+        dump_rom_tactrix_session_per_chunk(start_addr, length_val, chunk_size, timeout, output)
+    } else {
+        if port.is_empty() {
+            anyhow::bail!("--port required when --tactrix is not set");
+        }
+        let mut cfg = SerialConfig::ssm(port);
+        cfg.baud_rate = baud;
+        let mut tr = SerialTransport::open(&cfg)
+            .with_context(|| format!("opening serial {port}@{baud}"))?;
+        tr.purge()?;
+        do_dump_rom(&mut tr, start_addr, length_val, chunk_size, timeout, output)
+    }
+}
+
+/// Дамп через одну USB-сессию Tactrix, но с пересозданием K-Line канала
+/// (`atc`/`ato`/`atf`) перед каждым ReadBlock. Subaru SSM2 на 2007 Forester XT
+/// принимает только один ReadBlock на «свежий» канал — поэтому между чанками
+/// делаем `reset_channel()` + повторный `ecu_init`. USB остаётся открытым,
+/// что намного дешевле, чем полный open/close цикл.
+fn dump_rom_tactrix_session_per_chunk(
+    start_addr: u32,
+    length:     usize,
+    chunk_size: usize,
+    timeout:    Duration,
+    output:     &PathBuf,
+) -> Result<()> {
+    const MAX_RETRIES:    u32      = 5;
+    const COOLDOWN_AFTER: Duration = Duration::from_millis(100);
+    const COOLDOWN_RETRY: Duration = Duration::from_millis(1500);
+
+    let cfg = TactrixConfig::default();
+    eprintln!(
+        "Opening Tactrix Openport (VID={:#06X} PID={:#06X}, ISO-9141 + NO_CHECKSUM @ {} baud)…",
+        cfg.vid, cfg.pid, cfg.baud
+    );
+    let mut tr = TactrixTransport::open(&cfg).context("Tactrix open failed")?;
+    eprintln!("Transport: {}", tr.description());
+    tr.purge()?;
+
+    let mut out = Vec::with_capacity(length);
+    let started = std::time::Instant::now();
+    eprintln!(
+        "Dumping {length} bytes from 0x{start_addr:06X} via Tactrix \
+         (chunks of {chunk_size}, channel-reset between chunks, timeout {}ms)…",
+        timeout.as_millis()
+    );
+
+    let mut last_percent = -1i32;
+    let mut first_chunk = true;
+    while out.len() < length {
+        let remaining = length - out.len();
+        let this_chunk = chunk_size.min(remaining);
+        let addr = Address::new(start_addr + out.len() as u32);
+
+        let mut attempt = 0u32;
+        let data = loop {
+            attempt += 1;
+            // Перед каждым chunk (кроме первого) — пересоздаём K-Line channel.
+            if !first_chunk {
+                if let Err(e) = tr.reset_channel(&cfg) {
+                    eprintln!("  reset_channel failed (attempt {attempt}): {e:#}");
+                    std::thread::sleep(COOLDOWN_RETRY);
+                    continue;
+                }
+            }
+            first_chunk = false;
+
+            match read_one_chunk_via(&mut tr, addr, this_chunk, timeout) {
+                Ok(d) => break d,
+                Err(e) if attempt < MAX_RETRIES => {
+                    eprintln!(
+                        "  retry {}/{} for 0x{:06X}: {e:#}",
+                        attempt, MAX_RETRIES, addr.raw()
+                    );
+                    std::thread::sleep(COOLDOWN_RETRY);
+                }
+                Err(e) => return Err(e).with_context(|| {
+                    format!("chunk at 0x{:06X} failed after {MAX_RETRIES} retries", addr.raw())
+                }),
+            }
+        };
+        out.extend_from_slice(&data);
+
+        let percent = (out.len() as i64 * 100 / length as i64) as i32;
+        if percent != last_percent {
+            let elapsed = started.elapsed().as_secs_f64();
+            let rate    = out.len() as f64 / elapsed.max(1e-6);
+            let eta_s   = (length - out.len()) as f64 / rate.max(1.0);
+            eprintln!(
+                "  {}/{} ({percent}%)  {rate:.1} B/s  ETA {:.0}s",
+                out.len(), length, eta_s
+            );
+            last_percent = percent;
+        }
+
+        if out.len() < length {
+            std::thread::sleep(COOLDOWN_AFTER);
+        }
+    }
+
+    std::fs::write(output, &out).with_context(|| format!("writing {}", output.display()))?;
+    eprintln!(
+        "Done in {:.1}s. {} bytes written to {}",
+        started.elapsed().as_secs_f64(), out.len(), output.display()
+    );
+    Ok(())
+}
+
+fn read_one_chunk_via(
+    tr:      &mut TactrixTransport,
+    addr:    Address,
+    count:   usize,
+    timeout: Duration,
+) -> Result<Vec<u8>> {
+    let _init = ssm::ecu_init(tr, timeout).context("ecu_init")?;
+    let data  = ssm::read_block(tr, addr, count, timeout).context("read_block")?;
+    Ok(data)
+}
+
+fn do_dump_rom(
+    transport:  &mut dyn romraider_io::transport::Transport,
+    start_addr: u32,
+    length:     usize,
+    chunk_size: usize,
+    timeout:    Duration,
+    output:     &PathBuf,
+) -> Result<()> {
+    // Открываем SSM-сессию до начала дампа — `ReadBlock` без активной сессии
+    // ECU может проигнорировать (особенно после тайм-аутов). Заодно
+    // подтверждаем, что ECU реально отвечает.
+    eprintln!("Opening SSM session (ecu_init)…");
+    let init = ssm::ecu_init(transport, timeout)
+        .context("SSM ecu_init failed (ignition ON? K-Line wired? ECU asleep?)")?;
+    eprintln!(
+        "  ECU online: ROM {} ({} cap bytes)",
+        bytes::hex_dump(&init.rom_id),
+        init.capabilities.len()
+    );
 
     let started = std::time::Instant::now();
     eprintln!(
-        "Dumping {length_val} bytes from 0x{start_addr:06X} (chunks of {chunk_size}, timeout {}ms)…",
+        "Dumping {length} bytes from 0x{start_addr:06X} (chunks of {chunk_size}, timeout {}ms)…",
         timeout.as_millis()
     );
     let mut last_percent = -1i32;
     let bytes = ssm::dump_rom(
-        &mut transport,
+        transport,
         Address::new(start_addr),
-        length_val,
+        length,
         chunk_size,
         timeout,
         |done, total| {
@@ -398,16 +543,7 @@ fn ssm_init(port: &str, baud: u32, timeout: Duration) -> Result<()> {
 }
 
 fn ssm_init_tactrix(timeout: Duration) -> Result<()> {
-    let cfg = TactrixConfig::default();
-    eprintln!(
-        "Opening Tactrix Openport (VID={:#06X} PID={:#06X}, ISO-14230 @ 4800)…",
-        cfg.vid, cfg.pid
-    );
-    let mut tr = TactrixTransport::open(&cfg)
-        .context("Tactrix open failed (check USB cable + Openport firmware)")?;
-    eprintln!("Transport: {}", tr.description());
-    tr.purge()?;
-
+    let mut tr = open_tactrix()?;
     let request = ssm::build_request(ssm::Command::EcuInit, &[]);
     println!("→ {}", bytes::hex_dump(&request));
 
@@ -415,6 +551,19 @@ fn ssm_init_tactrix(timeout: Duration) -> Result<()> {
         .context("SSM ecu-init via Tactrix failed (ignition ON? K-Line wired?)")?;
     print_ecu_init(&init);
     Ok(())
+}
+
+fn open_tactrix() -> Result<TactrixTransport> {
+    let cfg = TactrixConfig::default();
+    eprintln!(
+        "Opening Tactrix Openport (VID={:#06X} PID={:#06X}, ISO-9141 + NO_CHECKSUM @ {} baud)…",
+        cfg.vid, cfg.pid, cfg.baud
+    );
+    let mut tr = TactrixTransport::open(&cfg)
+        .context("Tactrix open failed (check USB cable + Openport firmware)")?;
+    eprintln!("Transport: {}", tr.description());
+    tr.purge()?;
+    Ok(tr)
 }
 
 fn print_ecu_init(init: &EcuInitResponse) {

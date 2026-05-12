@@ -489,8 +489,21 @@ fn render_table_tree(
     rom_def:   &ResolvedRom,
     selection: &mut Option<String>,
 ) {
+    // Subaru-defs наследуют тысячи таблиц от base/template-ROM-ов, но в
+    // конкретной прошивке физически присутствуют только те, у которых
+    // resolver проставил `storage_address`. Остальные — варианты «для MT»,
+    // «для другого региона» и т.п. — должны быть скрыты, иначе пользователь
+    // увидит дубли с одинаковыми именами и Read failed на отсутствующем адресе.
+    // Дополнительно дедуплицируем по имени, оставляя первую запись с адресом.
+    let mut seen_names: std::collections::HashSet<&str> = std::collections::HashSet::new();
     let mut by_cat: BTreeMap<String, Vec<&ResolvedTable>> = BTreeMap::new();
     for t in &rom_def.tables {
+        if t.storage_address.is_none() {
+            continue;
+        }
+        if !seen_names.insert(t.name.as_str()) {
+            continue;
+        }
         let cat = t.category.clone().unwrap_or_else(|| "Uncategorized".into());
         by_cat.entry(cat).or_default().push(t);
     }

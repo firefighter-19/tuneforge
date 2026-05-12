@@ -161,6 +161,32 @@ impl TactrixTransport {
         Ok(t)
     }
 
+    /// «Перецикловать» K-Line канал на той же USB-сессии: закрыть текущий
+    /// channel (`atc`), снова открыть (`ato`), переустановить PASS-фильтр
+    /// (`atf`). Полезно между запросами при наличии анти-fuzz-защиты на
+    /// стороне Subaru SSM2 ECU («1 ReadBlock на свежий канал»).
+    pub fn reset_channel(&mut self, cfg: &TactrixConfig) -> IoResult<()> {
+        // Старый канал — закрываем (без `atz`, чтобы USB-сессия осталась живой).
+        let _ = self.send(format!("atc{}\r\n", self.channel).as_bytes(), cfg.claim_timeout);
+        // Опционально дать K-Line время "успокоиться".
+        std::thread::sleep(Duration::from_millis(50));
+        self.rx_buf.clear();
+
+        let proto_id = cfg.protocol.wrapping_sub(b'0');
+        let ato = format!("ato{} {} {} 0\r\n", proto_id, cfg.flags, cfg.baud);
+        self.send(ato.as_bytes(), cfg.claim_timeout)?;
+        let _ = self.wait_for_ack(cfg.claim_timeout)?;
+        self.channel = proto_id;
+
+        let mut atf = Vec::with_capacity(16);
+        atf.extend_from_slice(format!("atf{} 1 0 1\r\n", self.channel).as_bytes());
+        atf.extend_from_slice(&[0x00, 0x00]);
+        self.send(&atf, cfg.claim_timeout)?;
+        let _ = self.wait_for_filter_ack(cfg.claim_timeout)?;
+        tracing::debug!(channel = self.channel, "Tactrix K-Line channel reset");
+        Ok(())
+    }
+
     fn send(&self, bytes: &[u8], timeout: Duration) -> IoResult<()> {
         tracing::trace!(
             n = bytes.len(),

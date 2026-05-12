@@ -124,15 +124,17 @@ fn three_d_with_axes_via_explicit_count() {
     let resolved = resolve(&doc).unwrap();
     let table    = &resolved[0].tables[0];
 
-    // Сборка ROM: 6 байт основной (3*2), затем X-ось (3 float LE), потом Y-ось (2 float LE).
+    // Сборка ROM: 6 байт основной (3*2), затем X-ось и Y-ось как **big-endian** float
+    // — наш decoder/encoder для StorageType::Float игнорирует `endian` атрибут
+    // из defs (он часто врёт для Subaru: указано `little`, но реально BE).
     let mut bytes = vec![10, 20, 30, 40, 50, 60];     // 0x00..0x06
     bytes.resize(0x10, 0);                            // pad to 0x10
-    bytes.extend_from_slice(&1.0f32.to_le_bytes());
-    bytes.extend_from_slice(&2.0f32.to_le_bytes());
-    bytes.extend_from_slice(&3.0f32.to_le_bytes());
+    bytes.extend_from_slice(&1.0f32.to_be_bytes());
+    bytes.extend_from_slice(&2.0f32.to_be_bytes());
+    bytes.extend_from_slice(&3.0f32.to_be_bytes());
     bytes.resize(0x20, 0);                            // pad to 0x20
-    bytes.extend_from_slice(&500.0f32.to_le_bytes());
-    bytes.extend_from_slice(&1000.0f32.to_le_bytes());
+    bytes.extend_from_slice(&500.0f32.to_be_bytes());
+    bytes.extend_from_slice(&1000.0f32.to_be_bytes());
     let rom = RomImage::from_bytes(bytes);
 
     let data = rom.read_table(table).unwrap();

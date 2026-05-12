@@ -209,10 +209,20 @@ pub struct SwitchState {
 }
 
 impl SwitchState {
-    /// Распарсить `data` ("01", "0A", "0001") в байты. Нечётная длина
-    /// pad-ится ведущим нулём; пустая строка → `Ok(vec![])`.
+    /// Распарсить `data` в байты. Поддерживаем три варианта формата:
+    /// - монолитный hex: `"01"`, `"0A"`, `"0001"`
+    /// - hex с `0x`-префиксом: `"0x01"`
+    /// - hex-байты через пробел/запятую: `"00 00 5A A5 A5 5A"` (типично для
+    ///   `Checksum Fix` и других multi-byte switch-таблиц).
+    /// Нечётная длина «слитного» куска pad-ится ведущим нулём; пустая → `Ok(vec![])`.
     pub fn data_bytes(&self) -> Result<Vec<u8>, std::num::ParseIntError> {
-        let cleaned = self.data.trim().trim_start_matches("0x").trim_start_matches("0X");
+        let raw = self.data.trim();
+        // Удаляем whitespace и запятые — оставляем только hex-знаки.
+        let cleaned: String = raw
+            .chars()
+            .filter(|c| !c.is_whitespace() && *c != ',')
+            .collect();
+        let cleaned = cleaned.trim_start_matches("0x").trim_start_matches("0X");
         if cleaned.is_empty() {
             return Ok(Vec::new());
         }
@@ -285,3 +295,42 @@ pub struct ScalingRef {
 /// Историческое имя для совместимости со Слайсом 1. Будет удалено, когда
 /// появится материализованная типобезопасная модель.
 pub type EcuDefinition = RomDefinition;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn state(data: &str) -> SwitchState {
+        SwitchState { name: "x".into(), data: data.into() }
+    }
+
+    #[test]
+    fn parses_single_byte() {
+        assert_eq!(state("01").data_bytes().unwrap(),  vec![0x01]);
+        assert_eq!(state("ff").data_bytes().unwrap(),  vec![0xFF]);
+        assert_eq!(state("0x42").data_bytes().unwrap(), vec![0x42]);
+    }
+
+    #[test]
+    fn parses_multibyte_no_separator() {
+        assert_eq!(state("17 25").data_bytes().unwrap(), vec![0x17, 0x25]);
+        assert_eq!(state("1725").data_bytes().unwrap(),  vec![0x17, 0x25]);
+    }
+
+    #[test]
+    fn parses_checksum_fix_long_string_with_spaces() {
+        // Реальный фрагмент из ecu_defs.xml — `Checksum Fix` Switch, sizey=168,
+        // данные разделены пробелами. До фикса парсер давал «malformed».
+        let data = "00 00 00 00 00 00 00 00 5A A5 A5 5A";
+        assert_eq!(
+            state(data).data_bytes().unwrap(),
+            vec![0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x5A,0xA5,0xA5,0x5A],
+        );
+    }
+
+    #[test]
+    fn empty_data_is_ok() {
+        assert!(state("").data_bytes().unwrap().is_empty());
+        assert!(state("   ").data_bytes().unwrap().is_empty());
+    }
+}
