@@ -33,6 +33,8 @@ pub struct EditorPanel {
     heatmap_enabled:     bool,
     /// Журнал изменений для Undo/Redo.
     undo_log:            UndoLog,
+    /// Открыто ли окно «Changes since open».
+    changes_window_open: bool,
 }
 
 const MAX_UNDO_HISTORY: usize = 100;
@@ -126,6 +128,37 @@ impl ChecksumSummary {
 struct RomState {
     path: PathBuf,
     rom:  RomImage,
+    /// Снапшот байтов на момент загрузки (или последнего успешного сохранения).
+    /// Используется для:
+    ///  - подсветки изменённых ячеек жёлтым в `cell_bg`
+    ///  - сводки «Changes since open» (что и где было поправлено)
+    original_bytes: Vec<u8>,
+}
+
+impl RomState {
+    fn new(path: PathBuf, rom: RomImage) -> Self {
+        let original_bytes = rom.raw().to_vec();
+        Self { path, rom, original_bytes }
+    }
+
+    /// Зафиксировать «текущее состояние» как новый baseline (после `Save`).
+    fn snapshot_as_baseline(&mut self) {
+        self.original_bytes = self.rom.raw().to_vec();
+    }
+
+    /// Изменён ли байтовый диапазон `[addr, addr+len)` относительно baseline.
+    fn is_range_modified(&self, addr: u32, len: usize) -> bool {
+        let a = addr as usize;
+        let Some(end) = a.checked_add(len) else { return false };
+        if end > self.original_bytes.len() {
+            return false;
+        }
+        let cur = match self.rom.read(Address::new(addr), len) {
+            Ok(b) => b,
+            Err(_) => return false,
+        };
+        cur != &self.original_bytes[a..end]
+    }
 }
 
 struct DefState {
@@ -137,7 +170,7 @@ impl EditorPanel {
     pub fn load_rom(&mut self, path: PathBuf) {
         match RomImage::open(&path) {
             Ok(rom) => {
-                self.rom    = Some(RomState { path, rom });
+                self.rom    = Some(RomState::new(path, rom));
                 self.error  = None;
                 self.notice = None;
                 // Новый ROM = чистая история (старые undo-байты относятся к другому файлу).
@@ -170,7 +203,7 @@ impl EditorPanel {
     pub fn load_compare_rom(&mut self, path: PathBuf) {
         match RomImage::open(&path) {
             Ok(rom) => {
-                self.compare_rom = Some(RomState { path, rom });
+                self.compare_rom = Some(RomState::new(path, rom));
                 self.error       = None;
                 self.notice      = None;
             }
@@ -207,6 +240,7 @@ impl EditorPanel {
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         self.handle_shortcuts(ui);
         self.render_status(ui);
+        self.render_changes_window(ui.ctx());
 
         egui::SidePanel::left("editor-sidebar")
             .min_width(220.0)
@@ -214,6 +248,89 @@ impl EditorPanel {
             .show_inside(ui, |ui| self.render_sidebar(ui));
 
         egui::CentralPanel::default().show_inside(ui, |ui| self.render_content(ui));
+    }
+
+    fn render_changes_window(&mut self, ctx: &egui::Context) {
+        if !self.changes_window_open {
+            return;
+        }
+        let mut open = self.changes_window_open;
+        egui::Window::new("Changes since open / last save")
+            .open(&mut open)
+            .default_size([720.0, 480.0])
+            .show(ctx, |ui| {
+                let Some(rom_state) = self.rom.as_ref() else {
+                    ui.label("No ROM loaded.");
+                    return;
+                };
+                let Some(def) = self.def.as_ref() else {
+                    ui.label(
+                        "ROM is dirty, but no definitions are loaded — cannot map changes \
+                         back to named tables. Load defs first.",
+                    );
+                    return;
+                };
+                let Some(rom_id) = self.selected_rom_id.as_ref() else {
+                    ui.label("No ROM definition selected from defs.");
+                    return;
+                };
+                let Some(rom_def) = def.roms.iter().find(|r| &r.xml_id == rom_id) else {
+                    ui.label(format!("ROM `{rom_id}` not found in defs."));
+                    return;
+                };
+                let summary = collect_changes(rom_state, rom_def);
+                if summary.tables.is_empty() {
+                    ui.label("No cell changes detected (file write-back may have been a no-op).");
+                    return;
+                }
+                ui.heading(format!(
+                    "{} cell{} modified across {} table{}",
+                    summary.total_cells,
+                    if summary.total_cells == 1 { "" } else { "s" },
+                    summary.tables.len(),
+                    if summary.tables.len() == 1 { "" } else { "s" },
+                ));
+                ui.separator();
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    for entry in &summary.tables {
+                        egui::CollapsingHeader::new(format!(
+                            "{}  —  {} cell{}",
+                            entry.name,
+                            entry.cells.len(),
+                            if entry.cells.len() == 1 { "" } else { "s" },
+                        ))
+                        .default_open(summary.tables.len() <= 3)
+                        .show(ui, |ui| {
+                            egui::Grid::new(format!("changes-grid-{}", entry.name))
+                                .striped(true)
+                                .num_columns(4)
+                                .show(ui, |ui| {
+                                    ui.label(egui::RichText::new("Cell").strong());
+                                    ui.label(egui::RichText::new("Before").strong());
+                                    ui.label(egui::RichText::new("After").strong());
+                                    ui.label(egui::RichText::new("Δ").strong());
+                                    ui.end_row();
+                                    for c in &entry.cells {
+                                        ui.label(c.label.as_str());
+                                        ui.label(format!("{:.4}", c.before_real));
+                                        ui.label(format!("{:.4}", c.after_real));
+                                        let delta = c.after_real - c.before_real;
+                                        ui.colored_label(
+                                            if delta > 0.0 {
+                                                egui::Color32::LIGHT_GREEN
+                                            } else {
+                                                egui::Color32::LIGHT_RED
+                                            },
+                                            format!("{:+.4}", delta),
+                                        );
+                                        ui.end_row();
+                                    }
+                                });
+                        });
+                    }
+                });
+            });
+        self.changes_window_open = open;
     }
 
     fn handle_shortcuts(&mut self, ui: &mut egui::Ui) {
@@ -252,6 +369,9 @@ impl EditorPanel {
                 info!(?path, "ROM saved");
                 let display = path.display().to_string();
                 state.path = path;
+                // После успешного save текущее состояние становится новым baseline —
+                // «модифицированные» ячейки очищаются.
+                state.snapshot_as_baseline();
                 self.error = None;
                 self.notice = Some(format!("Saved to {display}{fixed_msg}"));
             }
@@ -308,7 +428,18 @@ impl EditorPanel {
                 Some(r) => {
                     ui.label(r.path.display().to_string());
                     if r.rom.is_dirty() {
-                        ui.colored_label(egui::Color32::YELLOW, "● modified");
+                        let modified_btn = egui::Button::new(
+                            egui::RichText::new("● modified").color(egui::Color32::YELLOW),
+                        )
+                        .small()
+                        .fill(egui::Color32::TRANSPARENT);
+                        if ui
+                            .add(modified_btn)
+                            .on_hover_text("Show what changed since open / last save")
+                            .clicked()
+                        {
+                            self.changes_window_open = true;
+                        }
                     }
                 }
                 None => {
@@ -444,17 +575,26 @@ impl EditorPanel {
 
         let heatmap = self.heatmap_enabled;
         let undo_log = &mut self.undo_log;
+        // Подсветка изменённых ячеек жёлтым делается только когда у нас нет
+        // явного compare_rom — иначе режим Compare красит red/green-ом.
+        let baseline_bytes: Option<&[u8]> = if compare_rom.is_none() {
+            Some(rom_state.original_bytes.as_slice())
+        } else {
+            None
+        };
         egui::ScrollArea::both()
             .auto_shrink([false, false])
             .show(ui, |ui| match table.kind {
                 Some(TableKind::ThreeD) => render_3d(
-                    ui, &mut rom_state.rom, undo_log, compare_rom, table, mode, heatmap,
+                    ui, &mut rom_state.rom, undo_log, compare_rom, baseline_bytes,
+                    table, mode, heatmap,
                 ),
                 Some(TableKind::TwoD)
                 | Some(TableKind::OneD)
                 | Some(TableKind::XAxis)
                 | Some(TableKind::YAxis) => render_flat(
-                    ui, &mut rom_state.rom, undo_log, compare_rom, table, mode, heatmap,
+                    ui, &mut rom_state.rom, undo_log, compare_rom, baseline_bytes,
+                    table, mode, heatmap,
                 ),
                 Some(TableKind::StaticXAxis) | Some(TableKind::StaticYAxis) => {
                     render_static_axis(ui, table);
@@ -556,13 +696,14 @@ fn render_table_header(ui: &mut egui::Ui, t: &ResolvedTable) {
 }
 
 fn render_3d(
-    ui:          &mut egui::Ui,
-    rom:         &mut RomImage,
-    undo_log:    &mut UndoLog,
-    compare_rom: Option<&RomImage>,
-    table:       &ResolvedTable,
-    mode:        DisplayMode,
-    heatmap:     bool,
+    ui:             &mut egui::Ui,
+    rom:            &mut RomImage,
+    undo_log:       &mut UndoLog,
+    compare_rom:    Option<&RomImage>,
+    baseline_bytes: Option<&[u8]>,
+    table:          &ResolvedTable,
+    mode:           DisplayMode,
+    heatmap:        bool,
 ) {
     let (Some(size_x), Some(size_y)) = (table.size_x, table.size_y) else {
         ui.colored_label(egui::Color32::YELLOW, "3D table is missing sizex/sizey.");
@@ -644,11 +785,11 @@ fn render_3d(
                 for x in 0..size_x {
                     let idx  = y * size_x + x;
                     let base = base_real.as_ref().and_then(|b| b.get(idx).copied());
-                    let bg   = cell_bg(display[idx], base, heat_range);
+                    let cell_addr = base_addr_raw + (idx * stride) as u32;
+                    let modified  = is_cell_modified(rom, baseline_bytes, cell_addr, stride);
+                    let bg   = cell_bg(display[idx], base, heat_range, modified);
                     let tooltip = CellTooltip {
-                        addr: Address::new(
-                            base_addr_raw + (idx * stride) as u32,
-                        ),
+                        addr: Address::new(cell_addr),
                         raw_byte: raw[idx],
                         position: format!("y={y}, x={x}"),
                         units,
@@ -671,13 +812,14 @@ fn render_3d(
 }
 
 fn render_flat(
-    ui:          &mut egui::Ui,
-    rom:         &mut RomImage,
-    undo_log:    &mut UndoLog,
-    compare_rom: Option<&RomImage>,
-    table:       &ResolvedTable,
-    mode:        DisplayMode,
-    heatmap:     bool,
+    ui:             &mut egui::Ui,
+    rom:            &mut RomImage,
+    undo_log:       &mut UndoLog,
+    compare_rom:    Option<&RomImage>,
+    baseline_bytes: Option<&[u8]>,
+    table:          &ResolvedTable,
+    mode:           DisplayMode,
+    heatmap:        bool,
 ) {
     let count = table
         .size_x
@@ -731,7 +873,9 @@ fn render_flat(
                     ui.end_row();
                 }
                 let base = base_real.as_ref().and_then(|b| b.get(i).copied());
-                let bg   = cell_bg(display[i], base, heat_range);
+                let cell_addr = base_addr_raw + (i * stride) as u32;
+                let modified  = is_cell_modified(rom, baseline_bytes, cell_addr, stride);
+                let bg   = cell_bg(display[i], base, heat_range, modified);
                 let tooltip = CellTooltip {
                     addr: Address::new(base_addr_raw + (i * stride) as u32),
                     raw_byte: raw[i],
@@ -755,11 +899,30 @@ fn render_flat(
 }
 
 /// Цвет фона ячейки. Приоритет: compare-diff > heatmap > прозрачный.
-fn cell_bg(value: f64, base: Option<f64>, heat_range: Option<(f64, f64)>) -> egui::Color32 {
+/// Был ли байтовый диапазон ячейки изменён относительно baseline-снапшота
+/// (открытие ROM или последний `Save`).
+fn is_cell_modified(rom: &RomImage, baseline: Option<&[u8]>, addr: u32, len: usize) -> bool {
+    let Some(orig) = baseline else { return false };
+    let a = addr as usize;
+    let Some(end) = a.checked_add(len) else { return false };
+    if end > orig.len() { return false; }
+    rom.read(Address::new(addr), len).map_or(false, |cur| cur != &orig[a..end])
+}
+
+fn cell_bg(
+    value:      f64,
+    base:       Option<f64>,
+    heat_range: Option<(f64, f64)>,
+    modified:   bool,
+) -> egui::Color32 {
     if let Some(b) = base {
         diff_bg(value - b, true)
     } else if let Some((mn, mx)) = heat_range {
         heat_color(value, mn, mx)
+    } else if modified {
+        // Жёлто-янтарный тинт для ячеек, изменённых с момента открытия ROM.
+        // Гасим прозрачностью, чтобы текст оставался читаемым.
+        egui::Color32::from_rgba_unmultiplied(0xFF, 0xD0, 0x40, 70)
     } else {
         egui::Color32::TRANSPARENT
     }
@@ -1149,6 +1312,115 @@ fn debug_endian(e: Option<Endian>) -> &'static str {
         Some(Endian::Little) => "little",
         None => "?",
     }
+}
+
+/// Описание одной изменённой ячейки для окна «Changes since open».
+struct ChangedCell {
+    /// Подпись ячейки (`"x=3, y=5"` для 3D, `"#7"` для плоских).
+    label:       String,
+    before_real: f64,
+    after_real:  f64,
+}
+
+struct ChangedTable {
+    name:  String,
+    cells: Vec<ChangedCell>,
+}
+
+struct ChangesSummary {
+    total_cells: usize,
+    tables:      Vec<ChangedTable>,
+}
+
+/// Найти все ячейки, отличающиеся от baseline-снапшота, и сгруппировать
+/// по таблицам. Возвращает порядок таблиц — как в defs (стабильный).
+fn collect_changes(rom_state: &RomState, rom_def: &ResolvedRom) -> ChangesSummary {
+    let mut tables  = Vec::new();
+    let mut total   = 0usize;
+    let baseline    = rom_state.original_bytes.as_slice();
+
+    for t in &rom_def.tables {
+        let Some(addr) = t.storage_address else { continue };
+        let Some(stype) = t.storage_type else { continue };
+        let stride = stype.byte_size();
+        // Сколько ячеек: для 3D — size_x*size_y, иначе одна из размерностей или 1.
+        let count: usize = match (t.size_x, t.size_y, t.kind) {
+            (Some(x), Some(y), Some(TableKind::ThreeD)) => x as usize * y as usize,
+            (Some(x), _, _)                              => x as usize,
+            (_, Some(y), _)                              => y as usize,
+            _ => 1,
+        };
+        if count == 0 { continue }
+
+        let scaling   = compile_first_scaling(t);
+        let mut cells = Vec::new();
+        for idx in 0..count {
+            let cell_addr = addr.raw() + (idx * stride) as u32;
+            if !is_cell_modified(&rom_state.rom, Some(baseline), cell_addr, stride) {
+                continue;
+            }
+            // Сырые байтовые значения → f64-ячейки → scaling в real units.
+            let cur_raw  = decode_one_at(&rom_state.rom.raw(), cell_addr as usize, stride, stype, t.endian);
+            let orig_raw = decode_one_at(baseline,             cell_addr as usize, stride, stype, t.endian);
+            let (Some(cur), Some(orig)) = (cur_raw, orig_raw) else { continue };
+            let before_real = scaling.as_ref().map_or(orig, |c| c.to_real(orig));
+            let after_real  = scaling.as_ref().map_or(cur, |c| c.to_real(cur));
+            let label = match (t.size_x, t.size_y, t.kind) {
+                (Some(x), Some(_), Some(TableKind::ThreeD)) => {
+                    let cols = x as usize;
+                    format!("x={}, y={}", idx % cols, idx / cols)
+                }
+                _ => format!("#{idx}"),
+            };
+            cells.push(ChangedCell { label, before_real, after_real });
+        }
+        if !cells.is_empty() {
+            total += cells.len();
+            tables.push(ChangedTable { name: t.name.clone(), cells });
+        }
+    }
+    ChangesSummary { total_cells: total, tables }
+}
+
+/// Декодировать одну ячейку из произвольного байтового буфера по заданному
+/// смещению. Возвращает `None` если буфер короче.
+fn decode_one_at(
+    buf:    &[u8],
+    offset: usize,
+    stride: usize,
+    stype:  StorageType,
+    endian: Option<Endian>,
+) -> Option<f64> {
+    if offset.checked_add(stride)? > buf.len() {
+        return None;
+    }
+    let chunk = &buf[offset..offset + stride];
+    let endian = endian.unwrap_or(Endian::Big);
+    Some(match stype {
+        StorageType::UInt8 | StorageType::Hex | StorageType::Char => f64::from(chunk[0]),
+        StorageType::Int8  => f64::from(chunk[0] as i8),
+        StorageType::UInt16 => {
+            let arr: [u8; 2] = chunk.try_into().ok()?;
+            f64::from(endian.read_u16(&arr))
+        }
+        StorageType::Int16 => {
+            let arr: [u8; 2] = chunk.try_into().ok()?;
+            f64::from(endian.read_u16(&arr) as i16)
+        }
+        StorageType::UInt32 => {
+            let arr: [u8; 4] = chunk.try_into().ok()?;
+            f64::from(endian.read_u32(&arr))
+        }
+        StorageType::Int32 => {
+            let arr: [u8; 4] = chunk.try_into().ok()?;
+            f64::from(endian.read_u32(&arr) as i32)
+        }
+        // Float — defs часто врут с endian; читаем BE как и `decode_one` в romraider-rom.
+        StorageType::Float => {
+            let arr: [u8; 4] = chunk.try_into().ok()?;
+            f64::from(f32::from_bits(Endian::Big.read_u32(&arr)))
+        }
+    })
 }
 
 #[cfg(test)]

@@ -16,3 +16,7 @@ Thumbs.db
 /fixtures/*.bin
 /fixtures/*.rom
 /fixtures/*.hex
+/fixtures/
+
+# definitions
+/defs/*.xml
