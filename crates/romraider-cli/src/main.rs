@@ -13,7 +13,7 @@ use romraider_defs::{
 use romraider_io::serial::{SerialConfig, SerialTransport};
 use romraider_io::tactrix::{TactrixConfig, TactrixTransport};
 use romraider_io::Transport;
-use romraider_logger::{LoggerSession, SessionConfig};
+use romraider_logger::{LoggerSession, Sample, SampleValue, SessionConfig};
 use romraider_protocol::ssm::{self, EcuInitResponse};
 use romraider_rom::RomImage;
 
@@ -204,8 +204,11 @@ enum Cmd {
 
     /// Headless-логгер: опрашивает ECU по SSM, пишет CSV-датлог. По
     /// умолчанию длительность бесконечная — прерывайте Ctrl+C.
+    ///
+    /// По умолчанию использует SerialTransport (требует `--port`). С флагом
+    /// `--tactrix` подключается к Openport 2.0 через USB-bulk (libusb).
     Logger {
-        #[arg(short, long)]
+        #[arg(short, long, default_value = "")]
         port: String,
         #[arg(short, long, default_value_t = 4800)]
         baud: u32,
@@ -218,7 +221,10 @@ enum Cmd {
         #[arg(long, default_value = "base")]
         ecu: String,
 
-        /// Список параметров по `id`, через запятую: `--params "Engine Speed,Throttle Opening Angle"`.
+        /// Список параметров по `id`, через запятую. В upstream
+        /// `log_defs.xml` ID — человеческое имя:
+        /// `"Engine Speed,Coolant Temperature,Mass Air Flow,Manifold Absolute Pressure"`.
+        /// Полный список — `inspect-log <log_defs.xml> --ecu base`.
         #[arg(long, value_delimiter = ',', num_args = 1..)]
         params: Vec<String>,
 
@@ -236,6 +242,46 @@ enum Cmd {
 
         #[arg(long, default_value_t = 1500)]
         timeout_ms: u64,
+
+        /// Использовать Tactrix Openport 2.0 (USB-bulk) вместо serial-порта.
+        /// `--port` в этом режиме игнорируется.
+        #[arg(long)]
+        tactrix: bool,
+    },
+
+    /// CAN-логгер через OBD-II Mode 01 (Current Data) поверх ISO15765.
+    ///
+    /// Подключается к Tactrix Openport 2.0 в CAN-mode (требует `sudo` на macOS),
+    /// опрашивает стандартные OBD-II PID-ы (RPM, Coolant Temp, MAF и т.п.).
+    /// Это правильный путь для 2007+ Subaru ECU — SSM2 `ReadAddresses` через
+    /// K-Line на этих машинах режется анти-fuzz защитой (ECU отвечает только
+    /// на init), а OBD-II/CAN всегда открыт.
+    LoggerCan {
+        /// Список параметров через запятую (имена из встроенного PID-таблицы).
+        /// Используй `--list` чтобы увидеть все доступные имена. Пример:
+        /// `--params "RPM,Coolant Temp,MAF,IAT,TPS"`.
+        #[arg(long, value_delimiter = ',', num_args = 0..)]
+        params: Vec<String>,
+
+        /// Куда писать CSV-датлог.
+        #[arg(long, required_unless_present = "list")]
+        out: Option<PathBuf>,
+
+        /// Интервал между опросами (мс).
+        #[arg(long, default_value_t = 100)]
+        interval_ms: u64,
+
+        /// Длительность; 0 = бесконечно (Ctrl+C для остановки).
+        #[arg(long, default_value_t = 0)]
+        duration_secs: u64,
+
+        /// CAN timeout на один PID (мс).
+        #[arg(long, default_value_t = 500)]
+        timeout_ms: u64,
+
+        /// Просто вывести таблицу доступных PID-ов и выйти.
+        #[arg(long)]
+        list: bool,
     },
 
     /// Загрузить ROM-файл вместе с XML-определением и распечатать значения
@@ -345,10 +391,16 @@ fn main() -> Result<()> {
             &output, &start, length, chunk_size, Duration::from_millis(timeout_ms),
         ),
         Cmd::Logger {
-            port, baud, def, ecu, params, interval_ms, duration_secs, out, timeout_ms,
+            port, baud, def, ecu, params, interval_ms, duration_secs, out, timeout_ms, tactrix,
         } => logger_cmd(
             &port, baud, &def, &ecu, &params, interval_ms, duration_secs, &out,
-            Duration::from_millis(timeout_ms),
+            Duration::from_millis(timeout_ms), tactrix,
+        ),
+        Cmd::LoggerCan {
+            params, out, interval_ms, duration_secs, timeout_ms, list,
+        } => logger_can_cmd(
+            &params, out.as_ref(), interval_ms, duration_secs,
+            Duration::from_millis(timeout_ms), list,
         ),
     }
 }
@@ -579,6 +631,7 @@ fn logger_cmd(
     duration_secs: u64,
     out_path:      &PathBuf,
     timeout:       Duration,
+    tactrix:       bool,
 ) -> Result<()> {
     if param_ids.is_empty() {
         anyhow::bail!("at least one --params id is required");
@@ -604,6 +657,14 @@ fn logger_cmd(
         let compiled = p
             .compile()
             .with_context(|| format!("compiling parameter `{id}`"))?;
+        eprintln!(
+            "  + {} @ {:?} ({:?}, expr=`{}`, {})",
+            p.id,
+            compiled.address,
+            compiled.storage_type,
+            p.expr.as_deref().unwrap_or("(none)"),
+            p.metric.as_deref().unwrap_or(""),
+        );
         session.subscribe(compiled);
     }
 
@@ -611,12 +672,31 @@ fn logger_cmd(
     let mut datalog = romraider_logger::datalog::DatalogWriter::create(out_path)
         .with_context(|| format!("opening {}", out_path.display()))?;
 
-    // 4. Открыть serial.
-    let mut cfg = SerialConfig::ssm(port);
-    cfg.baud_rate = baud;
-    let mut transport = SerialTransport::open(&cfg)
-        .with_context(|| format!("opening serial {port}@{baud}"))?;
-    transport.purge()?;
+    // 4. Открыть транспорт.
+    let mut transport: Box<dyn romraider_io::transport::Transport> = if tactrix {
+        Box::new(open_tactrix()?)
+    } else if port.is_empty() {
+        anyhow::bail!("--port required when --tactrix is not set");
+    } else {
+        let mut cfg = SerialConfig::ssm(port);
+        cfg.baud_rate = baud;
+        let mut tr = SerialTransport::open(&cfg)
+            .with_context(|| format!("opening serial {port}@{baud}"))?;
+        tr.purge()?;
+        Box::new(tr)
+    };
+
+    // 4b. Разбудить шину через SSM ECU-init (0xBF). Без этого ECU молчит на
+    // ReadAddresses — K-line бус остаётся в idle, первый `0xA8` уходит в пустоту.
+    eprintln!("Sending SSM ECU-init to wake bus…");
+    let init = ssm::ecu_init(transport.as_mut(), timeout)
+        .context("SSM ECU-init failed (check ignition / cable / baud)")?;
+    eprintln!(
+        "  ECU ROM-ID: {}  SSM-ID: {}  caps: {} bytes",
+        bytes::hex_dump(&init.rom_id),
+        bytes::hex_dump(&init.ssm_id),
+        init.capabilities.len(),
+    );
 
     // 5. Loop.
     let interval = Duration::from_millis(interval_ms);
@@ -629,16 +709,164 @@ fn logger_cmd(
     eprintln!("Starting log to {} (interval {}ms)…", out_path.display(), interval_ms);
     loop {
         let started = std::time::Instant::now();
-        match session.poll_once(&mut transport) {
+        match session.poll_once(transport.as_mut()) {
             Ok(sample) => {
                 datalog.write_sample(&sample)?;
                 count += 1;
                 if count % 10 == 0 {
-                    eprintln!("  {count} samples written");
+                    let preview = sample
+                        .values
+                        .iter()
+                        .map(|v| format!("{}={:.2}", v.parameter_id, v.value))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    eprintln!("  [{count:>5}]  {preview}");
                 }
             }
             Err(e) => {
                 eprintln!("poll error: {e}");
+            }
+        }
+        if let Some(d) = deadline {
+            if std::time::Instant::now() >= d {
+                break;
+            }
+        }
+        if let Some(rem) = interval.checked_sub(started.elapsed()) {
+            std::thread::sleep(rem);
+        }
+    }
+    datalog.flush()?;
+    eprintln!("Done. {count} samples written to {}", out_path.display());
+    Ok(())
+}
+
+fn logger_can_cmd(
+    param_names:   &[String],
+    out_path:      Option<&PathBuf>,
+    interval_ms:   u64,
+    duration_secs: u64,
+    timeout:       Duration,
+    list:          bool,
+) -> Result<()> {
+    use romraider_protocol::obd2::{find_pid, read_pid, ObdiiPid, STANDARD_PIDS};
+
+    // --list режим: просто распечатать таблицу.
+    if list {
+        println!("Available OBD-II Mode 01 PIDs:");
+        println!(
+            "  {:<22}  {:<5}  {:<5}  {}",
+            "Name", "PID", "Bytes", "Units",
+        );
+        for p in STANDARD_PIDS {
+            println!(
+                "  {:<22}  0x{:02X}   {:<5}  {}",
+                p.name, p.pid, p.bytes, p.units,
+            );
+        }
+        return Ok(());
+    }
+
+    if param_names.is_empty() {
+        anyhow::bail!("at least one --params name is required (or use --list)");
+    }
+    let out_path = out_path.expect("clap required_unless_present validates this");
+
+    // 1. Резолв имён в PID-таблицу.
+    let mut pids: Vec<&'static ObdiiPid> = Vec::new();
+    for name in param_names {
+        let p = find_pid(name).ok_or_else(|| {
+            anyhow::anyhow!("unknown PID '{name}' — use `logger-can --list` to see available names")
+        })?;
+        pids.push(p);
+        eprintln!("  + {} (PID 0x{:02X}, {})", p.name, p.pid, p.units);
+    }
+
+    // 2. Открыть Tactrix в CAN-mode + flow-control filter.
+    let mut tr = open_tactrix_can()?;
+
+    // 3. Wake-up: Mode 01 PID 0x00 (supported PIDs bitmap) — стандартный ping.
+    //    Если ECU отвечает, значит OBD-II стек жив.
+    eprintln!("Pinging ECU via OBD-II Mode 01 PID 0x00 (supported PIDs)…");
+    match read_pid(&mut tr, 0x00, timeout) {
+        Ok(supported) if supported.len() >= 4 => {
+            let bitmap = u32::from_be_bytes([supported[0], supported[1], supported[2], supported[3]]);
+            eprintln!(
+                "  ECU supported PIDs 0x01–0x20 bitmap: 0x{:08X} ({} PIDs)",
+                bitmap, bitmap.count_ones(),
+            );
+        }
+        Ok(short) => {
+            eprintln!("  ⚠️  Short response ({} bytes), bus may be cold-starting", short.len());
+        }
+        Err(e) => {
+            eprintln!("  ⚠️  ECU ping failed: {e} — продолжаем в надежде что разогрелось");
+        }
+    }
+
+    // 4. CSV.
+    let mut datalog = romraider_logger::datalog::DatalogWriter::create(out_path)
+        .with_context(|| format!("opening {}", out_path.display()))?;
+
+    // 5. Loop.
+    let interval = Duration::from_millis(interval_ms);
+    let deadline = if duration_secs > 0 {
+        Some(std::time::Instant::now() + Duration::from_secs(duration_secs))
+    } else {
+        None
+    };
+    let mut count = 0u64;
+    eprintln!(
+        "Starting CAN log to {} (interval {} ms, {} PIDs)…",
+        out_path.display(), interval_ms, pids.len(),
+    );
+    loop {
+        let started = std::time::Instant::now();
+        // Sequential one-PID-per-request: проще debug, при 500 kbps оверхед
+        // пренебрежимо мал. Optimization (батч до 6 PID в single-frame) — позже.
+        let mut values = Vec::with_capacity(pids.len());
+        let mut all_ok = true;
+        for p in &pids {
+            match read_pid(&mut tr, p.pid, timeout) {
+                Ok(data) if data.len() >= p.bytes => {
+                    let raw = data[..p.bytes].to_vec();
+                    let value = (p.scale)(&raw);
+                    values.push(SampleValue {
+                        parameter_id: p.name.into(),
+                        raw,
+                        value,
+                    });
+                }
+                Ok(short) => {
+                    eprintln!(
+                        "  poll error: {} returned {} bytes (expected {})",
+                        p.name, short.len(), p.bytes,
+                    );
+                    all_ok = false;
+                    break;
+                }
+                Err(e) => {
+                    eprintln!("  poll error: {}: {e}", p.name);
+                    all_ok = false;
+                    break;
+                }
+            }
+        }
+        if all_ok {
+            let sample = Sample {
+                timestamp: std::time::SystemTime::now(),
+                values,
+            };
+            datalog.write_sample(&sample)?;
+            count += 1;
+            if count % 10 == 0 || count == 1 {
+                let preview = sample
+                    .values
+                    .iter()
+                    .map(|v| format!("{}={:.2}", v.parameter_id, v.value))
+                    .collect::<Vec<_>>()
+                    .join("  ");
+                eprintln!("  [{count:>5}]  {preview}");
             }
         }
         if let Some(d) = deadline {
@@ -1313,7 +1541,9 @@ fn uds_request(
 }
 
 /// Открыть Tactrix в CAN-mode + установить flow-control filter.
-#[cfg(feature = "kernel-upload")]
+///
+/// Используется и kernel-upload (CAN dump-rom), и обычным OBD-II логгером
+/// (Mode 01 PID polling) — поэтому **не закрыт** feature-flag-ом.
 fn open_tactrix_can() -> Result<TactrixTransport> {
     let cfg = TactrixConfig::iso15765_500k();
     eprintln!(

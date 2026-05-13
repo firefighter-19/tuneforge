@@ -48,6 +48,19 @@
 | 22    | Defs integration на реальной фикстуре (1 МБ SH7058 ROM): float-endian fix, multi-byte switch parser, GUI modified-highlight + Changes-since-open | следующий коммит |
 | 23    | **Mac-native ROM dump через UDS/ISO15765**: CAN seed/key RE (firmware-specific 16-word round-key table из ROM `0x05972C`), kernel-upload (64× SID 0xB6), kernel handshake/read_memory, Tactrix CAN multi-frame strip → dump 1 МБ за 43.7 с, SHA-256 = `3016ce24…` совпадает с EcuFlash-fixture-ом byte-for-byte | следующий коммит |
 
+## Запланированные слайсы
+
+| Слайс | Тема                                                                | Статус |
+| ----- | ------------------------------------------------------------------- | :----: |
+| 24    | **Live logger E2E через Tactrix K-Line** — `logger --tactrix` ходит к живому ECU, опрашивает RPM/Coolant/MAF/MAP/IAT/TPS через `ReadAddresses` (0xA8), пишет CSV, preview значений в stderr. Backend (Slice 16/17) и CLI-флаг уже готовы — ждём прогона на машине | 🟡 в работе |
+| 25    | **Generic protocol abstraction** — единый `EcuClient` trait, auto-detect протокола (K-Line vs CAN) через ECU-init capability-байты, `--protocol auto\|ssm\|can\|kwp` в CLI. Уберёт разделение `dump-rom` vs `dump-rom-can`, `peek-vin` vs `ssm-init` и т.п. | 🔵 запланирован |
+| 26    | **GUI ECU-tools menu** — пункт меню «ECU» с действиями: `Read ROM from ECU…` (модал с reminders «turn ignition ON» / `OFF`, progress-bar для upload + dump phase, file-save после успеха, опционально auto-open в редакторе); `View ECU info` (VIN/CVN); placeholder-пункты `Write ROM` / `Erase ROM` (disabled, tooltip про необходимость donor-ECU). Worker thread + mpsc для прогресса, как уже сделано в XY-plot. ⚠️ Открытый вопрос — `sudo` для libusb на macOS (варианты: запуск GUI с sudo, helper-binary с правами + IPC, или «дамп через CLI → GUI открывает результат») | 🔵 запланирован |
+
+Дополнительные мелкие polish-задачи без отдельного слайса:
+- Coalescing undo при drag (один шаг на drag, а не на каждое значение)
+- Description в cell tooltip (копировать описание таблицы в hover-popup)
+- Save plot, axis labels, port-dropdown в GUI логгере
+
 ## Что работает прямо сейчас (E2E сценарии)
 
 1. **Открыть, посмотреть, редактировать ROM-файл с XML-определением:**
