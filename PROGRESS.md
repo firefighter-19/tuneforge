@@ -46,6 +46,7 @@
 | 19    | TactrixTransport (rusb, ati/ata/ato/atf/att/atc/atz) — live SSM init на 2007 Forester XT | следующий коммит |
 | 20    | Live `ssm-init --tactrix` end-to-end (ROM `4E42504007`, SSM_ID `A2 10 11`, 96 cap-байт) | следующий коммит |
 | 22    | Defs integration на реальной фикстуре (1 МБ SH7058 ROM): float-endian fix, multi-byte switch parser, GUI modified-highlight + Changes-since-open | следующий коммит |
+| 23    | **Mac-native ROM dump через UDS/ISO15765**: CAN seed/key RE (firmware-specific 16-word round-key table из ROM `0x05972C`), kernel-upload (64× SID 0xB6), kernel handshake/read_memory, Tactrix CAN multi-frame strip → dump 1 МБ за 43.7 с, SHA-256 = `3016ce24…` совпадает с EcuFlash-fixture-ом byte-for-byte | следующий коммит |
 
 ## Что работает прямо сейчас (E2E сценарии)
 
@@ -76,7 +77,19 @@
    ✅ Подтверждено на живой машине 2026-05-11. ROM `4E42504007`, SSM `A2 10 11`,
    96 байт capabilities; round-trip ~600 ms через K-Line @ 4800 baud.
 
-5. **Редактирование реальной прошивки в GUI:**
+5. **Mac-native ROM dump через CAN/ISO15765 (Tactrix Openport 2.0 + 2007 Forester XT):**
+   ```bash
+   sudo cargo run -p romraider-cli --features kernel-upload -- \
+       dump-rom-can --output /tmp/forester-mac-dump.bin
+   ```
+   ✅ Подтверждено на живой машине 2026-05-13. 1 МБ дамп за 43.7 с, SHA-256
+   `3016ce24…` совпадает byte-for-byte с `fixtures/forester-xt-2007-4E42504007.bin`
+   (= EcuFlash ground-truth). Sequence: OBD-II Mode 09 VIN/CVN → `10 03` →
+   `27 01/02` (firmware-specific Feistel round-keys из ROM `0x05972C`) →
+   `10 02` → `34 04 33` → 64× `B6` (encrypted kernel V1.07) → `37` →
+   `31 01 02 02 02` → kernel `01`/`03` 1-byte protocol @ 2 КБ chunks.
+
+6. **Редактирование реальной прошивки в GUI:**
    ```bash
    cargo run -p romraider-gui
    # File → Open ROM → fixtures/forester-xt-2007-4E42504007.bin
@@ -108,14 +121,16 @@
 
 6. ~~**SSM ReadBlock + dump-rom CLI**~~ ✅ Slice 18 (на mock); ⚠️ на реальном Subaru
    `ReadBlock` (0xA0) **возвращает stub-0xFF** из-за анти-fuzz защиты ECU — для
-   реального дампа нужен kernel-upload (см. Slice 21 ниже).
-7. **Slice 21 — kernel-upload для SH7058** (приоритет — реализовать Mac-native dump):
+   реального дампа нужен kernel-upload.
+7. ~~**Slice 21/23 — kernel-upload для SH7058**~~ ✅ Slice 23:
    - GPLv3 изолированный крейт `romraider-kernel`
-   - Reference: [fenugrec/nisprog](https://github.com/fenugrec/nisprog) (C, GPLv3)
-   - Pre-compiled kernel `ssmk_SH7058_*.bin` из [npkern](https://github.com/fenugrec/npkern/tree/master/precompiled)
-   - Sequence: KWP2000 SID 0x81 → 0x10 → 0x27 (seed/key 16-round Feistel) → 0x34/0x36 (upload) → 0x31 (start)
-   - Verify dump byte-by-byte vs `fixtures/forester-xt-2007-4E42504007.bin`
-8. **J2534 Open/Connect/ReadMsgs/WriteMsgs** ([io](crates/romraider-io/PROGRESS.md)) — для современных Subaru через CAN
+   - K-Line path (KWP2000 SID 0x81) **не применим** к 2007 USDM Forester (SID 0x81 timeout,
+     `27 01` отказывает): ECU использует CAN/ISO15765, а не KWP2000-on-K-Line
+   - **Реальный путь** — UDS-over-CAN @ 500 kbps через Tactrix `ato6` (см. сценарий 5 выше)
+   - Round-key table (`0x05972C` в ROM) восстановлена brute-force по 8 (seed,key)-парам из capture
+   - Encrypted kernel V1.07 ре-используется from capture (`include_bytes!`)
+   - Verify byte-by-byte vs `fixtures/forester-xt-2007-4E42504007.bin` — ✅ SHA-256 совпал
+8. **J2534 Open/Connect/ReadMsgs/WriteMsgs** ([io](crates/romraider-io/PROGRESS.md)) — для Linux/Win через CAN
 9. **J2534 LibraryLocator** под Win/Linux ([io](crates/romraider-io/PROGRESS.md))
 10. **RamTune** — отдельный модуль для flash (опасно, тестировать на ECU-доноре)
 
@@ -142,11 +157,11 @@
 
 ## Метрики
 
-- **Тестов в воркспейсе:** ~165 (passing, 0 failed) после Slice 22
-  (+15 tactrix-parser, +4 multi-byte switch data, +2 float-BE-fix, +5 на реальной фикстуре)
-- **Строк Rust-кода:** ~8400 (не считая XML/фикстур)
+- **Тестов в воркспейсе:** ~175 (passing, 0 failed) после Slice 23
+  (+1 K-Line seed/key, +1 CAN seed/key 8-pair match, +CAN multi-frame strip path в transport)
+- **Строк Rust-кода:** ~9100 (не считая XML/фикстур/8 КБ encrypted-kernel)
 - **Зависимостей (workspace deps в `Cargo.toml`):** 18 (rusb добавлен в Slice 19)
 - **Тестовых артефактов:** `fixtures/forester-xt-2007-4E42504007.bin` — 1 МБ ground-truth
-  ROM (извлечён из `.srf`-дампа EcuFlash), используется в read-table / GUI / kernel-upload verify
-- **Коммитов:** 22 фич-коммита + начальный + LICENSE + PROGRESS-документация (Slice 19/20/22
+  ROM (извлечён из `.srf`-дампа EcuFlash), используется в read-table / GUI / dump-rom-can verify
+- **Коммитов:** 22 фич-коммита + начальный + LICENSE + PROGRESS-документация (Slice 19/20/22/23
   ещё на staging-е, ждут вашего `git commit`)

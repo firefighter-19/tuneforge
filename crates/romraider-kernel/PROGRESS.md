@@ -21,43 +21,32 @@ resident kernel-binary (от `fenugrec/npkern`) и общаемся с ним п
 
 ## Статус
 
-Crate **создан как skeleton 2026-05-12**, реализация по фазам:
+✅ **Slice 23 закрыт 2026-05-13**: Mac-native ROM dump через UDS/ISO15765 работает
+end-to-end, SHA-256 дампа совпал byte-for-byte с EcuFlash-fixture-ом.
 
 | Фаза | Модуль                    | Что делается                              | Статус |
 |------|---------------------------|-------------------------------------------|:------:|
-| 0    | reference setup           | `nisprog` + `npkern` склонированы локально, kernel-binary извлечён в `kernels/` | 🟡 в работе (агент) |
-| 1    | `kwp2000`                 | frame builder/parser + NRC + SID-константы | 🟡 константы есть, builder/parser TODO |
-| 2    | `seed_key`                | 16-round Feistel + KEYTOGEN/SBOX tables   |   ❌   |
-| 3    | `upload`                  | SID 0x81/0x10/0x27/0x34/0x36/0x31 sequence |   ❌   |
-| 4    | `kernel_wire`             | SID_DUMP / SID_TP / SID_CONF / SID_RESET  |   ❌   |
-| 5    | `dump::dump_rom_via_kernel` | high-level orchestrator                |   ❌   |
-| 6    | live-verify               | dump vs `fixtures/forester-xt-2007-4E42504007.bin` byte-by-byte | ❌ |
+| 0    | reference setup           | `nisprog` + `npkern` склонированы; encrypted CAN kernel V1.07 (8 КБ) в `kernels/openecu_can_v1.07_encrypted.bin` извлечён из EcuFlash capture | ✅ |
+| 1    | `kwp2000`                 | frame builder/parser + NRC + SID-константы | ✅ |
+| 2    | `seed_key` (K-Line)       | 16-round Feistel + `KEYTABLE_GENKEY` (универсальная) |  ✅  |
+| 2b   | `seed_key` (CAN)          | тот же Feistel + firmware-specific `KEYTABLE_GENKEY_CAN` (round-keys из ROM `0x05972C`), верификация 8 live-парами | ✅ |
+| 3    | `upload` (K-Line)         | SID 0x81/0x10/0x27/0x34/0x36/0x31 sequence | 🟢 готов, но **не применим** к 2007 USDM Forester XT — ECU на этом авто использует UDS-on-CAN |
+| 3b   | `can_upload`              | UDS-on-CAN: `10 03` → `27 01/02` → `10 02` → `34 04 33` → 64× `B6` → `37` → `31 01 02 02 02` | ✅ |
+| 4    | `kernel_wire` (K-Line)    | SID_DUMP / SID_TP / SID_CONF / SID_RESET  | ❌ (не реализован, K-Line не применим к этой машине) |
+| 4b   | `can_wire`                | 1-byte protocol: `01`/`81` handshake, `03`/`83` read_memory @ 2 КБ chunks | ✅ |
+| 5    | `dump-rom-can` CLI        | orchestrator: OBD-II wake → ExtSession → SecAccess → ProgSession → upload+jump → kernel handshake → 512× read_memory | ✅ |
+| 6    | live-verify               | 1 МБ дамп за 43.7 с, SHA-256 = `3016ce24…`, ✅ совпал с `fixtures/forester-xt-2007-4E42504007.bin` byte-by-byte | ✅ |
 
-## Roadmap (Slice 21)
+## Что осталось / next slices
 
-См. также корневой `PROGRESS.md` (`Slice 21` строка в таблице).
-
-**Day 1** — kwp2000 framing + seed/key:
-- Реализовать `kwp2000::build_request(sid, &[u8]) -> Vec<u8>` + tests
-- Реализовать `kwp2000::parse_response(&[u8]) -> Result<Frame, _>` + NRC-detect
-- Порт `sub_genkey()` в `seed_key::compute_key(u32) -> u32`
-- Заполнить `KEYTOGEN_INDEX[16]` и `INDEX_TRANSFORMATION[32]` из nisprog
-- Test-vectors: 3-5 known seed/key пар (из nisprog или сами сгенерируем на mock-Subaru)
-
-**Day 2** — upload sequence (используем mock-Transport, потом TactrixTransport):
-- `start_communication` (SID 0x81)
-- `start_diagnostic_session` (SID 0x10, sub `0x85`/`0x86` — уточнить)
-- `security_access(compute_key)` (SID 0x27) — request seed, ECU response, send key
-- `request_download(addr, len)` (SID 0x34) — формат `34 AH AM AL 04 LH LM LL`
-- `transfer_data` (SID 0x36) — 128-байт чанки + encrypt (4-round Feistel?)
-- `start_routine(0x01_01)` (SID 0x31) — handover
-
-**Day 3** — kernel-side wire + verify:
-- `kernel_wire::dump_block(addr, len)` — SID_DUMP
-- `kernel_wire::switch_baud(new_baud)` (optional, для скорости)
-- `dump::dump_rom_via_kernel()` orchestrator
-- CLI: `dump-rom-kernel --tactrix --mcu sh7058 --output /tmp/dump.bin`
-- Verify: `cmp dump.bin fixtures/forester-xt-2007-4E42504007.bin` → должен быть exit 0
+- **Slice 24** — generic protocol abstraction: один CLI-entry `dump-rom`, который
+  сам выбирает K-Line или CAN по ROM-ID / capability-байтам. Сейчас две команды
+  (`dump-rom` и `dump-rom-can`) — пользователь выбирает руками.
+- **Other ECUs**: round-key table вытащена для одного firmware (ROM `4E42504007`).
+  Для других ROM-ID понадобится либо capture seed/key пар + brute-force, либо
+  паттерн-поиск S-box `[05 06 07 01 09 0C ...]` + 16-word table рядом.
+- **K-Line kernel-upload для машин 2002–2005** (где ECU действительно отвечает
+  на KWP2000 K-Line) — `upload.rs` готов, нужна только тест-машина.
 
 ## Лицензирование
 

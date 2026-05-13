@@ -430,6 +430,14 @@ impl Transport for TactrixTransport {
     fn read_frame(&mut self, buf: &mut [u8], timeout: Duration) -> IoResult<usize> {
         let deadline = Instant::now() + timeout;
         let mut acc: Vec<u8> = Vec::new();
+        // Для **CAN/ISO15765** Tactrix дробит длинный response на несколько
+        // `Normal`-кадров и каждый префиксует 4-байтным CAN-ID (без ISO-TP
+        // sequence-номеров — Tactrix их strip-ает сам). Caller хочет получить
+        // `<CAN_ID 4B><UDS bytes>` целиком — поэтому CAN_ID мы keep-аем только
+        // на первом chunk-е, а у subsequent его **отрезаем** перед accumulation-ом.
+        // На K-line эта логика не используется (там нет CAN_ID-префиксов).
+        let is_can = matches!(self.cfg.protocol, PROTO_CAN | PROTO_ISO15765);
+        let mut got_first_data = false;
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
@@ -449,20 +457,31 @@ impl Transport for TactrixTransport {
                     tracing::trace!("RX message start");
                 }
                 TactrixFrame::Data { kind: PacketKind::Normal, payload, .. } => {
-                    acc.extend_from_slice(&payload);
-                    tracing::trace!(chunk = payload.len(), total = acc.len(), "RX chunk");
+                    let data: &[u8] = if is_can && got_first_data && payload.len() >= 4 {
+                        &payload[4..]
+                    } else {
+                        &payload
+                    };
+                    acc.extend_from_slice(data);
+                    got_first_data = true;
+                    tracing::trace!(chunk = data.len(), total = acc.len(), "RX chunk");
                 }
                 TactrixFrame::Data {
                     kind: PacketKind::RxEnd | PacketKind::RxEndExtended,
                     payload,
                     ..
                 } => {
-                    // K-line: RxEnd обычно пустой (полная message уже в `acc`).
-                    // CAN/ISO15765: RxEnd **содержит payload целиком** (single-frame
-                    // response, Tactrix ISO-TP-склеил все CF за нас). Поэтому
-                    // append payload в обоих случаях — для K-line добавим 0 байт.
+                    // K-line: RxEnd обычно пустой → пропускаем.
+                    // CAN single-frame: payload = `<CAN_ID 4B><UDS data>` целиком → keep.
+                    // CAN multi-frame: RxEnd-payload — последний фрагмент с CAN_ID prefix →
+                    // strip CAN_ID если уже накопили первый chunk.
                     if !payload.is_empty() {
-                        acc.extend_from_slice(&payload);
+                        let data: &[u8] = if is_can && got_first_data && payload.len() >= 4 {
+                            &payload[4..]
+                        } else {
+                            &payload
+                        };
+                        acc.extend_from_slice(data);
                     }
                     tracing::trace!(total = acc.len(), "RX message end");
                     break;
