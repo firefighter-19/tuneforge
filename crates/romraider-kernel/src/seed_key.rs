@@ -39,6 +39,27 @@ const KEYTABLE_ENCRYPT: [u16; 4] = [
     0x7856, 0xCE22, 0xF513, 0x6E86,
 ];
 
+/// Round-keys для **CAN-side SID 0x27 SecurityAccess**, ECU-specific.
+///
+/// Извлечены через `tools/find_round_keys.py` из `fixtures/forester-xt-2007-4E42504007.bin`
+/// по offset `0x05972C` — full-ROM-sweep нашёл одну-единственную 16×u16 BE таблицу,
+/// которая computes correct key для всех 7 captured (seed, key) пар из live EcuFlash
+/// сессий.
+///
+/// Algorithm structure — james-portman/subaru-ecu-flashing — это **тот же Feistel**
+/// что K-Line `subaru_genkey` (тот же S-box, тот же ROR-3), но с другими round-keys.
+/// FastECU's `get_key_operations_subaru.cpp` confirms что round-keys
+/// firmware-specific (i.e. в каждом ROM свои).
+///
+/// **Этот set валиден ТОЛЬКО для ROM ID `4E42504007`** (2007 Forester XT USDM).
+/// Для другого ECU придётся искать свою таблицу.
+const KEYTABLE_GENKEY_CAN: [u16; 16] = [
+    0x78B1, 0x4625, 0x201C, 0x9EA5,
+    0xAD6B, 0x35F4, 0xFD21, 0x5E71,
+    0xB046, 0x7F4A, 0x4B75, 0x93F9,
+    0x1895, 0x8961, 0x3ECC, 0x862B,
+];
+
 /// 32-entry nibble S-box, общая для genkey и encrypt.
 const INDEX_TRANSFORMATION: [u8; 32] = [
     0x5, 0x6, 0x7, 0x1, 0x9, 0xC, 0xD, 0x8,
@@ -87,7 +108,11 @@ fn final_word_swap(state: u32) -> u32 {
     (state >> 16) | (state << 16)
 }
 
-/// **Generate key from seed** для Subaru SID 0x27 securityAccess.
+/// **Generate key from seed** для Subaru SID 0x27 securityAccess — **K-Line** version.
+///
+/// Использует канонический nisprog `keytogenerateindex[16]`. Работает для GD-chassis
+/// Subaru (~2003-2005 WRX/STI) на K-Line. **НЕ подходит** для CAN-ECU — нужна
+/// per-ECU keytable (см. [`subaru_genkey_can`]).
 ///
 /// Seed и key — big-endian 4-байтные значения (как они приходят/уходят по wire).
 pub fn subaru_genkey(seed: [u8; 4]) -> [u8; 4] {
@@ -98,6 +123,47 @@ pub fn subaru_genkey(seed: [u8; 4]) -> [u8; 4] {
     }
     state = final_word_swap(state);
     state.to_be_bytes()
+}
+
+/// **Generate key from seed** для Subaru CAN-ECU `4E42504007` (2007 Forester XT).
+///
+/// Использует [`KEYTABLE_GENKEY_CAN`] — round-keys извлечены из ROM этого ECU.
+/// James-portman's exact Feistel structure (с byte-mirroring в `transformnibbles`,
+/// в отличие от nisprog K-Line который этого не делает) — реализация ниже.
+pub fn subaru_genkey_can(seed: [u8; 4]) -> [u8; 4] {
+    // james-portman algorithm:
+    //   high = (seed[0]<<8) | seed[1]
+    //   low  = (seed[2]<<8) | seed[3]
+    //   for j in 0..16:
+    //     idx = low ^ word_list[15 - j]
+    //     // transformnibbles с byte-mirror: idx |= (idx & 0xFF) << 16
+    //     key16 = sbox-substitute 4 nibbles (5-bit indices)
+    //     key16 = ROR(key16, 3)
+    //     (high, low) = (low, key16 ^ high)
+    //   return [low>>8, low&FF, high>>8, high&FF]  // implicit final swap
+    let mut high: u16 = u16::from(seed[0]) << 8 | u16::from(seed[1]);
+    let mut low:  u16 = u16::from(seed[2]) << 8 | u16::from(seed[3]);
+
+    for j in 0..16usize {
+        let rk = KEYTABLE_GENKEY_CAN[15 - j];
+        let idx_raw: u32 = u32::from(low ^ rk);
+        // byte-mirror: bits 16..23 = bits 0..7 (так в transformnibbles james-portman)
+        let idx = idx_raw + ((idx_raw & 0xFF) << 16);
+
+        let mut key16: u16 = 0;
+        for n in 0..4 {
+            let nibble_idx = ((idx >> (n * 4)) & 0x1F) as usize;
+            key16 = key16.wrapping_add(u16::from(INDEX_TRANSFORMATION[nibble_idx]) << (n * 4));
+        }
+        // ROR 3 (16-bit)
+        key16 = (key16 >> 3) | (key16 << 13);
+
+        let new_low = key16 ^ high;
+        high = low;
+        low  = new_low;
+    }
+    // Implicit final swap: write low first, high second.
+    [(low >> 8) as u8, low as u8, (high >> 8) as u8, high as u8]
 }
 
 /// **Encrypt one 32-bit word** для Subaru SID 0x36 transferData payload.
@@ -225,5 +291,29 @@ mod tests {
     fn final_word_swap_swaps_halves() {
         assert_eq!(final_word_swap(0x1234_5678), 0x5678_1234);
         assert_eq!(final_word_swap(0xFFFF_0000), 0x0000_FFFF);
+    }
+
+    /// CAN-side genkey против live captures from `4E42504007` ECU.
+    /// Round-keys найдены в ROM @ 0x05972C через `tools/find_round_keys.py`.
+    #[test]
+    fn can_genkey_matches_live_captures() {
+        let pairs: &[([u8; 4], [u8; 4])] = &[
+            ([0xDD, 0xEE, 0xAB, 0x05], [0x74, 0x15, 0x7C, 0x7D]),
+            ([0x0D, 0x13, 0x32, 0x08], [0xFD, 0xB2, 0x52, 0x38]),
+            ([0x0F, 0xCE, 0x53, 0xBB], [0x3F, 0x97, 0xAD, 0x93]),
+            ([0xA0, 0xE6, 0xDF, 0xD5], [0x5E, 0xB8, 0xE0, 0x6A]),
+            ([0x25, 0xA4, 0xF1, 0x81], [0xE7, 0x6B, 0x34, 0x34]),
+            ([0xAB, 0x2C, 0xEB, 0xA1], [0x8D, 0x36, 0x6E, 0x24]),
+            ([0x7D, 0xAF, 0x7C, 0xBB], [0xE4, 0x3B, 0x52, 0xE2]),
+            ([0xBF, 0x78, 0xFD, 0x02], [0x9A, 0x25, 0x62, 0x16]),
+        ];
+        for &(seed, expected) in pairs {
+            let got = subaru_genkey_can(seed);
+            assert_eq!(
+                got, expected,
+                "subaru_genkey_can({:02X?}) = {:02X?}, expected {:02X?}",
+                seed, got, expected,
+            );
+        }
     }
 }

@@ -8,7 +8,10 @@ use tracing::{debug, warn};
 use crate::error::{IoError, IoResult};
 use crate::transport::Transport;
 
-use super::protocol::{parse_frame, PacketKind, ParseError, TactrixFrame, PROTO_ISO9141};
+use super::protocol::{
+    parse_frame, PacketKind, ParseError, TactrixFrame,
+    PROTO_CAN, PROTO_ISO9141, PROTO_ISO15765,
+};
 
 /// Стандартный VID Tactrix (унаследован от FTDI).
 pub const TACTRIX_VID: u16 = 0x0403;
@@ -43,6 +46,26 @@ impl Default for TactrixConfig {
             protocol:      PROTO_ISO9141,
             flags:         0x0000_0200, // ISO9141_NO_CHECKSUM
             baud:          4800,
+            claim_timeout: Duration::from_secs(2),
+        }
+    }
+}
+
+impl TactrixConfig {
+    /// Preset для **CAN / ISO15765**-сессии с современными Subaru (Forester XT '07+
+    /// и т.п.). 500 kbps стандартная automotive CAN-bus. flags=0 (sane defaults).
+    /// Tactrix сам управляет ISO-TP framing'ом (First Frame, Consecutive Frame,
+    /// Flow Control) когда установлен PASS-FILTER типа `FLOW_CONTROL_FILTER`
+    /// (см. [`TactrixTransport::set_can_flow_control_filter`]).
+    #[must_use]
+    pub fn iso15765_500k() -> Self {
+        Self {
+            vid:           TACTRIX_VID,
+            pid:           TACTRIX_OP2_PID,
+            protocol:      PROTO_ISO15765,
+            flags:         0,           // proprietary `1749696844` от EcuFlash — Tactrix-session-nonce,
+                                        // dschultzca/j2534 use 0; mы тоже.
+            baud:          500_000,
             claim_timeout: Duration::from_secs(2),
         }
     }
@@ -149,21 +172,70 @@ impl TactrixTransport {
         t.channel = proto_id;
         tracing::debug!(channel = t.channel, "Tactrix channel opened (channel == protocol_id)");
 
-        // PASS-all filter: без хотя бы одного активного фильтра Tactrix
-        // молча выкидывает все входящие пакеты — поэтому handshake без `atf`
-        // приводит к тому, что `att` отдаёт ack, но никаких Data-кадров
-        // в обратную сторону не приходит.
-        // Формат: `atf<ch> <filter_type> <tx_flags> <data_size>\r\n<mask><pattern>`.
-        // FilterType=1 (PASS_FILTER), data_size=1, mask=0x00, pattern=0x00.
-        let mut atf = Vec::with_capacity(16);
-        atf.extend_from_slice(format!("atf{} 1 0 1\r\n", t.channel).as_bytes());
-        atf.extend_from_slice(&[0x00, 0x00]);
-        tracing::debug!("sending atf (PASS-all filter)");
-        t.send(&atf, cfg.claim_timeout)?;
-        let filter_id = t.wait_for_filter_ack(cfg.claim_timeout)?;
-        tracing::debug!(filter_id, "filter installed");
+        // Фильтр для K-line: PASS-all (mask=00, pattern=00). Без фильтра Tactrix
+        // молча выкидывает входящие пакеты. Для **CAN/ISO15765** PASS-all НЕ
+        // подходит — нужен `FLOW_CONTROL_FILTER` со специфическими CAN-ID-ами;
+        // вызывается отдельно через [`Self::set_can_flow_control_filter`] после
+        // `open()`.
+        let is_can = matches!(cfg.protocol, PROTO_CAN | PROTO_ISO15765);
+        if !is_can {
+            let mut atf = Vec::with_capacity(16);
+            atf.extend_from_slice(format!("atf{} 1 0 1\r\n", t.channel).as_bytes());
+            atf.extend_from_slice(&[0x00, 0x00]);
+            tracing::debug!("sending atf (PASS-all filter, K-line)");
+            t.send(&atf, cfg.claim_timeout)?;
+            let filter_id = t.wait_for_filter_ack(cfg.claim_timeout)?;
+            tracing::debug!(filter_id, "K-line filter installed");
+        } else {
+            tracing::debug!("CAN-mode: skipping K-line PASS-filter; call set_can_flow_control_filter() next");
+        }
 
         Ok(t)
+    }
+
+    /// Установить `FLOW_CONTROL_FILTER` для ISO15765/CAN-сессии.
+    ///
+    /// J2534 требует один Flow Control filter на каждый ECU-target с которым
+    /// общается ISO-TP. Subaru OBD-II ECU отвечает по `0x7E8`, мы шлём по `0x7E0`
+    /// (стандартная 11-bit functional addressing).
+    ///
+    /// Wire format: `atf<ch> 3 64 4\r\n <MASK_4B> <PATTERN_4B> <FLOWCTRL_4B>`
+    /// где `3` = FLOW_CONTROL_FILTER, `64` = `TxFlags=ISO15765_FRAME_PAD`, `4` = data_size.
+    /// Mask/Pattern фильтруют incoming CAN frames; Flow Control задаёт TX CAN-ID для
+    /// outgoing Flow Control frames (требуется ISO-TP spec).
+    pub fn set_can_flow_control_filter(
+        &mut self,
+        rx_id: u32,
+        tx_id: u32,
+    ) -> IoResult<u32> {
+        const FILTER_TYPE_FLOW_CONTROL: u8 = 3;
+        const TX_FLAG_ISO15765_FRAME_PAD: u8 = 64;
+        const ADDR_BYTES: usize = 4;
+
+        let mut atf = Vec::with_capacity(40);
+        atf.extend_from_slice(
+            format!(
+                "atf{} {FILTER_TYPE_FLOW_CONTROL} {TX_FLAG_ISO15765_FRAME_PAD} {ADDR_BYTES}\r\n",
+                self.channel,
+            )
+            .as_bytes(),
+        );
+        // mask: 0xFF FF FF FF (match all 32 bits of CAN ID)
+        atf.extend_from_slice(&0xFFFF_FFFFu32.to_be_bytes());
+        // pattern: rx_id (CAN ID we want to receive)
+        atf.extend_from_slice(&rx_id.to_be_bytes());
+        // flow control: tx_id (CAN ID we use to send Flow Control frames)
+        atf.extend_from_slice(&tx_id.to_be_bytes());
+
+        tracing::debug!(
+            rx = format!("0x{rx_id:08X}"),
+            tx = format!("0x{tx_id:08X}"),
+            "sending atf (FLOW_CONTROL filter, CAN)",
+        );
+        self.send(&atf, self.cfg.claim_timeout)?;
+        let filter_id = self.wait_for_filter_ack(self.cfg.claim_timeout)?;
+        tracing::debug!(filter_id, "CAN flow-control filter installed");
+        Ok(filter_id)
     }
 
     /// «Перецикловать» K-Line канал на той же USB-сессии: закрыть текущий
@@ -329,9 +401,19 @@ impl TactrixTransport {
 }
 
 impl Transport for TactrixTransport {
-    /// Отправить «сырые» SSM-байты — обёртываем в `att<ch> <len> 0\r\n<data>`.
+    /// Отправить wire-байты, обёрнутые в Tactrix `att`-команду.
+    ///
+    /// **K-line (ISO9141/ISO14230)**: `att<ch> <len> 0\r\n<data>` — txflags=0,
+    /// data это полный SSM/KWP-frame.
+    ///
+    /// **CAN (CAN/ISO15765)**: `att<ch> <len> 64\r\n<CAN_ID 4B BE><UDS data>` —
+    /// txflags=64 (`ISO15765_FRAME_PAD`), data **должна начинаться с 4-байтного
+    /// CAN-ID** (big-endian), за которым идёт UDS-payload. Tactrix сам ISO-TP-
+    /// фреймит длинные сообщения (First Frame + Consecutive + Flow Control).
     fn write_all(&mut self, data: &[u8], timeout: Duration) -> IoResult<()> {
-        let header = format!("att{} {} 0\r\n", self.channel, data.len());
+        let is_can = matches!(self.cfg.protocol, PROTO_CAN | PROTO_ISO15765);
+        let tx_flags: u32 = if is_can { 64 } else { 0 };
+        let header = format!("att{} {} {}\r\n", self.channel, data.len(), tx_flags);
         let mut frame = Vec::with_capacity(header.len() + data.len());
         frame.extend_from_slice(header.as_bytes());
         frame.extend_from_slice(data);
@@ -370,9 +452,23 @@ impl Transport for TactrixTransport {
                     acc.extend_from_slice(&payload);
                     tracing::trace!(chunk = payload.len(), total = acc.len(), "RX chunk");
                 }
-                TactrixFrame::Data { kind: PacketKind::RxEnd | PacketKind::RxEndExtended, .. } => {
+                TactrixFrame::Data {
+                    kind: PacketKind::RxEnd | PacketKind::RxEndExtended,
+                    payload,
+                    ..
+                } => {
+                    // K-line: RxEnd обычно пустой (полная message уже в `acc`).
+                    // CAN/ISO15765: RxEnd **содержит payload целиком** (single-frame
+                    // response, Tactrix ISO-TP-склеил все CF за нас). Поэтому
+                    // append payload в обоих случаях — для K-line добавим 0 байт.
+                    if !payload.is_empty() {
+                        acc.extend_from_slice(&payload);
+                    }
                     tracing::trace!(total = acc.len(), "RX message end");
                     break;
+                }
+                TactrixFrame::Data { kind: PacketKind::TxDone, .. } => {
+                    tracing::trace!("TX_DONE indication (CAN-mode), continuing read");
                 }
                 TactrixFrame::Data { kind, .. } => {
                     debug!(?kind, "discarding non-data frame mid-stream");

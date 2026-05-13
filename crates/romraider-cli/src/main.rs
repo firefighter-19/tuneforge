@@ -113,6 +113,41 @@ enum Cmd {
         timeout_ms: u64,
     },
 
+    /// (Quick-win Slice 23) Прочитать **VIN автомобиля** через OBD-II Mode 09
+    /// PID 02 по **CAN bus** (ISO15765 @ 500 kbps). Это standard public OBD-II,
+    /// **никакой security access** не требуется — proof-of-concept что CAN-
+    /// transport через Tactrix Openport работает на Mac.
+    PeekVin {
+        #[arg(long, default_value_t = 2000)]
+        timeout_ms: u64,
+    },
+
+    /// Тот же quick-win — прочитать **Calibration Verification Number** (CVN)
+    /// через OBD-II Mode 09 PID 06. Для нашей машины должен вернуть `3C C8 84 A1`
+    /// (точно совпадает с `MEML` блоком в `.srf` от EcuFlash).
+    PeekCvn {
+        #[arg(long, default_value_t = 2000)]
+        timeout_ms: u64,
+    },
+
+    /// (Slice 23 Phase B, feature `kernel-upload`) Subaru UDS handshake:
+    /// StartDiagnosticSession (programming mode) → SecurityAccess RequestSeed.
+    /// Выводит seed от ECU и (если `--send-key` указан) попробует отправить
+    /// computed key через наш `subaru_genkey`. Это **read-only diagnostic**
+    /// до SendKey; SendKey осторожен — после 2 невалидных попыток ECU
+    /// блокируется на 10 секунд.
+    #[cfg(feature = "kernel-upload")]
+    PeekSeed {
+        /// Дополнительно вычислить key через `subaru_genkey` (K-line algorithm)
+        /// и отправить через SID 0x27 0x02. Если ECU вернёт `67 02` — algorithm
+        /// совпадает с CAN-side. Если NRC `7F 27 35` — algorithm не тот.
+        #[arg(long)]
+        send_key: bool,
+
+        #[arg(long, default_value_t = 2000)]
+        timeout_ms: u64,
+    },
+
     /// Прочитать N байт по последовательным адресам через **SSM2 ReadAddresses
     /// (0xA8)** — массив отдельных адресов вместо block-read.
     PeekRom {
@@ -263,6 +298,16 @@ fn main() -> Result<()> {
         ),
         Cmd::PeekRom { start, count, timeout_ms, skip_init, gap_ms } => peek_rom_cmd(
             &start, count, Duration::from_millis(timeout_ms), skip_init, gap_ms,
+        ),
+        Cmd::PeekVin { timeout_ms } => peek_obd_cmd(
+            0x09, 0x02, "VIN", Duration::from_millis(timeout_ms),
+        ),
+        Cmd::PeekCvn { timeout_ms } => peek_obd_cmd(
+            0x09, 0x06, "CVN", Duration::from_millis(timeout_ms),
+        ),
+        #[cfg(feature = "kernel-upload")]
+        Cmd::PeekSeed { send_key, timeout_ms } => peek_seed_cmd(
+            send_key, Duration::from_millis(timeout_ms),
         ),
         Cmd::Logger {
             port, baud, def, ecu, params, interval_ms, duration_secs, out, timeout_ms,
@@ -1087,6 +1132,215 @@ fn peek_rom_cmd(
     } else {
         eprintln!("\n✅ ECU вернул реальные данные. Можно дампить весь ROM через 0xA8.");
     }
+    Ok(())
+}
+
+/// Стандартные OBD-II 11-bit CAN-ID для «engine ECU» (ECU 1).
+const OBD2_ECU_REQUEST_ID:  u32 = 0x7E0;
+const OBD2_ECU_RESPONSE_ID: u32 = 0x7E8;
+
+/// Хелпер: отправить UDS-команду по CAN и получить response (без CAN_ID prefix).
+#[cfg(feature = "kernel-upload")]
+fn uds_request(
+    tr:      &mut TactrixTransport,
+    uds_tx:  &[u8],
+    timeout: Duration,
+) -> Result<Vec<u8>> {
+    let mut tx = Vec::with_capacity(4 + uds_tx.len());
+    tx.extend_from_slice(&OBD2_ECU_REQUEST_ID.to_be_bytes());
+    tx.extend_from_slice(uds_tx);
+    tr.write_all(&tx, timeout).context("CAN write_all")?;
+
+    let mut buf = [0u8; 512];
+    let n = tr.read_frame(&mut buf, timeout).context("CAN read_frame")?;
+    let raw = &buf[..n];
+    if raw.len() < 4 {
+        anyhow::bail!("RX too short: {n} bytes");
+    }
+    // strip 4-byte CAN ID prefix
+    Ok(raw[4..].to_vec())
+}
+
+/// Открыть Tactrix в CAN-mode + установить flow-control filter.
+#[cfg(feature = "kernel-upload")]
+fn open_tactrix_can() -> Result<TactrixTransport> {
+    let cfg = TactrixConfig::iso15765_500k();
+    eprintln!(
+        "Opening Tactrix Openport (VID={:#06X} PID={:#06X}, ISO15765 @ {} baud)…",
+        cfg.vid, cfg.pid, cfg.baud,
+    );
+    let mut tr = TactrixTransport::open(&cfg).context("Tactrix open failed")?;
+    eprintln!("Transport: {}", tr.description());
+    tr.set_can_flow_control_filter(OBD2_ECU_RESPONSE_ID, OBD2_ECU_REQUEST_ID)
+        .context("Set CAN flow-control filter failed")?;
+    Ok(tr)
+}
+
+#[cfg(feature = "kernel-upload")]
+fn peek_seed_cmd(send_key: bool, timeout: Duration) -> Result<()> {
+    use romraider_kernel::seed_key::{subaru_genkey, subaru_genkey_can};
+
+    let mut tr = open_tactrix_can()?;
+
+    // Wake-up sequence по образу EcuFlash. Subaru ECU отвергает прямой
+    // `10 03` если перед ним не было OBD-II запросов (NRC 0x22 conditionsNotCorrect).
+    eprintln!("\n→ Wake-up: OBD-II Mode 01 PID 00 (supported PIDs)…");
+    let resp = uds_request(&mut tr, &[0x01, 0x00], timeout)?;
+    eprintln!("  RX UDS: {}", bytes::hex_dump(&resp));
+    if resp.first() != Some(&0x41) {
+        eprintln!("  ⚠️  Unexpected response, продолжаем");
+    }
+
+    eprintln!("\n→ Wake-up: OBD-II Mode 09 PID 02 (VIN)…");
+    let resp = uds_request(&mut tr, &[0x09, 0x02], timeout)?;
+    eprintln!("  RX UDS ({} bytes): {}", resp.len(), bytes::hex_dump(&resp));
+
+    eprintln!("\n→ Wake-up: OBD-II Mode 09 PID 06 (CVN)…");
+    let resp = uds_request(&mut tr, &[0x09, 0x06], timeout)?;
+    eprintln!("  RX UDS: {}", bytes::hex_dump(&resp));
+
+    eprintln!("\n→ SID 0x10 0x03 (ExtendedDiagnosticSession)…");
+    let resp = uds_request(&mut tr, &[0x10, 0x03], timeout)?;
+    eprintln!("  RX UDS: {}", bytes::hex_dump(&resp));
+    if resp.first() == Some(&0x7F) {
+        anyhow::bail!("Negative response on StartSession: {}", bytes::hex_dump(&resp));
+    }
+    if resp.first() != Some(&0x50) {
+        anyhow::bail!("Unexpected response (expected 0x50): {}", bytes::hex_dump(&resp));
+    }
+    eprintln!("  ✅ Extended diagnostic session active");
+
+    eprintln!("\n→ SID 0x27 0x01 (SecurityAccess RequestSeed)…");
+    let resp = uds_request(&mut tr, &[0x27, 0x01], timeout)?;
+    eprintln!("  RX UDS: {}", bytes::hex_dump(&resp));
+    if resp.len() < 6 || resp[0] != 0x67 || resp[1] != 0x01 {
+        anyhow::bail!("Bad RequestSeed response: {}", bytes::hex_dump(&resp));
+    }
+    let seed: [u8; 4] = [resp[2], resp[3], resp[4], resp[5]];
+    eprintln!("\n  Seed: {:02X} {:02X} {:02X} {:02X}", seed[0], seed[1], seed[2], seed[3]);
+
+    // Сравнение с captured pair из EcuFlash session.
+    const CAPTURED_SEED: [u8; 4] = [0xDD, 0xEE, 0xAB, 0x05];
+    const CAPTURED_KEY:  [u8; 4] = [0x74, 0x15, 0x7C, 0x7D];
+    if seed == CAPTURED_SEED {
+        eprintln!("  📌 Seed совпадает с captured value (deterministic) →");
+        eprintln!("     captured key `{:02X?}` должен сработать для replay-attack",
+            CAPTURED_KEY);
+    } else {
+        eprintln!("  ⚠️  Seed отличается от captured `{:02X?}` → seed dynamic,",
+            CAPTURED_SEED);
+        eprintln!("     replay-attack невозможен, нужен real algorithm");
+    }
+
+    let computed_key_kline = subaru_genkey(seed);
+    let computed_key       = subaru_genkey_can(seed);
+    eprintln!(
+        "\n  K-Line genkey (probably wrong for CAN): {:02X?}",
+        computed_key_kline,
+    );
+    eprintln!(
+        "  CAN genkey (per-firmware table from ROM 0x05972C): {:02X?}",
+        computed_key,
+    );
+    if seed == CAPTURED_SEED && computed_key == CAPTURED_KEY {
+        eprintln!("  ✅ CAN genkey совпадает с captured key (тест-вектор подтвердился)");
+    }
+
+    if !send_key {
+        eprintln!("\n(use --send-key чтобы попробовать отправить computed key)");
+        return Ok(());
+    }
+
+    eprintln!("\n→ SID 0x27 0x02 (SecurityAccess SendKey, computed)…");
+    eprintln!("  ⚠️  Если key неверный, ECU засчитает попытку. После 2 невалидных");
+    eprintln!("      попыток — lockout 10 секунд.");
+    let mut send = Vec::with_capacity(6);
+    send.push(0x27);
+    send.push(0x02);
+    send.extend_from_slice(&computed_key);
+    let resp = uds_request(&mut tr, &send, timeout)?;
+    eprintln!("  RX UDS: {}", bytes::hex_dump(&resp));
+    match resp.as_slice() {
+        [0x67, 0x02, ..] => {
+            eprintln!("  ✅✅✅ KEY ПРИНЯТ! Algorithm совпадает с CAN-side. Mac-native dump unlocked!");
+        }
+        [0x7F, 0x27, nrc, ..] => {
+            eprintln!("  ❌ ECU отверг key (NRC 0x{:02X}). Algorithm не тот, нужен RE.", nrc);
+        }
+        _ => {
+            eprintln!("  ❓ Неожиданный response");
+        }
+    }
+    Ok(())
+}
+
+/// Quick OBD-II Mode 09 query через ISO15765/CAN. Поддерживает Mode 09 PID 02
+/// (VIN), PID 06 (CVN), и т.п. — общая логика wire-protocol-а.
+fn peek_obd_cmd(
+    mode:    u8,
+    pid:     u8,
+    label:   &str,
+    timeout: Duration,
+) -> Result<()> {
+    let cfg = TactrixConfig::iso15765_500k();
+    eprintln!(
+        "Opening Tactrix Openport (VID={:#06X} PID={:#06X}, ISO15765 @ {} baud)…",
+        cfg.vid, cfg.pid, cfg.baud,
+    );
+    let mut tr = TactrixTransport::open(&cfg).context("Tactrix open failed")?;
+    eprintln!("Transport: {}", tr.description());
+
+    eprintln!(
+        "Installing FLOW_CONTROL filter (rx=0x{:08X}, tx=0x{:08X})…",
+        OBD2_ECU_RESPONSE_ID, OBD2_ECU_REQUEST_ID,
+    );
+    tr.set_can_flow_control_filter(OBD2_ECU_RESPONSE_ID, OBD2_ECU_REQUEST_ID)
+        .context("Set CAN flow-control filter failed")?;
+
+    // Wire format для att6: <4-byte CAN ID BE><UDS payload>
+    let mut tx = Vec::with_capacity(6);
+    tx.extend_from_slice(&OBD2_ECU_REQUEST_ID.to_be_bytes());
+    tx.push(mode);
+    tx.push(pid);
+    eprintln!(
+        "Sending OBD-II Mode {:02X} PID {:02X} ({label}) on CAN ID 0x{:03X}…",
+        mode, pid, OBD2_ECU_REQUEST_ID,
+    );
+    tr.write_all(&tx, timeout).context("CAN write_all failed")?;
+
+    // Прочитать ответ. Tactrix вернёт single-frame с весь UDS-payload в RxEnd.
+    let mut buf = [0u8; 64];
+    let n = tr.read_frame(&mut buf, timeout).context("CAN read_frame failed")?;
+    let raw = &buf[..n];
+    eprintln!("\nRaw response ({n} bytes):");
+    eprintln!("  {}", bytes::hex_dump(raw));
+
+    // Парсинг: <4-byte CAN_ID BE><49 mode pid><frame_count><data...>
+    if raw.len() < 4 + 3 {
+        anyhow::bail!("response too short: {n} bytes (expected ≥7)");
+    }
+    let resp_can_id = u32::from_be_bytes([raw[0], raw[1], raw[2], raw[3]]);
+    if resp_can_id != OBD2_ECU_RESPONSE_ID {
+        eprintln!(
+            "  ⚠️  CAN ID 0x{:08X} != expected 0x{:08X}",
+            resp_can_id, OBD2_ECU_RESPONSE_ID,
+        );
+    }
+    let uds = &raw[4..];
+    if uds.len() < 3 || uds[0] != mode | 0x40 {
+        anyhow::bail!("unexpected UDS response: {}", bytes::hex_dump(uds));
+    }
+    if uds[1] != pid {
+        anyhow::bail!("PID mismatch: requested 0x{pid:02X}, got 0x{:02X}", uds[1]);
+    }
+    let payload = &uds[3..]; // skip mode, pid, frame_count
+    eprintln!("\n✅ ECU responded:");
+    eprintln!("  {label}: {}", bytes::hex_dump(payload));
+    let as_ascii: String = payload
+        .iter()
+        .map(|&b| if (0x20..0x7F).contains(&b) { b as char } else { '.' })
+        .collect();
+    eprintln!("  ASCII: {as_ascii}");
     Ok(())
 }
 
