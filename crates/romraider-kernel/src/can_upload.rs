@@ -23,7 +23,7 @@ use romraider_io::transport::Transport;
 use crate::error::KernelError;
 
 /// CAN OBD-II standard 11-bit ECU request CAN ID.
-pub const CAN_REQUEST_ID:  u32 = 0x7E0;
+pub const CAN_REQUEST_ID: u32 = 0x7E0;
 /// CAN OBD-II standard 11-bit ECU response CAN ID.
 pub const CAN_RESPONSE_ID: u32 = 0x7E8;
 
@@ -39,17 +39,17 @@ pub const TRANSFER_CHUNK_SIZE: usize = 128;
 
 /// SID константы для CAN-side Subaru UDS.
 pub mod can_sid {
-    pub const SESSION_CONTROL:           u8 = 0x10;
-    pub const SECURITY_ACCESS:           u8 = 0x27;
-    pub const REQUEST_DOWNLOAD:          u8 = 0x34;
-    pub const TRANSFER_DATA_CAN:         u8 = 0xB6;
-    pub const REQUEST_TRANSFER_EXIT:     u8 = 0x37;
+    pub const SESSION_CONTROL: u8 = 0x10;
+    pub const SECURITY_ACCESS: u8 = 0x27;
+    pub const REQUEST_DOWNLOAD: u8 = 0x34;
+    pub const TRANSFER_DATA_CAN: u8 = 0xB6;
+    pub const REQUEST_TRANSFER_EXIT: u8 = 0x37;
     pub const START_ROUTINE_BY_LOCAL_ID: u8 = 0x31;
 
-    pub const RESP_REQUEST_DOWNLOAD:     u8 = 0x74;
-    pub const RESP_TRANSFER_DATA_CAN:    u8 = 0xF6;
-    pub const RESP_TRANSFER_EXIT:        u8 = 0x77;
-    pub const RESP_START_ROUTINE:        u8 = 0x71;
+    pub const RESP_REQUEST_DOWNLOAD: u8 = 0x74;
+    pub const RESP_TRANSFER_DATA_CAN: u8 = 0xF6;
+    pub const RESP_TRANSFER_EXIT: u8 = 0x77;
+    pub const RESP_START_ROUTINE: u8 = 0x71;
 }
 
 /// Embedded encrypted CAN kernel binary (extracted from EcuFlash session).
@@ -60,8 +60,8 @@ pub const CAN_KERNEL_V107_ENCRYPTED: &[u8] =
 
 /// Хелпер: послать UDS-command по CAN и получить UDS-response (без CAN_ID prefix).
 fn uds_request_can(
-    tr:      &mut dyn Transport,
-    uds_tx:  &[u8],
+    tr: &mut dyn Transport,
+    uds_tx: &[u8],
     timeout: Duration,
 ) -> Result<Vec<u8>, KernelError> {
     let mut tx = Vec::with_capacity(4 + uds_tx.len());
@@ -88,7 +88,7 @@ fn uds_request_can(
     if uds.len() >= 3 && uds[0] == 0x7F {
         return Err(KernelError::NegativeResponse {
             request: uds[1],
-            nrc:     uds[2],
+            nrc: uds[2],
             nrc_meaning: crate::kwp2000::nrc_meaning(uds[2]),
         });
     }
@@ -103,21 +103,21 @@ fn uds_request_can(
 ///
 /// Положительный ответ: `74 <max_block_size_format>` (мы игнорируем — chunk_size fixed).
 pub fn request_download(
-    tr:      &mut dyn Transport,
-    addr24:  u32,
-    size24:  u32,
+    tr: &mut dyn Transport,
+    addr24: u32,
+    size24: u32,
     timeout: Duration,
 ) -> Result<(), KernelError> {
     let payload = [
         can_sid::REQUEST_DOWNLOAD,
-        0x04,  // DFI
-        0x33,  // ALFID
+        0x04, // DFI
+        0x33, // ALFID
         ((addr24 >> 16) & 0xFF) as u8,
-        ((addr24 >>  8) & 0xFF) as u8,
-        ( addr24        & 0xFF) as u8,
+        ((addr24 >> 8) & 0xFF) as u8,
+        (addr24 & 0xFF) as u8,
         ((size24 >> 16) & 0xFF) as u8,
-        ((size24 >>  8) & 0xFF) as u8,
-        ( size24        & 0xFF) as u8,
+        ((size24 >> 8) & 0xFF) as u8,
+        (size24 & 0xFF) as u8,
     ];
     let resp = uds_request_can(tr, &payload, timeout)?;
     if resp.first() != Some(&can_sid::RESP_REQUEST_DOWNLOAD) {
@@ -133,16 +133,16 @@ pub fn request_download(
 /// Wire: `B6 <addr_3B BE> <data...>` — обычно 128 байт data на chunk.
 /// Положительный ответ: `F6`.
 pub fn transfer_data(
-    tr:      &mut dyn Transport,
-    addr24:  u32,
-    chunk:   &[u8],
+    tr: &mut dyn Transport,
+    addr24: u32,
+    chunk: &[u8],
     timeout: Duration,
 ) -> Result<(), KernelError> {
     let mut payload = Vec::with_capacity(4 + chunk.len());
     payload.push(can_sid::TRANSFER_DATA_CAN);
     payload.push(((addr24 >> 16) & 0xFF) as u8);
-    payload.push(((addr24 >>  8) & 0xFF) as u8);
-    payload.push(( addr24        & 0xFF) as u8);
+    payload.push(((addr24 >> 8) & 0xFF) as u8);
+    payload.push((addr24 & 0xFF) as u8);
     payload.extend_from_slice(chunk);
 
     let resp = uds_request_can(tr, &payload, timeout)?;
@@ -158,10 +158,7 @@ pub fn transfer_data(
 ///
 /// Wire: `37` (1 byte). Положительный ответ: `77`.
 /// Должен быть отправлен **между последним SID 0xB6 и SID 0x31**.
-pub fn request_transfer_exit(
-    tr:      &mut dyn Transport,
-    timeout: Duration,
-) -> Result<(), KernelError> {
+pub fn request_transfer_exit(tr: &mut dyn Transport, timeout: Duration) -> Result<(), KernelError> {
     let resp = uds_request_can(tr, &[can_sid::REQUEST_TRANSFER_EXIT], timeout)?;
     if resp.first() != Some(&can_sid::RESP_TRANSFER_EXIT) {
         return Err(KernelError::UploadAborted(format!(
@@ -175,10 +172,7 @@ pub fn request_transfer_exit(
 ///
 /// Wire (Subaru CAN, **отличается от K-Line `01 01`!**): `31 01 02 02 02`.
 /// Положительный ответ: `71 01 02 02`.
-pub fn start_routine(
-    tr:      &mut dyn Transport,
-    timeout: Duration,
-) -> Result<(), KernelError> {
+pub fn start_routine(tr: &mut dyn Transport, timeout: Duration) -> Result<(), KernelError> {
     let resp = uds_request_can(
         tr,
         &[can_sid::START_ROUTINE_BY_LOCAL_ID, 0x01, 0x02, 0x02, 0x02],
@@ -198,14 +192,15 @@ pub fn start_routine(
 /// Caller отвечает за encrypt; для replay-attack использовать
 /// [`CAN_KERNEL_V107_ENCRYPTED`] как-есть из capture.
 pub fn upload_and_jump(
-    tr:                &mut dyn Transport,
+    tr: &mut dyn Transport,
     encrypted_payload: &[u8],
-    timeout:           Duration,
+    timeout: Duration,
 ) -> Result<(), KernelError> {
     if encrypted_payload.len() != KERNEL_PAYLOAD_SIZE as usize {
         return Err(KernelError::UploadAborted(format!(
             "encrypted payload size {} ≠ expected {}",
-            encrypted_payload.len(), KERNEL_PAYLOAD_SIZE,
+            encrypted_payload.len(),
+            KERNEL_PAYLOAD_SIZE,
         )));
     }
 
@@ -218,12 +213,16 @@ pub fn upload_and_jump(
 
     let n_chunks = encrypted_payload.len() / TRANSFER_CHUNK_SIZE;
     tracing::info!(n_chunks, "starting SID 0xB6 TransferData loop");
-    for (i, chunk) in encrypted_payload.chunks_exact(TRANSFER_CHUNK_SIZE).enumerate() {
+    for (i, chunk) in encrypted_payload
+        .chunks_exact(TRANSFER_CHUNK_SIZE)
+        .enumerate()
+    {
         let chunk_addr = KERNEL_LOAD_ADDR_24 + (i * TRANSFER_CHUNK_SIZE) as u32;
         transfer_data(tr, chunk_addr, chunk, timeout)?;
         if i % 8 == 0 || i + 1 == n_chunks {
             tracing::debug!(
-                chunk = i + 1, total = n_chunks,
+                chunk = i + 1,
+                total = n_chunks,
                 addr = format!("0x{:06X}", chunk_addr),
                 "TransferData ack",
             );

@@ -43,8 +43,8 @@ pub const READ_CHUNK_SIZE: u16 = 0x0800;
 
 /// Послать proprietary CAN-kernel команду и вернуть response payload (без CAN_ID).
 fn kernel_request(
-    tr:      &mut dyn Transport,
-    cmd:     &[u8],
+    tr: &mut dyn Transport,
+    cmd: &[u8],
     timeout: Duration,
 ) -> Result<Vec<u8>, KernelError> {
     let mut tx = Vec::with_capacity(4 + cmd.len());
@@ -88,31 +88,33 @@ pub fn handshake(tr: &mut dyn Transport, timeout: Duration) -> Result<String, Ke
 /// `len` ≤ [`READ_CHUNK_SIZE`] (2048). За один проход — multi-frame ISO-TP,
 /// Tactrix re-assembles, нам прилетает один большой RxEnd.
 pub fn read_memory(
-    tr:      &mut dyn Transport,
-    addr32:  u32,
-    len:     u16,
+    tr: &mut dyn Transport,
+    addr32: u32,
+    len: u16,
     timeout: Duration,
 ) -> Result<Vec<u8>, KernelError> {
     let cmd = [
         0x03,
         ((addr32 >> 24) & 0xFF) as u8,
         ((addr32 >> 16) & 0xFF) as u8,
-        ((addr32 >>  8) & 0xFF) as u8,
-        ( addr32        & 0xFF) as u8,
-        ((len    >>  8) & 0xFF) as u8,
-        ( len           & 0xFF) as u8,
+        ((addr32 >> 8) & 0xFF) as u8,
+        (addr32 & 0xFF) as u8,
+        ((len >> 8) & 0xFF) as u8,
+        (len & 0xFF) as u8,
     ];
     let resp = kernel_request(tr, &cmd, timeout)?;
     if resp.first() != Some(&0x83) {
         return Err(KernelError::UploadAborted(format!(
-            "read_memory unexpected echo: 0x{:02X?}", resp.first(),
+            "read_memory unexpected echo: 0x{:02X?}",
+            resp.first(),
         )));
     }
     let data = &resp[1..];
     if data.len() != len as usize {
         return Err(KernelError::UploadAborted(format!(
             "read_memory length mismatch: got {}, requested {}",
-            data.len(), len,
+            data.len(),
+            len,
         )));
     }
     Ok(data.to_vec())
@@ -122,11 +124,11 @@ pub fn read_memory(
 ///
 /// `progress(done, total)` зовётся после каждого chunk-а.
 pub fn dump_rom_via_can_kernel(
-    tr:           &mut dyn Transport,
-    start_addr:   u32,
-    total_bytes:  usize,
-    chunk_size:   u16,
-    timeout:      Duration,
+    tr: &mut dyn Transport,
+    start_addr: u32,
+    total_bytes: usize,
+    chunk_size: u16,
+    timeout: Duration,
     mut progress: impl FnMut(usize, usize),
 ) -> Result<Vec<u8>, KernelError> {
     if chunk_size == 0 || chunk_size > READ_CHUNK_SIZE {
@@ -134,7 +136,7 @@ pub fn dump_rom_via_can_kernel(
             "chunk_size {chunk_size} вне допустимого 1..={READ_CHUNK_SIZE}"
         )));
     }
-    let mut out  = Vec::with_capacity(total_bytes);
+    let mut out = Vec::with_capacity(total_bytes);
     let mut addr = start_addr;
     progress(0, total_bytes);
     while out.len() < total_bytes {

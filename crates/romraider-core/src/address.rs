@@ -61,8 +61,8 @@ mod tests {
     #[test]
     fn parses_hex_with_and_without_prefix() {
         assert_eq!(Address::from_str("0xFF8000").unwrap(), Address(0x00FF_8000));
-        assert_eq!(Address::from_str("ff8000").unwrap(),   Address(0x00FF_8000));
-        assert_eq!(Address::from_str("0X10").unwrap(),     Address(0x10));
+        assert_eq!(Address::from_str("ff8000").unwrap(), Address(0x00FF_8000));
+        assert_eq!(Address::from_str("0X10").unwrap(), Address(0x10));
     }
 
     #[test]

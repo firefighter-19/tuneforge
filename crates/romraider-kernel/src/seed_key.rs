@@ -28,16 +28,12 @@
 
 /// Round-keys для генерации key из seed (16 раундов).
 const KEYTABLE_GENKEY: [u16; 16] = [
-    0x53DA, 0x33BC, 0x72EB, 0x437D,
-    0x7CA3, 0x3382, 0x834F, 0x3608,
-    0xAFB8, 0x503D, 0xDBA3, 0x9D34,
+    0x53DA, 0x33BC, 0x72EB, 0x437D, 0x7CA3, 0x3382, 0x834F, 0x3608, 0xAFB8, 0x503D, 0xDBA3, 0x9D34,
     0x3563, 0x6B70, 0x6E74, 0x88F0,
 ];
 
 /// Round-keys для encrypt payload (4 раунда).
-const KEYTABLE_ENCRYPT: [u16; 4] = [
-    0x7856, 0xCE22, 0xF513, 0x6E86,
-];
+const KEYTABLE_ENCRYPT: [u16; 4] = [0x7856, 0xCE22, 0xF513, 0x6E86];
 
 /// Round-keys для **CAN-side SID 0x27 SecurityAccess**, ECU-specific.
 ///
@@ -54,18 +50,14 @@ const KEYTABLE_ENCRYPT: [u16; 4] = [
 /// **Этот set валиден ТОЛЬКО для ROM ID `4E42504007`** (2007 Forester XT USDM).
 /// Для другого ECU придётся искать свою таблицу.
 const KEYTABLE_GENKEY_CAN: [u16; 16] = [
-    0x78B1, 0x4625, 0x201C, 0x9EA5,
-    0xAD6B, 0x35F4, 0xFD21, 0x5E71,
-    0xB046, 0x7F4A, 0x4B75, 0x93F9,
+    0x78B1, 0x4625, 0x201C, 0x9EA5, 0xAD6B, 0x35F4, 0xFD21, 0x5E71, 0xB046, 0x7F4A, 0x4B75, 0x93F9,
     0x1895, 0x8961, 0x3ECC, 0x862B,
 ];
 
 /// 32-entry nibble S-box, общая для genkey и encrypt.
 const INDEX_TRANSFORMATION: [u8; 32] = [
-    0x5, 0x6, 0x7, 0x1, 0x9, 0xC, 0xD, 0x8,
-    0xA, 0xD, 0x2, 0xB, 0xF, 0x4, 0x0, 0x3,
-    0xB, 0x4, 0x6, 0x0, 0xF, 0x2, 0xD, 0x9,
-    0x5, 0xC, 0x1, 0xA, 0x3, 0xD, 0xE, 0x8,
+    0x5, 0x6, 0x7, 0x1, 0x9, 0xC, 0xD, 0x8, 0xA, 0xD, 0x2, 0xB, 0xF, 0x4, 0x0, 0x3, 0xB, 0x4, 0x6,
+    0x0, 0xF, 0x2, 0xD, 0x9, 0x5, 0xC, 0x1, 0xA, 0x3, 0xD, 0xE, 0x8,
 ];
 
 /// Один раунд Feistel-like transform.
@@ -77,19 +69,19 @@ const INDEX_TRANSFORMATION: [u8; 32] = [
 /// Возвращает новое состояние.
 #[inline(always)]
 fn feistel_round(state: u32, round_key: u16) -> u32 {
-    let word_to_gen_idx  = state as u16;        // low 16
-    let word_to_enc      = (state >> 16) as u16; // high 16
+    let word_to_gen_idx = state as u16; // low 16
+    let word_to_enc = (state >> 16) as u16; // high 16
 
     // index = (word_to_gen_idx ^ round_key) дублируется в обе половины u32:
-    let index_low: u32   = u32::from(word_to_gen_idx ^ round_key);
-    let index            = index_low + (index_low << 16);
+    let index_low: u32 = u32::from(word_to_gen_idx ^ round_key);
+    let index = index_low + (index_low << 16);
 
     // 4 nibble-извлечения с 5-битной маской → nibble-S-box → склейка обратно в u16.
     // Маска 0x1F даёт 32 значения (отсюда таблица из 32, а не 16!).
     let mut encryption_key: u16 = 0;
     for n in 0..4 {
         let nibble_idx = ((index >> (n * 4)) & 0x1F) as usize;
-        let sbox_val   = u16::from(INDEX_TRANSFORMATION[nibble_idx]);
+        let sbox_val = u16::from(INDEX_TRANSFORMATION[nibble_idx]);
         encryption_key = encryption_key.wrapping_add(sbox_val << (n * 4));
     }
 
@@ -97,7 +89,7 @@ fn feistel_round(state: u32, round_key: u16) -> u32 {
     encryption_key = (encryption_key >> 3).wrapping_add(encryption_key << 13);
 
     // Новое состояние: high = old_low, low = encrypted (= round_output ^ old_high).
-    let new_low  = encryption_key ^ word_to_enc;
+    let new_low = encryption_key ^ word_to_enc;
     let new_high = word_to_gen_idx;
     u32::from(new_low) | (u32::from(new_high) << 16)
 }
@@ -142,7 +134,7 @@ pub fn subaru_genkey_can(seed: [u8; 4]) -> [u8; 4] {
     //     (high, low) = (low, key16 ^ high)
     //   return [low>>8, low&FF, high>>8, high&FF]  // implicit final swap
     let mut high: u16 = u16::from(seed[0]) << 8 | u16::from(seed[1]);
-    let mut low:  u16 = u16::from(seed[2]) << 8 | u16::from(seed[3]);
+    let mut low: u16 = u16::from(seed[2]) << 8 | u16::from(seed[3]);
 
     for j in 0..16usize {
         let rk = KEYTABLE_GENKEY_CAN[15 - j];
@@ -160,7 +152,7 @@ pub fn subaru_genkey_can(seed: [u8; 4]) -> [u8; 4] {
 
         let new_low = key16 ^ high;
         high = low;
-        low  = new_low;
+        low = new_low;
     }
     // Implicit final swap: write low first, high second.
     [(low >> 8) as u8, low as u8, (high >> 8) as u8, high as u8]
@@ -277,8 +269,8 @@ mod tests {
 
     #[test]
     fn encrypt_buffer_round_trips_length() {
-        let plain = vec![0x12, 0x34, 0x56, 0x78,  0xAA, 0xBB, 0xCC, 0xDD];
-        let enc   = subaru_encrypt_buffer(&plain);
+        let plain = vec![0x12, 0x34, 0x56, 0x78, 0xAA, 0xBB, 0xCC, 0xDD];
+        let enc = subaru_encrypt_buffer(&plain);
         assert_eq!(enc.len(), plain.len());
         // Каждый 4-байтный word шифруется независимо.
         let word0 = subaru_encrypt_word([0x12, 0x34, 0x56, 0x78]);

@@ -27,10 +27,10 @@ fn build_rom() -> RomImage {
 
 #[test]
 fn full_pipeline_xml_to_real_values() {
-    let doc      = parse_str(DEF).unwrap();
+    let doc = parse_str(DEF).unwrap();
     let resolved = resolve(&doc).unwrap();
-    let rom_def  = resolved.iter().find(|r| r.xml_id == "TEST").unwrap();
-    let table    = rom_def.tables.iter().find(|t| t.name == "boost").unwrap();
+    let rom_def = resolved.iter().find(|r| r.xml_id == "TEST").unwrap();
+    let table = rom_def.tables.iter().find(|t| t.name == "boost").unwrap();
 
     let rom = build_rom();
     let raw = rom.read_table(table).unwrap();
@@ -54,15 +54,18 @@ fn missing_table_address_reports_typed_error() {
           </rom>
         </roms>
     "##;
-    let doc      = parse_str(xml).unwrap();
+    let doc = parse_str(xml).unwrap();
     let resolved = resolve(&doc).unwrap();
-    let table    = &resolved[0].tables[0];
+    let table = &resolved[0].tables[0];
 
     let rom = RomImage::from_bytes(vec![0u8; 16]);
     let err = rom.read_table(table).unwrap_err();
     assert!(matches!(
         err,
-        romraider_rom::RomError::TableMissingField { field: "storage_address", .. }
+        romraider_rom::RomError::TableMissingField {
+            field: "storage_address",
+            ..
+        }
     ));
 }
 
@@ -71,13 +74,13 @@ fn edit_then_save_round_trip_via_scaling() {
     // Полный цикл редактирования: decode → отобразить как real → пользователь
     // правит → to_byte → encode → write. После повторного чтения видим
     // изменения, raw сериализуется в новые байты.
-    let doc      = parse_str(DEF).unwrap();
+    let doc = parse_str(DEF).unwrap();
     let resolved = resolve(&doc).unwrap();
-    let table    = &resolved[0].tables[0];
-    let scaling  = table.scalings[0].compile().unwrap();
+    let table = &resolved[0].tables[0];
+    let scaling = table.scalings[0].compile().unwrap();
 
     let mut rom = build_rom();
-    let raw     = rom.read_table(table).unwrap();
+    let raw = rom.read_table(table).unwrap();
     let real: Vec<f64> = raw.into_iter().map(|x| scaling.to_real(x)).collect();
     assert_eq!(real, vec![50.0, 100.0, 150.0, 200.0]);
 
@@ -92,17 +95,20 @@ fn edit_then_save_round_trip_via_scaling() {
     assert!(rom.is_dirty());
 
     // Перечитываем — видим новые значения.
-    let raw_after  = rom.read_table(table).unwrap();
+    let raw_after = rom.read_table(table).unwrap();
     let real_after: Vec<f64> = raw_after.into_iter().map(|x| scaling.to_real(x)).collect();
     assert_eq!(real_after, vec![50.0, 110.0, 175.0, 200.0]);
 
     // Под капотом: 110 psi → byte 220 (BE 0x00DC), 175 → byte 350 (BE 0x015E).
-    assert_eq!(&rom.raw()[0x10..0x18], &[
-        0x00, 0x64, // 100 (=50psi)  не тронут
-        0x00, 0xDC, // 220 (=110psi) изменён
-        0x01, 0x5E, // 350 (=175psi) изменён
-        0x01, 0x90, // 400 (=200psi) не тронут
-    ]);
+    assert_eq!(
+        &rom.raw()[0x10..0x18],
+        &[
+            0x00, 0x64, // 100 (=50psi)  не тронут
+            0x00, 0xDC, // 220 (=110psi) изменён
+            0x01, 0x5E, // 350 (=175psi) изменён
+            0x01, 0x90, // 400 (=200psi) не тронут
+        ]
+    );
 }
 
 #[test]
@@ -120,19 +126,19 @@ fn three_d_with_axes_via_explicit_count() {
           </rom>
         </roms>
     "##;
-    let doc      = parse_str(xml).unwrap();
+    let doc = parse_str(xml).unwrap();
     let resolved = resolve(&doc).unwrap();
-    let table    = &resolved[0].tables[0];
+    let table = &resolved[0].tables[0];
 
     // Сборка ROM: 6 байт основной (3*2), затем X-ось и Y-ось как **big-endian** float
     // — наш decoder/encoder для StorageType::Float игнорирует `endian` атрибут
     // из defs (он часто врёт для Subaru: указано `little`, но реально BE).
-    let mut bytes = vec![10, 20, 30, 40, 50, 60];     // 0x00..0x06
-    bytes.resize(0x10, 0);                            // pad to 0x10
+    let mut bytes = vec![10, 20, 30, 40, 50, 60]; // 0x00..0x06
+    bytes.resize(0x10, 0); // pad to 0x10
     bytes.extend_from_slice(&1.0f32.to_be_bytes());
     bytes.extend_from_slice(&2.0f32.to_be_bytes());
     bytes.extend_from_slice(&3.0f32.to_be_bytes());
-    bytes.resize(0x20, 0);                            // pad to 0x20
+    bytes.resize(0x20, 0); // pad to 0x20
     bytes.extend_from_slice(&500.0f32.to_be_bytes());
     bytes.extend_from_slice(&1000.0f32.to_be_bytes());
     let rom = RomImage::from_bytes(bytes);

@@ -48,9 +48,7 @@ enum Cmd {
     },
 
     /// Загрузить ROM-файл и вывести базовую инфу.
-    InspectRom {
-        path: PathBuf,
-    },
+    InspectRom { path: PathBuf },
 
     /// Дамп прошивки с ECU через SSM `ReadBlock` (0xA0) в `.bin`-файл.
     /// Адресный диапазон и размер зависят от ECU — для Subaru SH7055 обычно
@@ -127,6 +125,30 @@ enum Cmd {
     /// (точно совпадает с `MEML` блоком в `.srf` от EcuFlash).
     PeekCvn {
         #[arg(long, default_value_t = 2000)]
+        timeout_ms: u64,
+    },
+
+    /// Прочитать произвольный RAM-адрес ECU через **UDS Mode 0x23
+    /// ReadMemoryByAddress** поверх CAN/ISO15765. Используется для проверки,
+    /// что ECU отдаёт Subaru-specific tuner-grade параметры (knock correction,
+    /// AFR, boost target/actual) в default session без security-access-а.
+    ///
+    /// Адреса берутся из `<ecuparams>` блока upstream `logger.xml` для
+    /// нашего ROM (`4E42504007`), все в RAM-диапазоне `0xFFxxxx` (sensor data).
+    /// Пример (E114 Knock Sum, 1 байт): `peek-ram-can --addr 0xFF7664 --len 1`.
+    /// Пример (E39 Feedback Knock Correction, 4-byte float):
+    /// `peek-ram-can --addr 0xFF768C --len 4`.
+    PeekRamCan {
+        /// 32-bit адрес (hex с `0x`-префиксом или без).
+        #[arg(long)]
+        addr: String,
+
+        /// Сколько байт читать (1..=255). По умолчанию 4 (типичный 4-byte float
+        /// для Subaru ecuparams).
+        #[arg(long, default_value_t = 4)]
+        len: u8,
+
+        #[arg(long, default_value_t = 1500)]
         timeout_ms: u64,
     },
 
@@ -351,13 +373,20 @@ enum Cmd {
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
         .init();
 
     let cli = Cli::parse();
     match cli.cmd {
         Cmd::Ports => list_ports(),
-        Cmd::SsmInit { port, baud, timeout_ms, tactrix } => {
+        Cmd::SsmInit {
+            port,
+            baud,
+            timeout_ms,
+            tactrix,
+        } => {
             let timeout = Duration::from_millis(timeout_ms);
             if tactrix {
                 ssm_init_tactrix(timeout)
@@ -368,67 +397,153 @@ fn main() -> Result<()> {
             }
         }
         Cmd::InspectRom { path } => inspect_rom(&path),
-        Cmd::InspectDef { path, resolve, rom, sample_byte } => {
-            inspect_def(&path, resolve, rom.as_deref(), sample_byte)
-        }
+        Cmd::InspectDef {
+            path,
+            resolve,
+            rom,
+            sample_byte,
+        } => inspect_def(&path, resolve, rom.as_deref(), sample_byte),
         Cmd::InspectLog { path, ecu } => inspect_log(&path, ecu.as_deref()),
-        Cmd::ReadTable { rom, def, rom_id, table } => {
-            read_table_cmd(&rom, &def, &rom_id, &table)
-        }
+        Cmd::ReadTable {
+            rom,
+            def,
+            rom_id,
+            table,
+        } => read_table_cmd(&rom, &def, &rom_id, &table),
         Cmd::DumpRom {
-            port, baud, start, length, output, chunk_size, timeout_ms, tactrix,
+            port,
+            baud,
+            start,
+            length,
+            output,
+            chunk_size,
+            timeout_ms,
+            tactrix,
         } => dump_rom_cmd(
-            &port, baud, &start, &length, &output, chunk_size,
-            Duration::from_millis(timeout_ms), tactrix,
+            &port,
+            baud,
+            &start,
+            &length,
+            &output,
+            chunk_size,
+            Duration::from_millis(timeout_ms),
+            tactrix,
         ),
         #[cfg(feature = "kernel-upload")]
-        Cmd::DumpRomKernel { output, mcu, start, length, timeout_ms } => dump_rom_kernel_cmd(
-            &output, &mcu, &start, length, Duration::from_millis(timeout_ms),
+        Cmd::DumpRomKernel {
+            output,
+            mcu,
+            start,
+            length,
+            timeout_ms,
+        } => dump_rom_kernel_cmd(
+            &output,
+            &mcu,
+            &start,
+            length,
+            Duration::from_millis(timeout_ms),
         ),
-        Cmd::PeekRom { start, count, timeout_ms, skip_init, gap_ms } => peek_rom_cmd(
-            &start, count, Duration::from_millis(timeout_ms), skip_init, gap_ms,
+        Cmd::PeekRom {
+            start,
+            count,
+            timeout_ms,
+            skip_init,
+            gap_ms,
+        } => peek_rom_cmd(
+            &start,
+            count,
+            Duration::from_millis(timeout_ms),
+            skip_init,
+            gap_ms,
         ),
-        Cmd::PeekVin { timeout_ms } => peek_obd_cmd(
-            0x09, 0x02, "VIN", Duration::from_millis(timeout_ms),
-        ),
-        Cmd::PeekCvn { timeout_ms } => peek_obd_cmd(
-            0x09, 0x06, "CVN", Duration::from_millis(timeout_ms),
-        ),
+        Cmd::PeekVin { timeout_ms } => {
+            peek_obd_cmd(0x09, 0x02, "VIN", Duration::from_millis(timeout_ms))
+        }
+        Cmd::PeekCvn { timeout_ms } => {
+            peek_obd_cmd(0x09, 0x06, "CVN", Duration::from_millis(timeout_ms))
+        }
+        Cmd::PeekRamCan {
+            addr,
+            len,
+            timeout_ms,
+        } => peek_ram_can_cmd(&addr, len, Duration::from_millis(timeout_ms)),
         #[cfg(feature = "kernel-upload")]
-        Cmd::PeekSeed { send_key, timeout_ms } => peek_seed_cmd(
-            send_key, Duration::from_millis(timeout_ms),
-        ),
+        Cmd::PeekSeed {
+            send_key,
+            timeout_ms,
+        } => peek_seed_cmd(send_key, Duration::from_millis(timeout_ms)),
         #[cfg(feature = "kernel-upload")]
-        Cmd::DumpRomCan { output, start, length, chunk_size, timeout_ms } => dump_rom_can_cmd(
-            &output, &start, length, chunk_size, Duration::from_millis(timeout_ms),
+        Cmd::DumpRomCan {
+            output,
+            start,
+            length,
+            chunk_size,
+            timeout_ms,
+        } => dump_rom_can_cmd(
+            &output,
+            &start,
+            length,
+            chunk_size,
+            Duration::from_millis(timeout_ms),
         ),
         Cmd::Logger {
-            port, baud, def, ecu, params, interval_ms, duration_secs, out, timeout_ms, tactrix,
+            port,
+            baud,
+            def,
+            ecu,
+            params,
+            interval_ms,
+            duration_secs,
+            out,
+            timeout_ms,
+            tactrix,
         } => logger_cmd(
-            &port, baud, &def, &ecu, &params, interval_ms, duration_secs, &out,
-            Duration::from_millis(timeout_ms), tactrix,
+            &port,
+            baud,
+            &def,
+            &ecu,
+            &params,
+            interval_ms,
+            duration_secs,
+            &out,
+            Duration::from_millis(timeout_ms),
+            tactrix,
         ),
         Cmd::LoggerCan {
-            params, all_supported, out, interval_ms, duration_secs, timeout_ms, list, probe,
+            params,
+            all_supported,
+            out,
+            interval_ms,
+            duration_secs,
+            timeout_ms,
+            list,
+            probe,
         } => logger_can_cmd(
-            &params, all_supported, out.as_ref(), interval_ms, duration_secs,
-            Duration::from_millis(timeout_ms), list, probe,
+            &params,
+            all_supported,
+            out.as_ref(),
+            interval_ms,
+            duration_secs,
+            Duration::from_millis(timeout_ms),
+            list,
+            probe,
         ),
     }
 }
 
 fn dump_rom_cmd(
-    port:       &str,
-    baud:       u32,
-    start:      &str,
-    length:     &str,
-    output:     &PathBuf,
+    port: &str,
+    baud: u32,
+    start: &str,
+    length: &str,
+    output: &PathBuf,
     chunk_size: usize,
-    timeout:    Duration,
-    tactrix:    bool,
+    timeout: Duration,
+    tactrix: bool,
 ) -> Result<()> {
     let start_addr = parse_int_or_hex_u32(start).with_context(|| format!("--start `{start}`"))?;
-    let length_val = parse_int_or_hex_usize(length).with_context(|| format!("--length `{length}`"))?;
+    let length_val =
+        parse_int_or_hex_usize(length).with_context(|| format!("--length `{length}`"))?;
     if length_val == 0 {
         anyhow::bail!("--length must be > 0");
     }
@@ -446,8 +561,8 @@ fn dump_rom_cmd(
         }
         let mut cfg = SerialConfig::ssm(port);
         cfg.baud_rate = baud;
-        let mut tr = SerialTransport::open(&cfg)
-            .with_context(|| format!("opening serial {port}@{baud}"))?;
+        let mut tr =
+            SerialTransport::open(&cfg).with_context(|| format!("opening serial {port}@{baud}"))?;
         tr.purge()?;
         do_dump_rom(&mut tr, start_addr, length_val, chunk_size, timeout, output)
     }
@@ -460,12 +575,12 @@ fn dump_rom_cmd(
 /// что намного дешевле, чем полный open/close цикл.
 fn dump_rom_tactrix_session_per_chunk(
     start_addr: u32,
-    length:     usize,
+    length: usize,
     chunk_size: usize,
-    timeout:    Duration,
-    output:     &PathBuf,
+    timeout: Duration,
+    output: &PathBuf,
 ) -> Result<()> {
-    const MAX_RETRIES:    u32      = 5;
+    const MAX_RETRIES: u32 = 5;
     const COOLDOWN_AFTER: Duration = Duration::from_millis(100);
     const COOLDOWN_RETRY: Duration = Duration::from_millis(1500);
 
@@ -511,13 +626,20 @@ fn dump_rom_tactrix_session_per_chunk(
                 Err(e) if attempt < MAX_RETRIES => {
                     eprintln!(
                         "  retry {}/{} for 0x{:06X}: {e:#}",
-                        attempt, MAX_RETRIES, addr.raw()
+                        attempt,
+                        MAX_RETRIES,
+                        addr.raw()
                     );
                     std::thread::sleep(COOLDOWN_RETRY);
                 }
-                Err(e) => return Err(e).with_context(|| {
-                    format!("chunk at 0x{:06X} failed after {MAX_RETRIES} retries", addr.raw())
-                }),
+                Err(e) => {
+                    return Err(e).with_context(|| {
+                        format!(
+                            "chunk at 0x{:06X} failed after {MAX_RETRIES} retries",
+                            addr.raw()
+                        )
+                    })
+                }
             }
         };
         out.extend_from_slice(&data);
@@ -525,11 +647,13 @@ fn dump_rom_tactrix_session_per_chunk(
         let percent = (out.len() as i64 * 100 / length as i64) as i32;
         if percent != last_percent {
             let elapsed = started.elapsed().as_secs_f64();
-            let rate    = out.len() as f64 / elapsed.max(1e-6);
-            let eta_s   = (length - out.len()) as f64 / rate.max(1.0);
+            let rate = out.len() as f64 / elapsed.max(1e-6);
+            let eta_s = (length - out.len()) as f64 / rate.max(1.0);
             eprintln!(
                 "  {}/{} ({percent}%)  {rate:.1} B/s  ETA {:.0}s",
-                out.len(), length, eta_s
+                out.len(),
+                length,
+                eta_s
             );
             last_percent = percent;
         }
@@ -542,29 +666,31 @@ fn dump_rom_tactrix_session_per_chunk(
     std::fs::write(output, &out).with_context(|| format!("writing {}", output.display()))?;
     eprintln!(
         "Done in {:.1}s. {} bytes written to {}",
-        started.elapsed().as_secs_f64(), out.len(), output.display()
+        started.elapsed().as_secs_f64(),
+        out.len(),
+        output.display()
     );
     Ok(())
 }
 
 fn read_one_chunk_via(
-    tr:      &mut TactrixTransport,
-    addr:    Address,
-    count:   usize,
+    tr: &mut TactrixTransport,
+    addr: Address,
+    count: usize,
     timeout: Duration,
 ) -> Result<Vec<u8>> {
     let _init = ssm::ecu_init(tr, timeout).context("ecu_init")?;
-    let data  = ssm::read_block(tr, addr, count, timeout).context("read_block")?;
+    let data = ssm::read_block(tr, addr, count, timeout).context("read_block")?;
     Ok(data)
 }
 
 fn do_dump_rom(
-    transport:  &mut dyn romraider_io::transport::Transport,
+    transport: &mut dyn romraider_io::transport::Transport,
     start_addr: u32,
-    length:     usize,
+    length: usize,
     chunk_size: usize,
-    timeout:    Duration,
-    output:     &PathBuf,
+    timeout: Duration,
+    output: &PathBuf,
 ) -> Result<()> {
     // Открываем SSM-сессию до начала дампа — `ReadBlock` без активной сессии
     // ECU может проигнорировать (особенно после тайм-аутов). Заодно
@@ -594,7 +720,7 @@ fn do_dump_rom(
             let percent = (done as i64 * 100 / total as i64) as i32;
             if percent != last_percent && (percent % 5 == 0 || done == total) {
                 let elapsed = started.elapsed().as_secs_f64();
-                let rate    = done as f64 / elapsed.max(1e-6);
+                let rate = done as f64 / elapsed.max(1e-6);
                 eprintln!("  {done}/{total} ({percent}%)  {rate:.1} B/s");
                 last_percent = percent;
             }
@@ -618,7 +744,7 @@ fn parse_int_or_hex_u32(s: &str) -> Result<u32> {
         .or_else(|| trimmed.strip_prefix("0X"));
     match stripped {
         Some(hex) => u32::from_str_radix(hex, 16).context("invalid hex"),
-        None      => trimmed.parse::<u32>().context("invalid decimal"),
+        None => trimmed.parse::<u32>().context("invalid decimal"),
     }
 }
 
@@ -629,21 +755,21 @@ fn parse_int_or_hex_usize(s: &str) -> Result<usize> {
         .or_else(|| trimmed.strip_prefix("0X"));
     match stripped {
         Some(hex) => usize::from_str_radix(hex, 16).context("invalid hex"),
-        None      => trimmed.parse::<usize>().context("invalid decimal"),
+        None => trimmed.parse::<usize>().context("invalid decimal"),
     }
 }
 
 fn logger_cmd(
-    port:          &str,
-    baud:          u32,
-    def_path:      &PathBuf,
-    ecu_id:        &str,
-    param_ids:     &[String],
-    interval_ms:   u64,
+    port: &str,
+    baud: u32,
+    def_path: &PathBuf,
+    ecu_id: &str,
+    param_ids: &[String],
+    interval_ms: u64,
     duration_secs: u64,
-    out_path:      &PathBuf,
-    timeout:       Duration,
-    tactrix:       bool,
+    out_path: &PathBuf,
+    timeout: Duration,
+    tactrix: bool,
 ) -> Result<()> {
     if param_ids.is_empty() {
         anyhow::bail!("at least one --params id is required");
@@ -692,8 +818,8 @@ fn logger_cmd(
     } else {
         let mut cfg = SerialConfig::ssm(port);
         cfg.baud_rate = baud;
-        let mut tr = SerialTransport::open(&cfg)
-            .with_context(|| format!("opening serial {port}@{baud}"))?;
+        let mut tr =
+            SerialTransport::open(&cfg).with_context(|| format!("opening serial {port}@{baud}"))?;
         tr.purge()?;
         Box::new(tr)
     };
@@ -718,7 +844,11 @@ fn logger_cmd(
         None
     };
     let mut count = 0u64;
-    eprintln!("Starting log to {} (interval {}ms)…", out_path.display(), interval_ms);
+    eprintln!(
+        "Starting log to {} (interval {}ms)…",
+        out_path.display(),
+        interval_ms
+    );
     loop {
         let started = std::time::Instant::now();
         match session.poll_once(transport.as_mut()) {
@@ -753,15 +883,61 @@ fn logger_cmd(
     Ok(())
 }
 
+fn peek_ram_can_cmd(addr_str: &str, len: u8, timeout: Duration) -> Result<()> {
+    use romraider_protocol::uds;
+
+    let addr = parse_int_or_hex_u32(addr_str).with_context(|| format!("--addr `{addr_str}`"))?;
+    if len == 0 || len > 64 {
+        anyhow::bail!("--len must be 1..=64");
+    }
+
+    let mut tr = open_tactrix_can()?;
+
+    eprintln!(
+        "Reading {} byte(s) from 0x{:08X} via UDS Mode 0x23 ReadMemoryByAddress…",
+        len, addr,
+    );
+    match uds::read_memory_by_address(&mut tr, addr, len, timeout) {
+        Ok(data) => {
+            println!("Raw ({} bytes):  {}", data.len(), bytes::hex_dump(&data));
+            if data.len() == 4 {
+                let f = f32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+                let u = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+                println!("As float BE:    {f}");
+                println!("As uint32 BE:   {u}");
+            } else if data.len() == 2 {
+                let u = u16::from_be_bytes([data[0], data[1]]);
+                println!("As uint16 BE:   {u}");
+            } else if data.len() == 1 {
+                println!("As uint8:       {}", data[0]);
+            }
+            println!(
+                "\n✅ UDS Mode 0x23 работает в default session — можно строить ecuparams-логгер."
+            );
+        }
+        Err(e) => {
+            eprintln!("\n❌ UDS Mode 0x23 failed: {e}");
+            eprintln!(
+                "Если NRC 0x22 (Conditions Not Correct) — попробовать после `10 03` (ExtendedDiagSession).\n\
+                 Если NRC 0x33 (Security Access Denied) — этот адрес защищён.\n\
+                 Если NRC 0x31 (Out Of Range) — адрес не в read-allowed диапазоне.\n\
+                 Если timeout — ECU вообще не отвечает на Mode 0x23 (надо пробовать Mode 0xA8 SSM-over-CAN).",
+            );
+            anyhow::bail!("read_memory_by_address failed");
+        }
+    }
+    Ok(())
+}
+
 fn logger_can_cmd(
-    param_names:    &[String],
-    all_supported:  bool,
-    out_path:       Option<&PathBuf>,
-    interval_ms:    u64,
-    duration_secs:  u64,
-    timeout:        Duration,
-    list:           bool,
-    probe:          bool,
+    param_names: &[String],
+    all_supported: bool,
+    out_path: Option<&PathBuf>,
+    interval_ms: u64,
+    duration_secs: u64,
+    timeout: Duration,
+    list: bool,
+    probe: bool,
 ) -> Result<()> {
     use romraider_protocol::obd2::{
         discover_supported_pids, find_pid, read_pid, ObdiiPid, STANDARD_PIDS,
@@ -781,15 +957,21 @@ fn logger_can_cmd(
         };
         println!("Available OBD-II Mode 01 PIDs:");
         if supported.is_some() {
-            println!("  ✓/✗  {:<22}  {:<5}  {:<5}  {}", "Name", "PID", "Bytes", "Units");
+            println!(
+                "  ✓/✗  {:<22}  {:<5}  {:<5}  {}",
+                "Name", "PID", "Bytes", "Units"
+            );
         } else {
-            println!("       {:<22}  {:<5}  {:<5}  {}", "Name", "PID", "Bytes", "Units");
+            println!(
+                "       {:<22}  {:<5}  {:<5}  {}",
+                "Name", "PID", "Bytes", "Units"
+            );
         }
         for p in STANDARD_PIDS {
             let mark = match &supported {
                 Some(s) if s.contains(&p.pid) => " ✓ ",
-                Some(_)                       => " ✗ ",
-                None                          => "   ",
+                Some(_) => " ✗ ",
+                None => "   ",
             };
             println!(
                 "  {mark}  {:<22}  0x{:02X}   {:<5}  {}",
@@ -798,7 +980,8 @@ fn logger_can_cmd(
         }
         if let Some(s) = supported {
             // Покажем PIDs, которые ECU объявил, но **которых нет** в нашей таблице.
-            let unknown: Vec<u8> = s.iter()
+            let unknown: Vec<u8> = s
+                .iter()
                 .filter(|pid| !STANDARD_PIDS.iter().any(|p| &p.pid == *pid))
                 .copied()
                 .collect();
@@ -823,8 +1006,8 @@ fn logger_can_cmd(
     // 2. Резолв подписок: либо явный список, либо all-supported через discover.
     let pids: Vec<&'static ObdiiPid> = if all_supported {
         eprintln!("Probing ECU for supported PIDs via bitmap chain…");
-        let supported = discover_supported_pids(&mut tr, timeout)
-            .context("discover_supported_pids failed")?;
+        let supported =
+            discover_supported_pids(&mut tr, timeout).context("discover_supported_pids failed")?;
         let mut chosen: Vec<&'static ObdiiPid> = STANDARD_PIDS
             .iter()
             .filter(|p| supported.contains(&p.pid))
@@ -878,7 +1061,9 @@ fn logger_can_cmd(
     let mut count = 0u64;
     eprintln!(
         "Starting CAN log to {} (interval {} ms, {} PIDs)…",
-        out_path.display(), interval_ms, pids.len(),
+        out_path.display(),
+        interval_ms,
+        pids.len(),
     );
     loop {
         let started = std::time::Instant::now();
@@ -900,7 +1085,9 @@ fn logger_can_cmd(
                 Ok(short) => {
                     eprintln!(
                         "  poll error: {} returned {} bytes (expected {})",
-                        p.name, short.len(), p.bytes,
+                        p.name,
+                        short.len(),
+                        p.bytes,
                     );
                     all_ok = false;
                     break;
@@ -992,7 +1179,11 @@ fn open_tactrix() -> Result<TactrixTransport> {
 
 fn print_ecu_init(init: &EcuInitResponse) {
     println!("SSM ID:        {}", bytes::hex_dump(&init.ssm_id));
-    println!("ROM ID:        {} ({})", bytes::hex_dump(&init.rom_id), printable_ascii(&init.rom_id));
+    println!(
+        "ROM ID:        {} ({})",
+        bytes::hex_dump(&init.rom_id),
+        printable_ascii(&init.rom_id)
+    );
     println!("Capabilities:  {} bytes", init.capabilities.len());
     if !init.capabilities.is_empty() {
         println!("               {}", bytes::hex_dump(&init.capabilities));
@@ -1002,7 +1193,13 @@ fn print_ecu_init(init: &EcuInitResponse) {
 fn printable_ascii(bytes: &[u8]) -> String {
     bytes
         .iter()
-        .map(|&b| if (0x20..0x7f).contains(&b) { b as char } else { '.' })
+        .map(|&b| {
+            if (0x20..0x7f).contains(&b) {
+                b as char
+            } else {
+                '.'
+            }
+        })
         .collect()
 }
 
@@ -1016,19 +1213,21 @@ fn inspect_rom(path: &PathBuf) -> Result<()> {
 }
 
 fn inspect_def(
-    path:        &PathBuf,
-    do_resolve:  bool,
-    rom_filter:  Option<&str>,
+    path: &PathBuf,
+    do_resolve: bool,
+    rom_filter: Option<&str>,
     sample_byte: Option<f64>,
 ) -> Result<()> {
-    let doc = romraider_defs::parse_file(path)
-        .with_context(|| format!("parsing {}", path.display()))?;
+    let doc =
+        romraider_defs::parse_file(path).with_context(|| format!("parsing {}", path.display()))?;
     print_def_summary(path, &doc);
     if do_resolve {
         let resolved = resolve(&doc).context("resolving inheritance")?;
         println!();
         println!("=== RESOLVED ===");
-        let it = resolved.iter().filter(|r| rom_filter.is_none_or(|f| r.xml_id == f));
+        let it = resolved
+            .iter()
+            .filter(|r| rom_filter.is_none_or(|f| r.xml_id == f));
         for rom in it {
             print_resolved_rom(rom, sample_byte);
         }
@@ -1053,24 +1252,34 @@ fn print_def_summary(path: &PathBuf, doc: &RomsDocument) {
 fn print_resolved_rom(rom: &ResolvedRom, sample_byte: Option<f64>) {
     let ecu_id = rom.romid.ecu_id.as_deref().unwrap_or("-");
     println!();
-    println!("ROM {} (ecuid={ecu_id})  tables={}", rom.xml_id, rom.tables.len());
+    println!(
+        "ROM {} (ecuid={ecu_id})  tables={}",
+        rom.xml_id,
+        rom.tables.len()
+    );
     for t in &rom.tables {
         print_resolved_table(t, 1, sample_byte);
     }
 }
 
 fn print_resolved_table(t: &ResolvedTable, indent: usize, sample_byte: Option<f64>) {
-    let pad     = "  ".repeat(indent);
-    let kind    = t.kind.map_or("?", debug_kind);
-    let addr    = t.storage_address.map_or_else(|| "-".into(), |a| format!("{a}"));
+    let pad = "  ".repeat(indent);
+    let kind = t.kind.map_or("?", debug_kind);
+    let addr = t
+        .storage_address
+        .map_or_else(|| "-".into(), |a| format!("{a}"));
     let storage = t.storage_type.map_or("-", debug_storage);
     let dims = match (t.size_x, t.size_y) {
         (Some(x), Some(y)) => format!("{x}x{y}"),
-        (Some(x), None)    => x.to_string(),
-        (None, Some(y))    => y.to_string(),
+        (Some(x), None) => x.to_string(),
+        (None, Some(y)) => y.to_string(),
         _ => "-".into(),
     };
-    let units = t.scalings.first().and_then(|s| s.units.as_deref()).unwrap_or("");
+    let units = t
+        .scalings
+        .first()
+        .and_then(|s| s.units.as_deref())
+        .unwrap_or("");
     println!(
         "{pad}{:<6} {:<40} @ {:<10} {:<7} dims={:<8} units={}",
         kind, t.name, addr, storage, dims, units
@@ -1096,14 +1305,14 @@ fn print_resolved_table(t: &ResolvedTable, indent: usize, sample_byte: Option<f6
 fn debug_kind(k: romraider_defs::TableKind) -> &'static str {
     use romraider_defs::TableKind::*;
     match k {
-        OneD          => "1D",
-        TwoD          => "2D",
-        ThreeD        => "3D",
-        XAxis         => "X-Axis",
-        YAxis         => "Y-Axis",
-        StaticXAxis   => "SX-Axis",
-        StaticYAxis   => "SY-Axis",
-        Switch        => "Switch",
+        OneD => "1D",
+        TwoD => "2D",
+        ThreeD => "3D",
+        XAxis => "X-Axis",
+        YAxis => "Y-Axis",
+        StaticXAxis => "SX-Axis",
+        StaticYAxis => "SY-Axis",
+        Switch => "Switch",
         BitwiseSwitch => "BSwitch",
     }
 }
@@ -1111,19 +1320,24 @@ fn debug_kind(k: romraider_defs::TableKind) -> &'static str {
 fn debug_storage(s: romraider_defs::StorageType) -> &'static str {
     use romraider_defs::StorageType::*;
     match s {
-        UInt8  => "uint8",
-        Int8   => "int8",
+        UInt8 => "uint8",
+        Int8 => "int8",
         UInt16 => "uint16",
-        Int16  => "int16",
+        Int16 => "int16",
         UInt32 => "uint32",
-        Int32  => "int32",
-        Float  => "float",
-        Hex    => "hex",
-        Char   => "char",
+        Int32 => "int32",
+        Float => "float",
+        Hex => "hex",
+        Char => "char",
     }
 }
 
-fn read_table_cmd(rom_path: &PathBuf, def_path: &PathBuf, rom_id: &str, table_name: &str) -> Result<()> {
+fn read_table_cmd(
+    rom_path: &PathBuf,
+    def_path: &PathBuf,
+    rom_id: &str,
+    table_name: &str,
+) -> Result<()> {
     let doc = romraider_defs::parse_file(def_path)
         .with_context(|| format!("parsing {}", def_path.display()))?;
     let resolved = resolve(&doc).context("resolving inheritance")?;
@@ -1137,39 +1351,40 @@ fn read_table_cmd(rom_path: &PathBuf, def_path: &PathBuf, rom_id: &str, table_na
         .find(|t| t.name == table_name)
         .ok_or_else(|| anyhow::anyhow!("table `{table_name}` not found in ROM `{rom_id}`"))?;
 
-    let rom = RomImage::open(rom_path)
-        .with_context(|| format!("opening {}", rom_path.display()))?;
+    let rom =
+        RomImage::open(rom_path).with_context(|| format!("opening {}", rom_path.display()))?;
 
     print_read_table(&rom, table)
 }
 
 fn print_read_table(rom: &RomImage, table: &ResolvedTable) -> Result<()> {
     let storage = table.storage_type.map(|s| debug_storage(s)).unwrap_or("?");
-    let endian  = match table.endian {
-        Some(romraider_core::Endian::Big)    => "big",
+    let endian = match table.endian {
+        Some(romraider_core::Endian::Big) => "big",
         Some(romraider_core::Endian::Little) => "little",
-        None                                 => "?",
+        None => "?",
     };
     let dims = match (table.size_x, table.size_y) {
         (Some(x), Some(y)) => format!("{x}x{y}"),
-        (Some(x), None)    => x.to_string(),
-        (None, Some(y))    => y.to_string(),
+        (Some(x), None) => x.to_string(),
+        (None, Some(y)) => y.to_string(),
         _ => "?".into(),
     };
-    let addr = table.storage_address.map_or_else(|| "?".into(), |a| format!("{a}"));
+    let addr = table
+        .storage_address
+        .map_or_else(|| "?".into(), |a| format!("{a}"));
     println!(
         "Table {} ({:?}) — {} {} {} @ {}",
-        table.name,
-        table.kind,
-        storage,
-        endian,
-        dims,
-        addr,
+        table.name, table.kind, storage, endian, dims, addr,
     );
 
     let raw = rom.read_table(table).context("reading main table cells")?;
-    let scaled_units = table.scalings.first().and_then(|s| s.units.as_deref()).unwrap_or("");
-    let scaling      = table.scalings.first().map(|s| s.compile()).transpose()?;
+    let scaled_units = table
+        .scalings
+        .first()
+        .and_then(|s| s.units.as_deref())
+        .unwrap_or("");
+    let scaling = table.scalings.first().map(|s| s.compile()).transpose()?;
 
     println!();
     println!("Cells ({}):", raw.len());
@@ -1183,10 +1398,10 @@ fn print_read_table(rom: &RomImage, table: &ResolvedTable) -> Result<()> {
 }
 
 fn print_grid(
-    raw:      &[f64],
-    scaling:  Option<&romraider_defs::CompiledScaling>,
-    size_x:   Option<u32>,
-    units:    &str,
+    raw: &[f64],
+    scaling: Option<&romraider_defs::CompiledScaling>,
+    size_x: Option<u32>,
+    units: &str,
 ) {
     let cols = size_x.map_or(raw.len(), |n| n as usize).max(1);
     for (i, &v) in raw.iter().enumerate() {
@@ -1203,8 +1418,8 @@ fn print_grid(
 }
 
 fn print_axis(
-    rom:           &RomImage,
-    axis:          &ResolvedTable,
+    rom: &RomImage,
+    axis: &ResolvedTable,
     parent_size_x: Option<u32>,
     parent_size_y: Option<u32>,
 ) {
@@ -1214,18 +1429,25 @@ fn print_axis(
         _ => None,
     };
     let Some(count) = count.map(|n| n as usize) else {
-        println!("\nAxis {} ({:?}): size not derivable from parent — skip", axis.name, axis.kind);
+        println!(
+            "\nAxis {} ({:?}): size not derivable from parent — skip",
+            axis.name, axis.kind
+        );
         return;
     };
 
     match rom.read_cells(axis, count) {
         Ok(raw) => {
-            let units = axis.scalings.first().and_then(|s| s.units.as_deref()).unwrap_or("");
-            let scaling = axis
+            let units = axis
                 .scalings
                 .first()
-                .and_then(|s| s.compile().ok());
-            println!("\n{:?} {} ({} cells, units={}):", axis.kind, axis.name, count, units);
+                .and_then(|s| s.units.as_deref())
+                .unwrap_or("");
+            let scaling = axis.scalings.first().and_then(|s| s.compile().ok());
+            println!(
+                "\n{:?} {} ({} cells, units={}):",
+                axis.kind, axis.name, count, units
+            );
             let values: Vec<f64> = raw
                 .iter()
                 .map(|x| scaling.as_ref().map_or(*x, |c| c.to_real(*x)))
@@ -1259,12 +1481,15 @@ fn print_log_overview(path: &PathBuf, doc: &LoggerDocument) {
     println!("File:              {}", path.display());
     println!("Convert factors:   {}", doc.ecu_tools.convert_factors.len());
     for f in &doc.ecu_tools.convert_factors {
-        println!("  [{:<5}] {:<30} → {:<6} ({})", f.kind, f.name, f.metric, f.expr);
+        println!(
+            "  [{:<5}] {:<30} → {:<6} ({})",
+            f.kind, f.name, f.metric, f.expr
+        );
     }
     println!();
     println!("Log protocols:     {}", doc.logprotocols.logprotocols.len());
     for p in &doc.logprotocols.logprotocols {
-        let templates: Vec<_>  = p.ecus.iter().filter(|e| e.is_template()).collect();
+        let templates: Vec<_> = p.ecus.iter().filter(|e| e.is_template()).collect();
         let concrete = p.ecus.len() - templates.len();
         let template_params: usize = templates.iter().map(|e| e.parameters.len()).sum();
         println!(
@@ -1304,9 +1529,9 @@ fn print_log_ecu_detail(doc: &LoggerDocument, ecu: &LoggerEcu) {
 
 fn print_log_parameter(doc: &LoggerDocument, p: &LogParameter) {
     let storage = p.storage_type.as_deref().unwrap_or("-");
-    let metric  = p.metric.as_deref().unwrap_or("");
-    let expr    = p.expr.as_deref().unwrap_or("?");
-    let bb      = match (p.byte.as_deref(), p.bit.as_deref()) {
+    let metric = p.metric.as_deref().unwrap_or("");
+    let expr = p.expr.as_deref().unwrap_or("?");
+    let bb = match (p.byte.as_deref(), p.bit.as_deref()) {
         (Some(b), Some(bt)) => format!("byte={b} bit={bt}"),
         _ => "—".into(),
     };
@@ -1329,11 +1554,11 @@ fn print_log_parameter(doc: &LoggerDocument, p: &LogParameter) {
 
 #[cfg(feature = "kernel-upload")]
 fn dump_rom_kernel_cmd(
-    output:     &PathBuf,
-    mcu:        &str,
-    start:      &str,
-    length:     usize,
-    timeout:    Duration,
+    output: &PathBuf,
+    mcu: &str,
+    start: &str,
+    length: usize,
+    timeout: Duration,
 ) -> Result<()> {
     use romraider_kernel::{dump_rom_via_kernel, KernelDumpConfig, McuFamily};
 
@@ -1356,10 +1581,10 @@ fn dump_rom_kernel_cmd(
     // всё в таком случае.
     let mut tr = open_tactrix()?;
     let cfg = KernelDumpConfig {
-        mcu:        mcu_family,
+        mcu: mcu_family,
         start_addr,
-        length:     length_val,
-        fast_baud:  None, // TODO: после Tactrix baud-switch API
+        length: length_val,
+        fast_baud: None, // TODO: после Tactrix baud-switch API
         timeout,
     };
     eprintln!(
@@ -1375,8 +1600,8 @@ fn dump_rom_kernel_cmd(
         let percent = (done as i64 * 100 / total.max(1) as i64) as i32;
         if percent != last_percent {
             let elapsed = started.elapsed().as_secs_f64();
-            let rate    = done as f64 / elapsed.max(1e-6);
-            let eta_s   = (total - done) as f64 / rate.max(1.0);
+            let rate = done as f64 / elapsed.max(1e-6);
+            let eta_s = (total - done) as f64 / rate.max(1.0);
             eprintln!(
                 "  {}/{} ({percent}%)  {rate:.0} B/s  ETA {:.0}s",
                 done, total, eta_s,
@@ -1388,17 +1613,19 @@ fn dump_rom_kernel_cmd(
     std::fs::write(output, &bytes).with_context(|| format!("writing {}", output.display()))?;
     eprintln!(
         "Done in {:.1}s. {} bytes written to {}",
-        started.elapsed().as_secs_f64(), bytes.len(), output.display()
+        started.elapsed().as_secs_f64(),
+        bytes.len(),
+        output.display()
     );
     Ok(())
 }
 
 fn peek_rom_cmd(
-    start:     &str,
-    count:     usize,
-    timeout:   Duration,
+    start: &str,
+    count: usize,
+    timeout: Duration,
     skip_init: bool,
-    gap_ms:    u64,
+    gap_ms: u64,
 ) -> Result<()> {
     if !(1..=255).contains(&count) {
         anyhow::bail!("--count must be 1..=255 (limit of single SSM2 ReadAddresses)");
@@ -1429,8 +1656,8 @@ fn peek_rom_cmd(
         "Reading {} bytes from 0x{:06X} via SSM2 ReadAddresses (0xA8)…",
         count, start_addr,
     );
-    let bytes = ssm::read_addresses(&mut tr, &addresses, 0x00, timeout)
-        .context("ReadAddresses failed")?;
+    let bytes =
+        ssm::read_addresses(&mut tr, &addresses, 0x00, timeout).context("ReadAddresses failed")?;
 
     eprintln!("\nResult:");
     for (i, chunk) in bytes.chunks(16).enumerate() {
@@ -1442,7 +1669,13 @@ fn peek_rom_cmd(
             .join(" ");
         let ascii: String = chunk
             .iter()
-            .map(|&b| if (0x20..0x7F).contains(&b) { b as char } else { '.' })
+            .map(|&b| {
+                if (0x20..0x7F).contains(&b) {
+                    b as char
+                } else {
+                    '.'
+                }
+            })
             .collect();
         println!("0x{offset:06X}  {hex:<48}  {ascii}");
     }
@@ -1459,16 +1692,16 @@ fn peek_rom_cmd(
 }
 
 /// Стандартные OBD-II 11-bit CAN-ID для «engine ECU» (ECU 1).
-const OBD2_ECU_REQUEST_ID:  u32 = 0x7E0;
+const OBD2_ECU_REQUEST_ID: u32 = 0x7E0;
 const OBD2_ECU_RESPONSE_ID: u32 = 0x7E8;
 
 #[cfg(feature = "kernel-upload")]
 fn dump_rom_can_cmd(
-    output:     &PathBuf,
-    start:      &str,
-    length:     usize,
+    output: &PathBuf,
+    start: &str,
+    length: usize,
     chunk_size: u16,
-    timeout:    Duration,
+    timeout: Duration,
 ) -> Result<()> {
     use romraider_kernel::{
         can_upload::{self, CAN_KERNEL_V107_ENCRYPTED},
@@ -1521,18 +1754,25 @@ fn dump_rom_can_cmd(
     // (Из defaultSession 10 02 отвергался, но после SecurityAccess принимается.)
     let resp = uds_request(&mut tr, &[0x10, 0x02], timeout)?;
     if resp.first() != Some(&0x50) || resp.get(1) != Some(&0x02) {
-        anyhow::bail!("SID 10 02 (ProgrammingSession) failed: {}", bytes::hex_dump(&resp));
+        anyhow::bail!(
+            "SID 10 02 (ProgrammingSession) failed: {}",
+            bytes::hex_dump(&resp)
+        );
     }
     eprintln!("  ✅ ProgrammingSession active (50 02)");
 
     eprintln!("\n=== Phase C: Kernel upload (8192 bytes encrypted, 64 chunks) ===");
     let kernel = CAN_KERNEL_V107_ENCRYPTED;
-    eprintln!("  Using bundled OpenECU CAN Kernel V1.07 ({} bytes encrypted)", kernel.len());
+    eprintln!(
+        "  Using bundled OpenECU CAN Kernel V1.07 ({} bytes encrypted)",
+        kernel.len()
+    );
     let started_upload = std::time::Instant::now();
-    can_upload::upload_and_jump(&mut tr, kernel, timeout)
-        .context("kernel upload failed")?;
-    eprintln!("  ✅ Kernel uploaded + jumped in {:.2}s",
-        started_upload.elapsed().as_secs_f64());
+    can_upload::upload_and_jump(&mut tr, kernel, timeout).context("kernel upload failed")?;
+    eprintln!(
+        "  ✅ Kernel uploaded + jumped in {:.2}s",
+        started_upload.elapsed().as_secs_f64()
+    );
 
     eprintln!("\n=== Phase D: Kernel handshake ===");
     let banner = can_wire::handshake(&mut tr, timeout)
@@ -1580,11 +1820,7 @@ fn dump_rom_can_cmd(
 
 /// Хелпер: отправить UDS-команду по CAN и получить response (без CAN_ID prefix).
 #[cfg(feature = "kernel-upload")]
-fn uds_request(
-    tr:      &mut TactrixTransport,
-    uds_tx:  &[u8],
-    timeout: Duration,
-) -> Result<Vec<u8>> {
+fn uds_request(tr: &mut TactrixTransport, uds_tx: &[u8], timeout: Duration) -> Result<Vec<u8>> {
     let mut tx = Vec::with_capacity(4 + uds_tx.len());
     tx.extend_from_slice(&OBD2_ECU_REQUEST_ID.to_be_bytes());
     tx.extend_from_slice(uds_tx);
@@ -1634,7 +1870,11 @@ fn peek_seed_cmd(send_key: bool, timeout: Duration) -> Result<()> {
 
     eprintln!("\n→ Wake-up: OBD-II Mode 09 PID 02 (VIN)…");
     let resp = uds_request(&mut tr, &[0x09, 0x02], timeout)?;
-    eprintln!("  RX UDS ({} bytes): {}", resp.len(), bytes::hex_dump(&resp));
+    eprintln!(
+        "  RX UDS ({} bytes): {}",
+        resp.len(),
+        bytes::hex_dump(&resp)
+    );
 
     eprintln!("\n→ Wake-up: OBD-II Mode 09 PID 06 (CVN)…");
     let resp = uds_request(&mut tr, &[0x09, 0x06], timeout)?;
@@ -1644,10 +1884,16 @@ fn peek_seed_cmd(send_key: bool, timeout: Duration) -> Result<()> {
     let resp = uds_request(&mut tr, &[0x10, 0x03], timeout)?;
     eprintln!("  RX UDS: {}", bytes::hex_dump(&resp));
     if resp.first() == Some(&0x7F) {
-        anyhow::bail!("Negative response on StartSession: {}", bytes::hex_dump(&resp));
+        anyhow::bail!(
+            "Negative response on StartSession: {}",
+            bytes::hex_dump(&resp)
+        );
     }
     if resp.first() != Some(&0x50) {
-        anyhow::bail!("Unexpected response (expected 0x50): {}", bytes::hex_dump(&resp));
+        anyhow::bail!(
+            "Unexpected response (expected 0x50): {}",
+            bytes::hex_dump(&resp)
+        );
     }
     eprintln!("  ✅ Extended diagnostic session active");
 
@@ -1658,23 +1904,30 @@ fn peek_seed_cmd(send_key: bool, timeout: Duration) -> Result<()> {
         anyhow::bail!("Bad RequestSeed response: {}", bytes::hex_dump(&resp));
     }
     let seed: [u8; 4] = [resp[2], resp[3], resp[4], resp[5]];
-    eprintln!("\n  Seed: {:02X} {:02X} {:02X} {:02X}", seed[0], seed[1], seed[2], seed[3]);
+    eprintln!(
+        "\n  Seed: {:02X} {:02X} {:02X} {:02X}",
+        seed[0], seed[1], seed[2], seed[3]
+    );
 
     // Сравнение с captured pair из EcuFlash session.
     const CAPTURED_SEED: [u8; 4] = [0xDD, 0xEE, 0xAB, 0x05];
-    const CAPTURED_KEY:  [u8; 4] = [0x74, 0x15, 0x7C, 0x7D];
+    const CAPTURED_KEY: [u8; 4] = [0x74, 0x15, 0x7C, 0x7D];
     if seed == CAPTURED_SEED {
         eprintln!("  📌 Seed совпадает с captured value (deterministic) →");
-        eprintln!("     captured key `{:02X?}` должен сработать для replay-attack",
-            CAPTURED_KEY);
+        eprintln!(
+            "     captured key `{:02X?}` должен сработать для replay-attack",
+            CAPTURED_KEY
+        );
     } else {
-        eprintln!("  ⚠️  Seed отличается от captured `{:02X?}` → seed dynamic,",
-            CAPTURED_SEED);
+        eprintln!(
+            "  ⚠️  Seed отличается от captured `{:02X?}` → seed dynamic,",
+            CAPTURED_SEED
+        );
         eprintln!("     replay-attack невозможен, нужен real algorithm");
     }
 
     let computed_key_kline = subaru_genkey(seed);
-    let computed_key       = subaru_genkey_can(seed);
+    let computed_key = subaru_genkey_can(seed);
     eprintln!(
         "\n  K-Line genkey (probably wrong for CAN): {:02X?}",
         computed_key_kline,
@@ -1703,10 +1956,15 @@ fn peek_seed_cmd(send_key: bool, timeout: Duration) -> Result<()> {
     eprintln!("  RX UDS: {}", bytes::hex_dump(&resp));
     match resp.as_slice() {
         [0x67, 0x02, ..] => {
-            eprintln!("  ✅✅✅ KEY ПРИНЯТ! Algorithm совпадает с CAN-side. Mac-native dump unlocked!");
+            eprintln!(
+                "  ✅✅✅ KEY ПРИНЯТ! Algorithm совпадает с CAN-side. Mac-native dump unlocked!"
+            );
         }
         [0x7F, 0x27, nrc, ..] => {
-            eprintln!("  ❌ ECU отверг key (NRC 0x{:02X}). Algorithm не тот, нужен RE.", nrc);
+            eprintln!(
+                "  ❌ ECU отверг key (NRC 0x{:02X}). Algorithm не тот, нужен RE.",
+                nrc
+            );
         }
         _ => {
             eprintln!("  ❓ Неожиданный response");
@@ -1717,12 +1975,7 @@ fn peek_seed_cmd(send_key: bool, timeout: Duration) -> Result<()> {
 
 /// Quick OBD-II Mode 09 query через ISO15765/CAN. Поддерживает Mode 09 PID 02
 /// (VIN), PID 06 (CVN), и т.п. — общая логика wire-protocol-а.
-fn peek_obd_cmd(
-    mode:    u8,
-    pid:     u8,
-    label:   &str,
-    timeout: Duration,
-) -> Result<()> {
+fn peek_obd_cmd(mode: u8, pid: u8, label: &str, timeout: Duration) -> Result<()> {
     let cfg = TactrixConfig::iso15765_500k();
     eprintln!(
         "Opening Tactrix Openport (VID={:#06X} PID={:#06X}, ISO15765 @ {} baud)…",
@@ -1751,7 +2004,9 @@ fn peek_obd_cmd(
 
     // Прочитать ответ. Tactrix вернёт single-frame с весь UDS-payload в RxEnd.
     let mut buf = [0u8; 64];
-    let n = tr.read_frame(&mut buf, timeout).context("CAN read_frame failed")?;
+    let n = tr
+        .read_frame(&mut buf, timeout)
+        .context("CAN read_frame failed")?;
     let raw = &buf[..n];
     eprintln!("\nRaw response ({n} bytes):");
     eprintln!("  {}", bytes::hex_dump(raw));
@@ -1779,28 +2034,29 @@ fn peek_obd_cmd(
     eprintln!("  {label}: {}", bytes::hex_dump(payload));
     let as_ascii: String = payload
         .iter()
-        .map(|&b| if (0x20..0x7F).contains(&b) { b as char } else { '.' })
+        .map(|&b| {
+            if (0x20..0x7F).contains(&b) {
+                b as char
+            } else {
+                '.'
+            }
+        })
         .collect();
     eprintln!("  ASCII: {as_ascii}");
     Ok(())
 }
 
 fn print_rom_summary(idx: usize, rom: &RomDefinition) {
-    let id        = rom.romid.as_ref();
-    let xml_id    = id.and_then(|r| r.xml_id.as_deref()).unwrap_or("?");
-    let ecu_id    = id.and_then(|r| r.ecu_id.as_deref()).unwrap_or("-");
-    let make      = id.and_then(|r| r.make.as_deref()).unwrap_or("-");
-    let model     = id.and_then(|r| r.model.as_deref()).unwrap_or("-");
-    let submodel  = id.and_then(|r| r.submodel.as_deref()).unwrap_or("-");
-    let base      = rom.base.as_deref().unwrap_or("(none)");
-    let n_tables  = rom.tables.len();
-    let n_nested  = rom.tables.iter().map(|t| t.nested.len()).sum::<usize>();
+    let id = rom.romid.as_ref();
+    let xml_id = id.and_then(|r| r.xml_id.as_deref()).unwrap_or("?");
+    let ecu_id = id.and_then(|r| r.ecu_id.as_deref()).unwrap_or("-");
+    let make = id.and_then(|r| r.make.as_deref()).unwrap_or("-");
+    let model = id.and_then(|r| r.model.as_deref()).unwrap_or("-");
+    let submodel = id.and_then(|r| r.submodel.as_deref()).unwrap_or("-");
+    let base = rom.base.as_deref().unwrap_or("(none)");
+    let n_tables = rom.tables.len();
+    let n_nested = rom.tables.iter().map(|t| t.nested.len()).sum::<usize>();
 
-    println!(
-        "  [{idx}] xmlid={xml_id:<14} ecuid={ecu_id:<12} {make} {model} {submodel}"
-    );
-    println!(
-        "      base={base:<14} tables={n_tables} (nested axes/inner tables: {n_nested})"
-    );
+    println!("  [{idx}] xmlid={xml_id:<14} ecuid={ecu_id:<12} {make} {model} {submodel}");
+    println!("      base={base:<14} tables={n_tables} (nested axes/inner tables: {n_nested})");
 }
-

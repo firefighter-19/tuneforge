@@ -301,20 +301,23 @@ mod tests {
     use super::*;
 
     fn state(data: &str) -> SwitchState {
-        SwitchState { name: "x".into(), data: data.into() }
+        SwitchState {
+            name: "x".into(),
+            data: data.into(),
+        }
     }
 
     #[test]
     fn parses_single_byte() {
-        assert_eq!(state("01").data_bytes().unwrap(),  vec![0x01]);
-        assert_eq!(state("ff").data_bytes().unwrap(),  vec![0xFF]);
+        assert_eq!(state("01").data_bytes().unwrap(), vec![0x01]);
+        assert_eq!(state("ff").data_bytes().unwrap(), vec![0xFF]);
         assert_eq!(state("0x42").data_bytes().unwrap(), vec![0x42]);
     }
 
     #[test]
     fn parses_multibyte_no_separator() {
         assert_eq!(state("17 25").data_bytes().unwrap(), vec![0x17, 0x25]);
-        assert_eq!(state("1725").data_bytes().unwrap(),  vec![0x17, 0x25]);
+        assert_eq!(state("1725").data_bytes().unwrap(), vec![0x17, 0x25]);
     }
 
     #[test]
@@ -324,7 +327,7 @@ mod tests {
         let data = "00 00 00 00 00 00 00 00 5A A5 A5 5A";
         assert_eq!(
             state(data).data_bytes().unwrap(),
-            vec![0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x5A,0xA5,0xA5,0x5A],
+            vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x5A, 0xA5, 0xA5, 0x5A],
         );
     }
 

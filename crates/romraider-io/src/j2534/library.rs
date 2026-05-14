@@ -11,9 +11,9 @@ use crate::error::{IoError, IoResult};
 /// Хранит и `DynLib`, и заполненный `vtable`. Объекты `Device` держат
 /// `Arc<Library>` — пока живо хоть одно устройство, библиотека не выгружается.
 pub struct Library {
-    _lib:   DynLib,                 // должна жить дольше vtable
+    _lib: DynLib, // должна жить дольше vtable
     vtable: PassThruVtable,
-    path:   String,
+    path: String,
 }
 
 impl Library {
@@ -36,18 +36,22 @@ impl Library {
         // SAFETY: сигнатуры взяты из J2534-1 v04.04. См. api.rs.
         let vtable = unsafe {
             PassThruVtable {
-                PassThruOpen:           *lookup(&lib, b"PassThruOpen\0")?,
-                PassThruClose:          *lookup(&lib, b"PassThruClose\0")?,
-                PassThruConnect:        *lookup(&lib, b"PassThruConnect\0")?,
-                PassThruDisconnect:     *lookup(&lib, b"PassThruDisconnect\0")?,
-                PassThruReadMsgs:       *lookup(&lib, b"PassThruReadMsgs\0")?,
-                PassThruWriteMsgs:      *lookup(&lib, b"PassThruWriteMsgs\0")?,
-                PassThruIoctl:          *lookup(&lib, b"PassThruIoctl\0")?,
-                PassThruGetLastError:   *lookup(&lib, b"PassThruGetLastError\0")?,
+                PassThruOpen: *lookup(&lib, b"PassThruOpen\0")?,
+                PassThruClose: *lookup(&lib, b"PassThruClose\0")?,
+                PassThruConnect: *lookup(&lib, b"PassThruConnect\0")?,
+                PassThruDisconnect: *lookup(&lib, b"PassThruDisconnect\0")?,
+                PassThruReadMsgs: *lookup(&lib, b"PassThruReadMsgs\0")?,
+                PassThruWriteMsgs: *lookup(&lib, b"PassThruWriteMsgs\0")?,
+                PassThruIoctl: *lookup(&lib, b"PassThruIoctl\0")?,
+                PassThruGetLastError: *lookup(&lib, b"PassThruGetLastError\0")?,
             }
         };
 
-        Ok(Arc::new(Self { _lib: lib, vtable, path: path_str }))
+        Ok(Arc::new(Self {
+            _lib: lib,
+            vtable,
+            path: path_str,
+        }))
     }
 
     #[must_use]
@@ -64,9 +68,10 @@ impl Library {
 unsafe fn lookup<'lib, T>(lib: &'lib DynLib, name: &[u8]) -> IoResult<Symbol<'lib, T>> {
     // SAFETY: вызывающий гарантирует корректный type-erased сигнатурный тип T.
     unsafe {
-        lib.get::<T>(name).map_err(|source| IoError::J2534LoadFailed {
-            path: String::from_utf8_lossy(&name[..name.len() - 1]).into_owned(),
-            source,
-        })
+        lib.get::<T>(name)
+            .map_err(|source| IoError::J2534LoadFailed {
+                path: String::from_utf8_lossy(&name[..name.len() - 1]).into_owned(),
+                source,
+            })
     }
 }

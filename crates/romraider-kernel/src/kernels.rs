@@ -32,7 +32,7 @@ impl McuFamily {
     /// Полный размер ROM (для default `length` в [`crate::KernelDumpConfig`]).
     pub const fn rom_size(self) -> usize {
         match self {
-            Self::Sh7055 => 512  * 1024,
+            Self::Sh7055 => 512 * 1024,
             Self::Sh7058 => 1024 * 1024,
         }
     }
@@ -41,8 +41,8 @@ impl McuFamily {
 /// Прикомпилированный kernel-binary с метаданными для конкретной MCU-семьи.
 #[derive(Debug, Clone, Copy)]
 pub struct KernelBinary {
-    pub mcu:        McuFamily,
-    pub bytes:      &'static [u8],
+    pub mcu: McuFamily,
+    pub bytes: &'static [u8],
     /// Имя/версия бинаря (для логов: `"ssmk_SH7058_18"`).
     pub identifier: &'static str,
 }
@@ -52,15 +52,15 @@ pub struct KernelBinary {
 
 #[cfg(feature = "sh7058")]
 pub const KERNEL_SH7058: KernelBinary = KernelBinary {
-    mcu:        McuFamily::Sh7058,
-    bytes:      include_bytes!("../kernels/ssmk_SH7058.bin"),
+    mcu: McuFamily::Sh7058,
+    bytes: include_bytes!("../kernels/ssmk_SH7058.bin"),
     identifier: "ssmk_SH7058 (npkern, GPL-3.0)",
 };
 
 #[cfg(feature = "sh7055")]
 pub const KERNEL_SH7055: KernelBinary = KernelBinary {
-    mcu:        McuFamily::Sh7055,
-    bytes:      include_bytes!("../kernels/ssmk_SH7055.bin"),
+    mcu: McuFamily::Sh7055,
+    bytes: include_bytes!("../kernels/ssmk_SH7055.bin"),
     identifier: "ssmk_SH7055 (npkern, GPL-3.0)",
 };
 
@@ -86,8 +86,7 @@ mod tests {
         // npkern linker script `lkr_subaru_7058.ld` отводит 36K (0xFFFF3000..0xFFFF5000+).
         // Текущий precompiled = 3516 байт; sanity-границы по правилам npkern.
         assert!(
-            !KERNEL_SH7058.bytes.is_empty()
-                && KERNEL_SH7058.bytes.len() <= 8 * 1024,
+            !KERNEL_SH7058.bytes.is_empty() && KERNEL_SH7058.bytes.len() <= 8 * 1024,
             "SH7058 kernel binary size out of range: {} bytes",
             KERNEL_SH7058.bytes.len(),
         );

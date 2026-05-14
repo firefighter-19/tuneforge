@@ -9,15 +9,22 @@ use crate::image::RomImage;
 #[derive(Debug, Clone)]
 pub struct Table<'def> {
     pub definition: &'def TableDef,
-    pub address:    Address,
-    pub values:     TableValues,
+    pub address: Address,
+    pub values: TableValues,
 }
 
 #[derive(Debug, Clone)]
 pub enum TableValues {
     OneD(Vec<f64>),
-    TwoD { x: Vec<f64>, data: Vec<f64> },
-    ThreeD { x: Vec<f64>, y: Vec<f64>, data: Vec<f64> },
+    TwoD {
+        x: Vec<f64>,
+        data: Vec<f64>,
+    },
+    ThreeD {
+        x: Vec<f64>,
+        y: Vec<f64>,
+        data: Vec<f64>,
+    },
     Constant(f64),
     Switch(Vec<u8>),
 }

@@ -9,8 +9,7 @@ use crate::error::{IoError, IoResult};
 use crate::transport::Transport;
 
 use super::protocol::{
-    parse_frame, PacketKind, ParseError, TactrixFrame,
-    PROTO_CAN, PROTO_ISO9141, PROTO_ISO15765,
+    parse_frame, PacketKind, ParseError, TactrixFrame, PROTO_CAN, PROTO_ISO15765, PROTO_ISO9141,
 };
 
 /// Стандартный VID Tactrix (унаследован от FTDI).
@@ -20,15 +19,15 @@ pub const TACTRIX_OP2_PID: u16 = 0xCC4D;
 
 #[derive(Debug, Clone)]
 pub struct TactrixConfig {
-    pub vid:           u16,
-    pub pid:           u16,
+    pub vid: u16,
+    pub pid: u16,
     /// Протокол для `ato`: `0x33` ISO9141, `0x34` ISO14230, `0x35` CAN, `0x36` ISO15765.
-    pub protocol:      u8,
+    pub protocol: u8,
     /// Connect flags для `ato` (J2534 PassThruConnect flags). Для SSM K-line —
     /// `ISO9141_NO_CHECKSUM = 0x200`, т.к. SSM-фрейм сам содержит modular-checksum
     /// в последнем байте и не должен «дважды чекcумиться» драйвером Tactrix.
-    pub flags:         u32,
-    pub baud:          u32,
+    pub flags: u32,
+    pub baud: u32,
     /// Таймаут на handshake-команды при `open`.
     pub claim_timeout: Duration,
 }
@@ -36,16 +35,16 @@ pub struct TactrixConfig {
 impl Default for TactrixConfig {
     fn default() -> Self {
         Self {
-            vid:           TACTRIX_VID,
-            pid:           TACTRIX_OP2_PID,
+            vid: TACTRIX_VID,
+            pid: TACTRIX_OP2_PID,
             // RomRaider Java также подключается к Subaru SSM как ISO9141 + NO_CHECKSUM:
             // J2534ConnectionISO9141.java → `api.connect(deviceId,
             // Flag.ISO9141_NO_CHECKSUM.getValue(), connectionProperties.getBaudRate())`.
             // ISO14230 (KWP-2000) применяет жёсткий handshake/timing, который SSM
             // не использует — устройство «слышит» начало RX но не получает payload.
-            protocol:      PROTO_ISO9141,
-            flags:         0x0000_0200, // ISO9141_NO_CHECKSUM
-            baud:          4800,
+            protocol: PROTO_ISO9141,
+            flags: 0x0000_0200, // ISO9141_NO_CHECKSUM
+            baud: 4800,
             claim_timeout: Duration::from_secs(2),
         }
     }
@@ -60,29 +59,29 @@ impl TactrixConfig {
     #[must_use]
     pub fn iso15765_500k() -> Self {
         Self {
-            vid:           TACTRIX_VID,
-            pid:           TACTRIX_OP2_PID,
-            protocol:      PROTO_ISO15765,
-            flags:         0,           // proprietary `1749696844` от EcuFlash — Tactrix-session-nonce,
-                                        // dschultzca/j2534 use 0; mы тоже.
-            baud:          500_000,
+            vid: TACTRIX_VID,
+            pid: TACTRIX_OP2_PID,
+            protocol: PROTO_ISO15765,
+            flags: 0, // proprietary `1749696844` от EcuFlash — Tactrix-session-nonce,
+            // dschultzca/j2534 use 0; mы тоже.
+            baud: 500_000,
             claim_timeout: Duration::from_secs(2),
         }
     }
 }
 
 pub struct TactrixTransport {
-    handle:  DeviceHandle<GlobalContext>,
-    ep_in:   u8,
-    ep_out:  u8,
+    handle: DeviceHandle<GlobalContext>,
+    ep_in: u8,
+    ep_out: u8,
     channel: u8,
-    desc:    String,
+    desc: String,
     /// Буфер сырых USB-байт между bulk-read-вызовами (фрейм может прийти кусками).
-    rx_buf:  Vec<u8>,
+    rx_buf: Vec<u8>,
     /// Текущая конфигурация (protocol, flags, baud, timeout). Хранится для
     /// [`Self::reset_channel`] и [`Self::set_baud`] — оба пересоздают K-Line
     /// channel и нуждаются в актуальных protocol/flags.
-    cfg:     TactrixConfig,
+    cfg: TactrixConfig,
 }
 
 impl TactrixTransport {
@@ -91,8 +90,11 @@ impl TactrixTransport {
     /// На macOS дополнительной настройки не требуется (libusb через IOKit).
     /// На Linux может понадобиться udev-rule для прав, либо запуск из-под root.
     pub fn open(cfg: &TactrixConfig) -> IoResult<Self> {
-        let mut handle = rusb::open_device_with_vid_pid(cfg.vid, cfg.pid)
-            .ok_or(IoError::TactrixNotFound { vid: cfg.vid, pid: cfg.pid })?;
+        let mut handle =
+            rusb::open_device_with_vid_pid(cfg.vid, cfg.pid).ok_or(IoError::TactrixNotFound {
+                vid: cfg.vid,
+                pid: cfg.pid,
+            })?;
 
         // libusb может конкурировать за устройство с kernel-driver-ом —
         // на macOS Apple-class-driver моментально захватывает интерфейс,
@@ -107,7 +109,10 @@ impl TactrixTransport {
         // enumeration конфигурация должна быть выбрана, но macOS оставляет
         // это на хост-приложение в некоторых случаях.
         if let Err(e) = handle.set_active_configuration(1) {
-            tracing::debug!(?e, "set_active_configuration(1) — может быть уже active, игнорируем");
+            tracing::debug!(
+                ?e,
+                "set_active_configuration(1) — может быть уже active, игнорируем"
+            );
         } else {
             tracing::debug!("set_active_configuration(1) ok");
         }
@@ -140,9 +145,12 @@ impl TactrixTransport {
             ep_in,
             ep_out,
             channel: 0,
-            desc:    format!("Tactrix Openport (VID={:#06X} PID={:#06X})", cfg.vid, cfg.pid),
-            rx_buf:  Vec::with_capacity(2048),
-            cfg:     cfg.clone(),
+            desc: format!(
+                "Tactrix Openport (VID={:#06X} PID={:#06X})",
+                cfg.vid, cfg.pid
+            ),
+            rx_buf: Vec::with_capacity(2048),
+            cfg: cfg.clone(),
         };
 
         // Идентификация. Tactrix может вернуть несколько фреймов (ari + are),
@@ -170,7 +178,10 @@ impl TactrixTransport {
         // идентификатора канала используется сам protocol-id (см. dschultzca/j2534
         // `*pChannelID = protocolID;`). `aro` без digit — нормальный ack.
         t.channel = proto_id;
-        tracing::debug!(channel = t.channel, "Tactrix channel opened (channel == protocol_id)");
+        tracing::debug!(
+            channel = t.channel,
+            "Tactrix channel opened (channel == protocol_id)"
+        );
 
         // Фильтр для K-line: PASS-all (mask=00, pattern=00). Без фильтра Tactrix
         // молча выкидывает входящие пакеты. Для **CAN/ISO15765** PASS-all НЕ
@@ -187,7 +198,9 @@ impl TactrixTransport {
             let filter_id = t.wait_for_filter_ack(cfg.claim_timeout)?;
             tracing::debug!(filter_id, "K-line filter installed");
         } else {
-            tracing::debug!("CAN-mode: skipping K-line PASS-filter; call set_can_flow_control_filter() next");
+            tracing::debug!(
+                "CAN-mode: skipping K-line PASS-filter; call set_can_flow_control_filter() next"
+            );
         }
 
         Ok(t)
@@ -203,11 +216,7 @@ impl TactrixTransport {
     /// где `3` = FLOW_CONTROL_FILTER, `64` = `TxFlags=ISO15765_FRAME_PAD`, `4` = data_size.
     /// Mask/Pattern фильтруют incoming CAN frames; Flow Control задаёт TX CAN-ID для
     /// outgoing Flow Control frames (требуется ISO-TP spec).
-    pub fn set_can_flow_control_filter(
-        &mut self,
-        rx_id: u32,
-        tx_id: u32,
-    ) -> IoResult<u32> {
+    pub fn set_can_flow_control_filter(&mut self, rx_id: u32, tx_id: u32) -> IoResult<u32> {
         const FILTER_TYPE_FLOW_CONTROL: u8 = 3;
         const TX_FLAG_ISO15765_FRAME_PAD: u8 = 64;
         const ADDR_BYTES: usize = 4;
@@ -261,7 +270,11 @@ impl TactrixTransport {
         atf.extend_from_slice(&[0x00, 0x00]);
         self.send(&atf, timeout)?;
         let _ = self.wait_for_filter_ack(timeout)?;
-        tracing::debug!(channel = self.channel, baud = self.cfg.baud, "Tactrix K-Line channel reset");
+        tracing::debug!(
+            channel = self.channel,
+            baud = self.cfg.baud,
+            "Tactrix K-Line channel reset"
+        );
         Ok(())
     }
 
@@ -453,10 +466,17 @@ impl Transport for TactrixTransport {
                 return Err(IoError::ReadTimeout(timeout));
             }
             match self.read_one_frame(remaining)? {
-                TactrixFrame::Data { kind: PacketKind::NormalStart, .. } => {
+                TactrixFrame::Data {
+                    kind: PacketKind::NormalStart,
+                    ..
+                } => {
                     tracing::trace!("RX message start");
                 }
-                TactrixFrame::Data { kind: PacketKind::Normal, payload, .. } => {
+                TactrixFrame::Data {
+                    kind: PacketKind::Normal,
+                    payload,
+                    ..
+                } => {
                     let data: &[u8] = if is_can && got_first_data && payload.len() >= 4 {
                         &payload[4..]
                     } else {
@@ -486,7 +506,10 @@ impl Transport for TactrixTransport {
                     tracing::trace!(total = acc.len(), "RX message end");
                     break;
                 }
-                TactrixFrame::Data { kind: PacketKind::TxDone, .. } => {
+                TactrixFrame::Data {
+                    kind: PacketKind::TxDone,
+                    ..
+                } => {
                     tracing::trace!("TX_DONE indication (CAN-mode), continuing read");
                 }
                 TactrixFrame::Data { kind, .. } => {
@@ -512,7 +535,10 @@ impl Transport for TactrixTransport {
         let mut tmp = [0u8; 512];
         // Сливаем всё, что висит в kernel-buf.
         loop {
-            match self.handle.read_bulk(self.ep_in, &mut tmp, Duration::from_millis(20)) {
+            match self
+                .handle
+                .read_bulk(self.ep_in, &mut tmp, Duration::from_millis(20))
+            {
                 Ok(0) | Err(_) => break,
                 Ok(_) => continue,
             }
@@ -563,9 +589,9 @@ impl Drop for TactrixTransport {
 fn find_bulk_endpoints(device: &Device<GlobalContext>) -> IoResult<(u8, u8)> {
     let cfg = device.active_config_descriptor().map_err(usb_err)?;
     tracing::debug!(
-        cfg_value      = cfg.number(),
+        cfg_value = cfg.number(),
         num_interfaces = cfg.num_interfaces(),
-        max_power_ma   = cfg.max_power(),
+        max_power_ma = cfg.max_power(),
         "active config descriptor",
     );
     let mut found: Option<(u8, u8)> = None;
@@ -573,14 +599,14 @@ fn find_bulk_endpoints(device: &Device<GlobalContext>) -> IoResult<(u8, u8)> {
         for descr in iface.descriptors() {
             tracing::debug!(
                 iface = descr.interface_number(),
-                alt   = descr.setting_number(),
+                alt = descr.setting_number(),
                 class = format_args!("{:#04X}", descr.class_code()),
-                sub   = format_args!("{:#04X}", descr.sub_class_code()),
+                sub = format_args!("{:#04X}", descr.sub_class_code()),
                 proto = format_args!("{:#04X}", descr.protocol_code()),
                 num_eps = descr.num_endpoints(),
                 "interface descriptor",
             );
-            let mut in_ep  = None;
+            let mut in_ep = None;
             let mut out_ep = None;
             for ep in descr.endpoint_descriptors() {
                 tracing::debug!(
@@ -592,7 +618,7 @@ fn find_bulk_endpoints(device: &Device<GlobalContext>) -> IoResult<(u8, u8)> {
                 );
                 if ep.transfer_type() == rusb::TransferType::Bulk {
                     match ep.direction() {
-                        rusb::Direction::In  => in_ep  = Some(ep.address()),
+                        rusb::Direction::In => in_ep = Some(ep.address()),
                         rusb::Direction::Out => out_ep = Some(ep.address()),
                     }
                 }
@@ -627,6 +653,12 @@ fn hex_dump(b: &[u8]) -> String {
 
 fn ascii_dump(b: &[u8]) -> String {
     b.iter()
-        .map(|&c| if (0x20..0x7f).contains(&c) { c as char } else { '.' })
+        .map(|&c| {
+            if (0x20..0x7f).contains(&c) {
+                c as char
+            } else {
+                '.'
+            }
+        })
         .collect()
 }

@@ -58,16 +58,16 @@ impl ResolvedScaling {
         // Sanity-проверка: формула не падает при подстановке известного x.
         // (Если падает — это валидная ошибка определения, но мы хотим её сейчас.)
         eval(&to_real_expr, 0.0).map_err(|m| DefError::InvalidScaling {
-            expr:    expr_str.to_string(),
+            expr: expr_str.to_string(),
             message: m,
         })?;
         eval(&to_byte_expr, 0.0).map_err(|m| DefError::InvalidScaling {
-            expr:    to_byte_str.to_string(),
+            expr: to_byte_str.to_string(),
             message: m,
         })?;
 
         Ok(CompiledScaling {
-            source:       self.clone(),
+            source: self.clone(),
             to_real_expr,
             to_byte_expr,
         })
@@ -80,7 +80,7 @@ impl ResolvedScaling {
 /// пишут константы без ведущего нуля (`x*.001333224`), но meval парсит
 /// только канонические числа.
 fn normalize_decimal(s: &str) -> String {
-    let mut out  = String::with_capacity(s.len() + 4);
+    let mut out = String::with_capacity(s.len() + 4);
     let mut prev: Option<char> = None;
     let chars: Vec<char> = s.chars().collect();
     for (i, &c) in chars.iter().enumerate() {
@@ -102,7 +102,7 @@ fn parse(s: &str) -> DefResult<meval::Expr> {
     normalized
         .parse::<meval::Expr>()
         .map_err(|e| DefError::InvalidScaling {
-            expr:    s.to_string(),
+            expr: s.to_string(),
             message: e.to_string(),
         })
 }
@@ -142,16 +142,16 @@ mod tests {
 
     fn scaling(expression: &str, to_byte: &str) -> ResolvedScaling {
         ResolvedScaling {
-            name:             None,
-            category:         None,
-            units:            None,
-            expression:       Some(expression.into()),
-            to_byte:          Some(to_byte.into()),
-            format:           None,
-            fine_increment:   None,
+            name: None,
+            category: None,
+            units: None,
+            expression: Some(expression.into()),
+            to_byte: Some(to_byte.into()),
+            format: None,
+            fine_increment: None,
             coarse_increment: None,
-            min:              None,
-            max:              None,
+            min: None,
+            max: None,
         }
     }
 
@@ -166,8 +166,8 @@ mod tests {
     fn fahrenheit_celsius_round_trip() {
         // (x*1.8)+32 — F из C. Обратно: (x-32)/1.8.
         let c = scaling("(x*1.8)+32", "(x-32)/1.8").compile().unwrap();
-        let r = c.to_real(100.0);            // 100°C → 212°F
-        let b = c.to_byte(r);                // 212 → 100
+        let r = c.to_real(100.0); // 100°C → 212°F
+        let b = c.to_byte(r); // 212 → 100
         assert!((r - 212.0).abs() < 1e-9);
         assert!((b - 100.0).abs() < 1e-9);
     }
@@ -176,7 +176,7 @@ mod tests {
     fn boost_target_bar_absolute_round_trip() {
         // Из апстрим-фикстуры: BoostTarget_barabsolute.
         let c = scaling("x*.001333224", "x/.001333224").compile().unwrap();
-        let raw  = 1500.0_f64;
+        let raw = 1500.0_f64;
         let real = c.to_real(raw);
         let back = c.to_byte(real);
         assert!((real - 1500.0 * 0.001333224).abs() < 1e-9);
@@ -199,7 +199,9 @@ mod tests {
     #[test]
     fn psi_relative_sea_level_formula_works() {
         // (x-760)*.01933677 — давление относительно стандартной атмосферы.
-        let c = scaling("(x-760)*.01933677", "(x/.01933677)+760").compile().unwrap();
+        let c = scaling("(x-760)*.01933677", "(x/.01933677)+760")
+            .compile()
+            .unwrap();
         let real = c.to_real(800.0);
         assert!((real - ((800.0 - 760.0) * 0.01933677)).abs() < 1e-9);
     }
@@ -215,7 +217,10 @@ mod tests {
         let mut s = scaling("x", "x");
         s.expression = None;
         let err = s.compile().unwrap_err();
-        assert!(matches!(err, DefError::MissingRequiredField("scaling.expression")));
+        assert!(matches!(
+            err,
+            DefError::MissingRequiredField("scaling.expression")
+        ));
     }
 
     #[test]
@@ -224,9 +229,9 @@ mod tests {
         assert!((eval_log_expr(&e, 100.0) - 25.0).abs() < 1e-9);
 
         let e = compile_log_expr("([value]-128)*100/128").unwrap();
-        assert!((eval_log_expr(&e, 0.0)   - (-100.0)).abs() < 1e-9);
-        assert!((eval_log_expr(&e, 128.0) -    0.0  ).abs() < 1e-9);
-        assert!((eval_log_expr(&e, 256.0) -  100.0  ).abs() < 1e-9);
+        assert!((eval_log_expr(&e, 0.0) - (-100.0)).abs() < 1e-9);
+        assert!((eval_log_expr(&e, 128.0) - 0.0).abs() < 1e-9);
+        assert!((eval_log_expr(&e, 256.0) - 100.0).abs() < 1e-9);
     }
 
     #[test]
@@ -244,11 +249,11 @@ mod tests {
 
     #[test]
     fn normalize_decimal_inserts_leading_zero() {
-        assert_eq!(normalize_decimal("x*.84"),       "x*0.84");
-        assert_eq!(normalize_decimal(".84"),         "0.84");
-        assert_eq!(normalize_decimal("0.84"),        "0.84");      // не трогаем
-        assert_eq!(normalize_decimal("1.5+.5"),      "1.5+0.5");
-        assert_eq!(normalize_decimal("/-.0002"),     "/-0.0002");
-        assert_eq!(normalize_decimal("x"),           "x");
+        assert_eq!(normalize_decimal("x*.84"), "x*0.84");
+        assert_eq!(normalize_decimal(".84"), "0.84");
+        assert_eq!(normalize_decimal("0.84"), "0.84"); // не трогаем
+        assert_eq!(normalize_decimal("1.5+.5"), "1.5+0.5");
+        assert_eq!(normalize_decimal("/-.0002"), "/-0.0002");
+        assert_eq!(normalize_decimal("x"), "x");
     }
 }

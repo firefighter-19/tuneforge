@@ -33,15 +33,15 @@ impl FromStr for TableKind {
         // Java сравнивает type через `equalsIgnoreCase` (см. TableScaleUnmarshaller),
         // поэтому матчим case-insensitively на «Switch» / «BitwiseSwitch».
         match s {
-            "1D"            => Ok(Self::OneD),
-            "2D"            => Ok(Self::TwoD),
-            "3D"            => Ok(Self::ThreeD),
-            "X Axis"        => Ok(Self::XAxis),
-            "Y Axis"        => Ok(Self::YAxis),
+            "1D" => Ok(Self::OneD),
+            "2D" => Ok(Self::TwoD),
+            "3D" => Ok(Self::ThreeD),
+            "X Axis" => Ok(Self::XAxis),
+            "Y Axis" => Ok(Self::YAxis),
             "Static X Axis" => Ok(Self::StaticXAxis),
             "Static Y Axis" => Ok(Self::StaticYAxis),
             other => match other.to_ascii_lowercase().as_str() {
-                "switch"        => Ok(Self::Switch),
+                "switch" => Ok(Self::Switch),
                 "bitwiseswitch" => Ok(Self::BitwiseSwitch),
                 _ => Err(DefError::UnknownTableType(other.to_string())),
             },
@@ -79,26 +79,26 @@ impl FromStr for StorageType {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "uint8"  => Ok(Self::UInt8),
-            "int8"   => Ok(Self::Int8),
+            "uint8" => Ok(Self::UInt8),
+            "int8" => Ok(Self::Int8),
             "uint16" => Ok(Self::UInt16),
-            "int16"  => Ok(Self::Int16),
+            "int16" => Ok(Self::Int16),
             "uint32" => Ok(Self::UInt32),
-            "int32"  => Ok(Self::Int32),
-            "float"  => Ok(Self::Float),
-            "hex"    => Ok(Self::Hex),
-            "char"   => Ok(Self::Char),
-            other    => Err(DefError::UnknownStorageType(other.to_string())),
+            "int32" => Ok(Self::Int32),
+            "float" => Ok(Self::Float),
+            "hex" => Ok(Self::Hex),
+            "char" => Ok(Self::Char),
+            other => Err(DefError::UnknownStorageType(other.to_string())),
         }
     }
 }
 
 pub fn parse_endian(s: &str) -> Result<Endian, DefError> {
     match s {
-        "big"    => Ok(Endian::Big),
+        "big" => Ok(Endian::Big),
         "little" => Ok(Endian::Little),
-        other    => Err(DefError::UnknownEnumValue {
-            kind:  "endian",
+        other => Err(DefError::UnknownEnumValue {
+            kind: "endian",
             value: other.to_string(),
         }),
     }
@@ -110,7 +110,15 @@ mod tests {
 
     #[test]
     fn table_kind_round_trip() {
-        for s in ["1D", "2D", "3D", "X Axis", "Y Axis", "Static X Axis", "Static Y Axis"] {
+        for s in [
+            "1D",
+            "2D",
+            "3D",
+            "X Axis",
+            "Y Axis",
+            "Static X Axis",
+            "Static Y Axis",
+        ] {
             assert!(TableKind::from_str(s).is_ok(), "{s}");
         }
         assert!(TableKind::from_str("Schmaxis").is_err());
@@ -118,22 +126,28 @@ mod tests {
 
     #[test]
     fn table_kind_parses_switch_case_insensitive() {
-        assert_eq!(TableKind::from_str("Switch").unwrap(),        TableKind::Switch);
-        assert_eq!(TableKind::from_str("switch").unwrap(),        TableKind::Switch);
-        assert_eq!(TableKind::from_str("BitwiseSwitch").unwrap(), TableKind::BitwiseSwitch);
-        assert_eq!(TableKind::from_str("bitwiseswitch").unwrap(), TableKind::BitwiseSwitch);
+        assert_eq!(TableKind::from_str("Switch").unwrap(), TableKind::Switch);
+        assert_eq!(TableKind::from_str("switch").unwrap(), TableKind::Switch);
+        assert_eq!(
+            TableKind::from_str("BitwiseSwitch").unwrap(),
+            TableKind::BitwiseSwitch
+        );
+        assert_eq!(
+            TableKind::from_str("bitwiseswitch").unwrap(),
+            TableKind::BitwiseSwitch
+        );
     }
 
     #[test]
     fn storage_type_sizes_match_subaru_spec() {
-        assert_eq!(StorageType::UInt8.byte_size(),  1);
+        assert_eq!(StorageType::UInt8.byte_size(), 1);
         assert_eq!(StorageType::UInt16.byte_size(), 2);
-        assert_eq!(StorageType::Float.byte_size(),  4);
+        assert_eq!(StorageType::Float.byte_size(), 4);
     }
 
     #[test]
     fn endian_parses_lowercase_only() {
-        assert_eq!(parse_endian("big").unwrap(),    Endian::Big);
+        assert_eq!(parse_endian("big").unwrap(), Endian::Big);
         assert_eq!(parse_endian("little").unwrap(), Endian::Little);
         assert!(parse_endian("BIG").is_err());
     }

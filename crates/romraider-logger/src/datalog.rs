@@ -8,7 +8,7 @@ use crate::sample::Sample;
 #[derive(Debug)]
 pub struct DatalogWriter {
     path: PathBuf,
-    out:  BufWriter<File>,
+    out: BufWriter<File>,
     header_written: bool,
 }
 
@@ -17,7 +17,7 @@ impl DatalogWriter {
         let file = File::create(path.as_ref())?;
         Ok(Self {
             path: path.as_ref().to_path_buf(),
-            out:  BufWriter::new(file),
+            out: BufWriter::new(file),
             header_written: false,
         })
     }

@@ -14,18 +14,18 @@ use crate::sample::{Sample, SampleValue};
 
 #[derive(Debug, Clone)]
 pub struct SessionConfig {
-    pub poll_interval:    Duration,
-    pub timeout:          Duration,
-    pub datalog_dir:      Option<PathBuf>,
+    pub poll_interval: Duration,
+    pub timeout: Duration,
+    pub datalog_dir: Option<PathBuf>,
     pub channel_capacity: usize,
 }
 
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
-            poll_interval:    Duration::from_millis(15), // ~66 Hz, как у Java-логгера на SSM
-            timeout:          Duration::from_millis(500),
-            datalog_dir:      None,
+            poll_interval: Duration::from_millis(15), // ~66 Hz, как у Java-логгера на SSM
+            timeout: Duration::from_millis(500),
+            datalog_dir: None,
             channel_capacity: 1024,
         }
     }
@@ -36,9 +36,9 @@ impl Default for SessionConfig {
 ///   в один SSM-`read_addresses`-запрос, парсит ответ, возвращает [`Sample`].
 /// - `run(transport)` — async loop, рассылает через broadcast-канал.
 pub struct LoggerSession {
-    cfg:           SessionConfig,
-    tx:            broadcast::Sender<Sample>,
-    datalog:       Option<DatalogWriter>,
+    cfg: SessionConfig,
+    tx: broadcast::Sender<Sample>,
+    datalog: Option<DatalogWriter>,
     subscriptions: Vec<CompiledLogParameter>,
 }
 
@@ -89,10 +89,7 @@ impl LoggerSession {
     /// применить scaling, вернуть `Sample` со всеми значениями.
     ///
     /// Endian для SSM-канала всегда `Big` (Subaru convention).
-    pub fn poll_once<T: Transport + ?Sized>(
-        &self,
-        transport: &mut T,
-    ) -> LoggerResult<Sample> {
+    pub fn poll_once<T: Transport + ?Sized>(&self, transport: &mut T) -> LoggerResult<Sample> {
         if self.subscriptions.is_empty() {
             return Err(LoggerError::NoSubscriptions);
         }
@@ -111,7 +108,7 @@ impl LoggerSession {
         if response.len() != addresses.len() {
             return Err(LoggerError::Protocol(
                 romraider_protocol::ProtocolError::ResponseTooShort {
-                    got:      response.len(),
+                    got: response.len(),
                     expected: addresses.len(),
                 },
             ));
@@ -121,14 +118,14 @@ impl LoggerSession {
         let mut values: Vec<SampleValue> = Vec::with_capacity(self.subscriptions.len());
         let mut cursor = 0usize;
         for sub in &self.subscriptions {
-            let size  = sub.storage_type.byte_size();
+            let size = sub.storage_type.byte_size();
             let chunk = &response[cursor..cursor + size];
-            let raw   = decode_raw_value(chunk, sub.storage_type, Endian::Big);
-            let real  = sub.evaluate(raw);
+            let raw = decode_raw_value(chunk, sub.storage_type, Endian::Big);
+            let real = sub.evaluate(raw);
             values.push(SampleValue {
                 parameter_id: sub.source.id.clone(),
-                raw:          chunk.to_vec(),
-                value:        real,
+                raw: chunk.to_vec(),
+                value: real,
             });
             cursor += size;
         }
@@ -219,7 +216,12 @@ mod tests {
     fn build_session(doc: &LoggerDocument) -> LoggerSession {
         let mut s = LoggerSession::new(SessionConfig::default());
         let ecu = doc.find_ecu("base").unwrap();
-        s.subscribe(ecu.find_parameter("Engine Speed").unwrap().compile().unwrap());
+        s.subscribe(
+            ecu.find_parameter("Engine Speed")
+                .unwrap()
+                .compile()
+                .unwrap(),
+        );
         s.subscribe(ecu.find_parameter("Throttle").unwrap().compile().unwrap());
         s
     }
@@ -248,7 +250,7 @@ mod tests {
 
         // 3 1-byte address-ответа: [hi, lo, throttle].
         let payload = [0x0F, 0xA0, 0x80]; // 0x0FA0 = 4000; 0x80 = 128
-        let frame   = pack_ssm_response(&payload);
+        let frame = pack_ssm_response(&payload);
 
         let mut transport = romraider_io::mock::MockTransport::with_responses([frame]);
 
@@ -276,7 +278,7 @@ mod tests {
         let session = build_session(&doc);
 
         let payload = [0x00, 0x00, 0x00]; // 3 bytes для 2-х подписок (uint16 + uint8)
-        let frame   = pack_ssm_response(&payload);
+        let frame = pack_ssm_response(&payload);
         let mut transport = romraider_io::mock::MockTransport::with_responses([frame]);
 
         let _ = session.poll_once(&mut transport).unwrap();
@@ -286,12 +288,12 @@ mod tests {
         // request: 80 10 F0 <len> A8 00 <addr1: 3B> <addr2: 3B> <addr3: 3B> <ck>
         // len = 1 + 1 (pad) + 9 (3 addr * 3B) = 11 = 0x0B
         assert_eq!(request[0..4], [0x80, 0x10, 0xF0, 0x0B]);
-        assert_eq!(request[4],    0xA8); // ReadAddress
-        assert_eq!(request[5],    0x00); // pad
-        // Адрес 0x000E
-        assert_eq!(request[6..9],   [0x00, 0x00, 0x0E]);
+        assert_eq!(request[4], 0xA8); // ReadAddress
+        assert_eq!(request[5], 0x00); // pad
+                                      // Адрес 0x000E
+        assert_eq!(request[6..9], [0x00, 0x00, 0x0E]);
         // Адрес 0x000F
-        assert_eq!(request[9..12],  [0x00, 0x00, 0x0F]);
+        assert_eq!(request[9..12], [0x00, 0x00, 0x0F]);
         // Адрес 0x0015
         assert_eq!(request[12..15], [0x00, 0x00, 0x15]);
     }

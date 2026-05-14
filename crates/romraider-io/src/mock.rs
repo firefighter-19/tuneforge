@@ -13,7 +13,7 @@ use crate::transport::Transport;
 
 #[derive(Debug, Default)]
 pub struct MockTransport {
-    desc:    String,
+    desc: String,
     written: Vec<Vec<u8>>,
     pending: VecDeque<Vec<u8>>,
 }
@@ -22,7 +22,7 @@ impl MockTransport {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            desc:    "mock".to_string(),
+            desc: "mock".to_string(),
             written: Vec::new(),
             pending: VecDeque::new(),
         }
@@ -37,7 +37,7 @@ impl MockTransport {
         B: Into<Vec<u8>>,
     {
         Self {
-            desc:    "mock".to_string(),
+            desc: "mock".to_string(),
             written: Vec::new(),
             pending: responses.into_iter().map(Into::into).collect(),
         }
@@ -72,7 +72,10 @@ impl Transport for MockTransport {
     }
 
     fn read_frame(&mut self, buf: &mut [u8], timeout: Duration) -> IoResult<usize> {
-        let mut response = self.pending.pop_front().ok_or(IoError::ReadTimeout(timeout))?;
+        let mut response = self
+            .pending
+            .pop_front()
+            .ok_or(IoError::ReadTimeout(timeout))?;
         let n = response.len().min(buf.len());
         buf[..n].copy_from_slice(&response[..n]);
         // Если в `response` остались байты — кладём остаток обратно в начало
@@ -103,7 +106,8 @@ mod tests {
     #[test]
     fn records_writes_and_replays_responses_in_order() {
         let mut t = MockTransport::with_responses([vec![0xAA, 0xBB], vec![0xCC]]);
-        t.write_all(&[0x01, 0x02], Duration::from_millis(10)).unwrap();
+        t.write_all(&[0x01, 0x02], Duration::from_millis(10))
+            .unwrap();
 
         let mut buf = [0u8; 4];
         let n = t.read_frame(&mut buf, Duration::from_millis(10)).unwrap();
@@ -118,7 +122,9 @@ mod tests {
     fn empty_queue_returns_timeout() {
         let mut t = MockTransport::new();
         let mut buf = [0u8; 4];
-        let err = t.read_frame(&mut buf, Duration::from_millis(5)).unwrap_err();
+        let err = t
+            .read_frame(&mut buf, Duration::from_millis(5))
+            .unwrap_err();
         assert!(matches!(err, IoError::ReadTimeout(_)));
     }
 }

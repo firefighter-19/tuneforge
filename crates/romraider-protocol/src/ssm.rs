@@ -14,8 +14,8 @@ use tracing::{debug, instrument};
 
 use crate::error::{ProtocolError, ProtocolResult};
 
-pub const HEADER:    u8 = 0x80;
-pub const ECU_ADDR:  u8 = 0x10;
+pub const HEADER: u8 = 0x80;
+pub const ECU_ADDR: u8 = 0x10;
 pub const TOOL_ADDR: u8 = 0xF0;
 
 /// Бит, который ECU добавляет к командному байту в ответе.
@@ -27,11 +27,11 @@ pub const MIN_FRAME_LEN: usize = 6;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Command {
-    ReadBlock    = 0xA0,
-    ReadAddress  = 0xA8,
-    WriteBlock   = 0xB0,
+    ReadBlock = 0xA0,
+    ReadAddress = 0xA8,
+    WriteBlock = 0xB0,
     WriteAddress = 0xB8,
-    EcuInit      = 0xBF,
+    EcuInit = 0xBF,
 }
 
 impl Command {
@@ -64,7 +64,7 @@ pub fn build_request(cmd: Command, payload: &[u8]) -> Vec<u8> {
 #[derive(Debug, Clone)]
 pub struct Response<'a> {
     pub command_echo: u8,
-    pub data:         &'a [u8],
+    pub data: &'a [u8],
 }
 
 /// Разобрать кадр от ECU.
@@ -83,7 +83,10 @@ pub fn parse_response(frame: &[u8]) -> ProtocolResult<Response<'_>> {
     }
     let len = frame[3] as usize;
     if len < 1 {
-        return Err(ProtocolError::ResponseTooShort { got: len, expected: 1 });
+        return Err(ProtocolError::ResponseTooShort {
+            got: len,
+            expected: 1,
+        });
     }
     let total = 4 + len + 1;
     if frame.len() != total {
@@ -93,14 +96,14 @@ pub fn parse_response(frame: &[u8]) -> ProtocolResult<Response<'_>> {
         });
     }
     let body = &frame[..total - 1];
-    let got  = frame[total - 1];
-    let exp  = checksum(body);
+    let got = frame[total - 1];
+    let exp = checksum(body);
     if got != exp {
         return Err(ProtocolError::ChecksumMismatch { got, expected: exp });
     }
     Ok(Response {
         command_echo: frame[4],
-        data:         &frame[5..total - 1],
+        data: &frame[5..total - 1],
     })
 }
 
@@ -111,10 +114,10 @@ pub fn parse_response(frame: &[u8]) -> ProtocolResult<Response<'_>> {
 /// мульти-кадровый поток не предусмотрен.
 pub fn read_complete_frame<T: Transport + ?Sized>(
     transport: &mut T,
-    timeout:   Duration,
+    timeout: Duration,
 ) -> ProtocolResult<Vec<u8>> {
     let mut frame = Vec::with_capacity(64);
-    let mut buf   = [0u8; 256];
+    let mut buf = [0u8; 256];
 
     loop {
         let n = transport.read_frame(&mut buf, timeout)?;
@@ -140,8 +143,8 @@ pub fn read_complete_frame<T: Transport + ?Sized>(
 /// Точная разметка: см. `com.romraider.io.protocol.ssm.iface.SSMEcuInit`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EcuInitResponse {
-    pub ssm_id:       [u8; 3],
-    pub rom_id:       [u8; 5],
+    pub ssm_id: [u8; 3],
+    pub rom_id: [u8; 5],
     pub capabilities: Vec<u8>,
 }
 
@@ -169,13 +172,13 @@ pub fn decode_ecu_init(data: &[u8]) -> ProtocolResult<EcuInitResponse> {
 #[instrument(skip(transport))]
 pub fn ecu_init<T: Transport + ?Sized>(
     transport: &mut T,
-    timeout:   Duration,
+    timeout: Duration,
 ) -> ProtocolResult<EcuInitResponse> {
     let frame = build_request(Command::EcuInit, &[]);
     debug!(bytes = frame.len(), "SSM ecu-init request");
     transport.write_all(&frame, timeout)?;
 
-    let raw      = read_complete_frame(transport, timeout)?;
+    let raw = read_complete_frame(transport, timeout)?;
     let response = parse_response(&raw)?;
     if response.command_echo != Command::EcuInit.response_byte() {
         return Err(ProtocolError::UnexpectedResponse(response.command_echo));
@@ -200,9 +203,9 @@ pub const READ_BLOCK_MAX: usize = 254;
 #[instrument(skip(transport))]
 pub fn read_block<T: Transport + ?Sized>(
     transport: &mut T,
-    address:   Address,
-    count:     usize,
-    timeout:   Duration,
+    address: Address,
+    count: usize,
+    timeout: Duration,
 ) -> ProtocolResult<Vec<u8>> {
     if !(1..=READ_BLOCK_MAX).contains(&count) {
         return Err(ProtocolError::InvalidArgument(format!(
@@ -213,8 +216,8 @@ pub fn read_block<T: Transport + ?Sized>(
     let payload = [
         0x00, // pad
         ((raw >> 16) & 0xFF) as u8,
-        ((raw >>  8) & 0xFF) as u8,
-        ( raw        & 0xFF) as u8,
+        ((raw >> 8) & 0xFF) as u8,
+        (raw & 0xFF) as u8,
         (count - 1) as u8,
     ];
     let frame = build_request(Command::ReadBlock, &payload);
@@ -222,13 +225,13 @@ pub fn read_block<T: Transport + ?Sized>(
     transport.write_all(&frame, timeout)?;
 
     let raw_response = read_complete_frame(transport, timeout)?;
-    let response     = parse_response(&raw_response)?;
+    let response = parse_response(&raw_response)?;
     if response.command_echo != Command::ReadBlock.response_byte() {
         return Err(ProtocolError::UnexpectedResponse(response.command_echo));
     }
     if response.data.len() != count {
         return Err(ProtocolError::ResponseTooShort {
-            got:      response.data.len(),
+            got: response.data.len(),
             expected: count,
         });
     }
@@ -242,11 +245,11 @@ pub fn read_block<T: Transport + ?Sized>(
 /// Подходит для дампа целой прошивки. Время определяется latency-ом канала:
 /// на 4800-baud serial ~100–200 ms на запрос, дамп 512 KiB ≈ 7 минут.
 pub fn dump_rom<T, F>(
-    transport:  &mut T,
-    start:      Address,
-    length:     usize,
+    transport: &mut T,
+    start: Address,
+    length: usize,
     chunk_size: usize,
-    timeout:    Duration,
+    timeout: Duration,
     mut progress: F,
 ) -> ProtocolResult<Vec<u8>>
 where
@@ -284,8 +287,8 @@ where
 pub fn read_addresses<T: Transport + ?Sized>(
     transport: &mut T,
     addresses: &[Address],
-    pad_byte:  u8,
-    timeout:   Duration,
+    pad_byte: u8,
+    timeout: Duration,
 ) -> ProtocolResult<Vec<u8>> {
     let mut payload = Vec::with_capacity(1 + addresses.len() * 3);
     payload.push(pad_byte);
@@ -293,7 +296,7 @@ pub fn read_addresses<T: Transport + ?Sized>(
         let raw = addr.raw();
         payload.extend_from_slice(&[
             ((raw >> 16) & 0xFF) as u8,
-            ((raw >>  8) & 0xFF) as u8,
+            ((raw >> 8) & 0xFF) as u8,
             (raw & 0xFF) as u8,
         ]);
     }
@@ -301,7 +304,7 @@ pub fn read_addresses<T: Transport + ?Sized>(
     debug!(bytes = frame.len(), "SSM read-addresses request");
     transport.write_all(&frame, timeout)?;
 
-    let raw      = read_complete_frame(transport, timeout)?;
+    let raw = read_complete_frame(transport, timeout)?;
     let response = parse_response(&raw)?;
     if response.command_echo != Command::ReadAddress.response_byte() {
         return Err(ProtocolError::UnexpectedResponse(response.command_echo));
@@ -359,10 +362,7 @@ mod tests {
 
         let r = parse_response(&frame).unwrap();
         assert_eq!(r.command_echo, 0xFF);
-        assert_eq!(
-            r.data,
-            &[0xAA, 0xBB, 0xCC, b'A', b'B', b'1', b'2', b'3']
-        );
+        assert_eq!(r.data, &[0xAA, 0xBB, 0xCC, b'A', b'B', b'1', b'2', b'3']);
     }
 
     #[test]
@@ -432,7 +432,7 @@ mod tests {
         let response = pack_response(&inner);
 
         let mut t = MockTransport::with_responses([response]);
-        let init  = ecu_init(&mut t, Duration::from_millis(100)).unwrap();
+        let init = ecu_init(&mut t, Duration::from_millis(100)).unwrap();
 
         assert_eq!(init.ssm_id, [0xAA, 0xBB, 0xCC]);
         assert_eq!(&init.rom_id, b"AB123");
@@ -444,9 +444,9 @@ mod tests {
 
     #[test]
     fn read_addresses_round_trip_via_mock() {
-        let address  = Address::new(0x12_3456);
+        let address = Address::new(0x12_3456);
         let response = pack_response(&[Command::ReadAddress.response_byte(), 0x42]);
-        let mut t    = MockTransport::with_responses([response]);
+        let mut t = MockTransport::with_responses([response]);
 
         let data = read_addresses(&mut t, &[address], 0x00, Duration::from_millis(100)).unwrap();
         assert_eq!(data, vec![0x42]);
@@ -462,17 +462,22 @@ mod tests {
         let response = pack_response(&inner);
 
         let mut t = MockTransport::with_responses([response]);
-        let data  = read_block(&mut t, Address::new(0x012345), 6, Duration::from_millis(100))
-            .unwrap();
+        let data = read_block(
+            &mut t,
+            Address::new(0x012345),
+            6,
+            Duration::from_millis(100),
+        )
+        .unwrap();
         assert_eq!(data, vec![0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE]);
 
         // Wire-format: 80 10 F0 06 A0 00 01 23 45 05 cksm
         let req = t.last_write().unwrap();
         assert_eq!(req[0..4], [0x80, 0x10, 0xF0, 0x06]);
-        assert_eq!(req[4],    0xA0);             // ReadBlock
-        assert_eq!(req[5],    0x00);             // pad
+        assert_eq!(req[4], 0xA0); // ReadBlock
+        assert_eq!(req[5], 0x00); // pad
         assert_eq!(req[6..9], [0x01, 0x23, 0x45]); // address
-        assert_eq!(req[9],    0x05);             // count - 1 (6 byte → 5)
+        assert_eq!(req[9], 0x05); // count - 1 (6 byte → 5)
     }
 
     #[test]
@@ -481,8 +486,13 @@ mod tests {
         inner.extend_from_slice(&[0u8; READ_BLOCK_MAX]);
         let response = pack_response(&inner);
         let mut t = MockTransport::with_responses([response]);
-        let data  = read_block(&mut t, Address::new(0), READ_BLOCK_MAX, Duration::from_millis(100))
-            .unwrap();
+        let data = read_block(
+            &mut t,
+            Address::new(0),
+            READ_BLOCK_MAX,
+            Duration::from_millis(100),
+        )
+        .unwrap();
         assert_eq!(data.len(), READ_BLOCK_MAX);
         // count - 1 = 253 = 0xFD
         let req = t.last_write().unwrap();
@@ -497,7 +507,12 @@ mod tests {
             Err(ProtocolError::InvalidArgument(_))
         ));
         assert!(matches!(
-            read_block(&mut t, Address::new(0), READ_BLOCK_MAX + 1, Duration::from_millis(10)),
+            read_block(
+                &mut t,
+                Address::new(0),
+                READ_BLOCK_MAX + 1,
+                Duration::from_millis(10)
+            ),
             Err(ProtocolError::InvalidArgument(_))
         ));
     }
@@ -505,11 +520,7 @@ mod tests {
     #[test]
     fn dump_rom_iterates_chunks_and_reports_progress() {
         // 600-байтный «образ» при chunk_size=200: 3 запроса по 200+200+200.
-        let chunks = [
-            vec![0xAAu8; 200],
-            vec![0xBBu8; 200],
-            vec![0xCCu8; 200],
-        ];
+        let chunks = [vec![0xAAu8; 200], vec![0xBBu8; 200], vec![0xCCu8; 200]];
         let responses: Vec<Vec<u8>> = chunks
             .iter()
             .map(|data| {
@@ -537,7 +548,10 @@ mod tests {
         assert!(bytes[400..].iter().all(|&b| b == 0xCC));
 
         // Прогресс: 0 → 200 → 400 → 600.
-        assert_eq!(progress_calls, vec![(0, 600), (200, 600), (400, 600), (600, 600)]);
+        assert_eq!(
+            progress_calls,
+            vec![(0, 600), (200, 600), (400, 600), (600, 600)]
+        );
 
         // Адреса запросов: 0x100, 0x1C8, 0x290.
         let writes = t.writes();
@@ -545,7 +559,7 @@ mod tests {
         assert_eq!(writes[0][6..9], [0x00, 0x01, 0x00]); // 0x100
         assert_eq!(writes[1][6..9], [0x00, 0x01, 0xC8]); // 0x100 + 200 = 0x1C8
         assert_eq!(writes[2][6..9], [0x00, 0x02, 0x90]); // 0x1C8 + 200 = 0x290
-        // 200 байт → count-1 = 199 = 0xC7
+                                                         // 200 байт → count-1 = 199 = 0xC7
         assert_eq!(writes[0][9], 199);
     }
 
@@ -562,19 +576,33 @@ mod tests {
             })
             .collect();
         let mut t = MockTransport::with_responses(responses);
-        let bytes = dump_rom(&mut t, Address::new(0), 250, 200, Duration::from_millis(100), |_, _| {})
-            .unwrap();
+        let bytes = dump_rom(
+            &mut t,
+            Address::new(0),
+            250,
+            200,
+            Duration::from_millis(100),
+            |_, _| {},
+        )
+        .unwrap();
         assert_eq!(bytes.len(), 250);
         let writes = t.writes();
         assert_eq!(writes[0][9], 199); // count-1 для 200 байт
-        assert_eq!(writes[1][9], 49);  // count-1 для 50 байт
+        assert_eq!(writes[1][9], 49); // count-1 для 50 байт
     }
 
     #[test]
     fn dump_rom_zero_length_returns_empty() {
         let mut t = MockTransport::new();
-        let bytes = dump_rom(&mut t, Address::new(0), 0, 256, Duration::from_millis(10), |_, _| {})
-            .unwrap();
+        let bytes = dump_rom(
+            &mut t,
+            Address::new(0),
+            0,
+            256,
+            Duration::from_millis(10),
+            |_, _| {},
+        )
+        .unwrap();
         assert!(bytes.is_empty());
         assert!(t.writes().is_empty());
     }
@@ -582,8 +610,15 @@ mod tests {
     #[test]
     fn dump_rom_invalid_chunk_size_errors() {
         let mut t = MockTransport::new();
-        let err = dump_rom(&mut t, Address::new(0), 100, 0, Duration::from_millis(10), |_, _| {})
-            .unwrap_err();
+        let err = dump_rom(
+            &mut t,
+            Address::new(0),
+            100,
+            0,
+            Duration::from_millis(10),
+            |_, _| {},
+        )
+        .unwrap_err();
         assert!(matches!(err, ProtocolError::InvalidArgument(_)));
     }
 
@@ -595,7 +630,7 @@ mod tests {
         let response = pack_response(&inner);
 
         let mut t = MockTransport::with_responses([response]);
-        let err   = ecu_init(&mut t, Duration::from_millis(100)).unwrap_err();
+        let err = ecu_init(&mut t, Duration::from_millis(100)).unwrap_err();
         assert!(matches!(err, ProtocolError::UnexpectedResponse(0xE8)));
     }
 }

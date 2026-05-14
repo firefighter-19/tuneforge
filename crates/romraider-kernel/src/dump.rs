@@ -29,26 +29,26 @@ use crate::upload;
 
 #[derive(Debug, Clone)]
 pub struct KernelDumpConfig {
-    pub mcu:        McuFamily,
+    pub mcu: McuFamily,
     pub start_addr: u32,
-    pub length:     usize,
+    pub length: usize,
     /// Опциональный высокий baud для kernel-режима. `None` = остаётся на 4800.
     /// Поддерживается будущим расширением; сейчас игнорируется.
-    pub fast_baud:  Option<u32>,
+    pub fast_baud: Option<u32>,
     /// Таймаут на отдельный round-trip (SID-запрос → ответ).
-    pub timeout:    Duration,
+    pub timeout: Duration,
 }
 
 impl Default for KernelDumpConfig {
     fn default() -> Self {
         Self {
-            mcu:        McuFamily::Sh7058,
+            mcu: McuFamily::Sh7058,
             start_addr: 0x0000_0000,
-            length:     McuFamily::Sh7058.rom_size(),
+            length: McuFamily::Sh7058.rom_size(),
             // 62 500 baud (BRR=9) — рекомендованное nisprog значение, в ~13× быстрее
             // 4800 баз. Дамп 1 МБ занимает ~3 мин.
-            fast_baud:  Some(62_500),
-            timeout:    Duration::from_secs(2),
+            fast_baud: Some(62_500),
+            timeout: Duration::from_secs(2),
         }
     }
 }
@@ -62,15 +62,23 @@ fn kernel_for(mcu: McuFamily) -> KernelResult<KernelBinary> {
     match mcu {
         McuFamily::Sh7058 => {
             #[cfg(feature = "sh7058")]
-            { Ok(crate::kernels::KERNEL_SH7058) }
+            {
+                Ok(crate::kernels::KERNEL_SH7058)
+            }
             #[cfg(not(feature = "sh7058"))]
-            { Err(KernelError::UnsupportedMcu(mcu)) }
+            {
+                Err(KernelError::UnsupportedMcu(mcu))
+            }
         }
         McuFamily::Sh7055 => {
             #[cfg(feature = "sh7055")]
-            { Ok(crate::kernels::KERNEL_SH7055) }
+            {
+                Ok(crate::kernels::KERNEL_SH7055)
+            }
             #[cfg(not(feature = "sh7055"))]
-            { Err(KernelError::UnsupportedMcu(mcu)) }
+            {
+                Err(KernelError::UnsupportedMcu(mcu))
+            }
         }
     }
 }
@@ -78,8 +86,8 @@ fn kernel_for(mcu: McuFamily) -> KernelResult<KernelBinary> {
 /// Дампит ROM через kernel-upload-путь. Возвращает full byte-buffer длины
 /// `cfg.length`. `progress(done, total)` зовётся после каждого SID_DUMP batch.
 pub fn dump_rom_via_kernel(
-    transport:    &mut dyn Transport,
-    cfg:          &KernelDumpConfig,
+    transport: &mut dyn Transport,
+    cfg: &KernelDumpConfig,
     mut progress: impl FnMut(usize, usize),
 ) -> KernelResult<Vec<u8>> {
     if cfg.start_addr % 32 != 0 {
@@ -141,7 +149,8 @@ pub fn dump_rom_via_kernel(
 
     // ----- Step 7: SID_DUMP loop -----
     tracing::info!(
-        start = format!("0x{:06X}", cfg.start_addr), length = cfg.length,
+        start = format!("0x{:06X}", cfg.start_addr),
+        length = cfg.length,
         "step 7: streaming ROM via SID_DUMP (0xBD)",
     );
     let result = stream_rom(transport, cfg, &mut progress);
@@ -157,21 +166,20 @@ pub fn dump_rom_via_kernel(
 /// Внутренний цикл: SID_DUMP-batch-ами, прогресс на каждый batch.
 fn stream_rom(
     transport: &mut dyn Transport,
-    cfg:       &KernelDumpConfig,
-    progress:  &mut impl FnMut(usize, usize),
+    cfg: &KernelDumpConfig,
+    progress: &mut impl FnMut(usize, usize),
 ) -> KernelResult<Vec<u8>> {
-    let mut out  = Vec::with_capacity(cfg.length);
+    let mut out = Vec::with_capacity(cfg.length);
     let mut addr = cfg.start_addr;
     progress(0, cfg.length);
 
     while out.len() < cfg.length {
-        let remaining       = cfg.length - out.len();
+        let remaining = cfg.length - out.len();
         let remaining_blocks = (remaining + 31) / 32;
-        let blocks_this     = (remaining_blocks.min(usize::from(BLOCKS_PER_BATCH))) as u16;
+        let blocks_this = (remaining_blocks.min(usize::from(BLOCKS_PER_BATCH))) as u16;
 
-        let chunk = kernel_wire::dump_blocks(
-            transport, DumpArea::Rom, addr, blocks_this, cfg.timeout,
-        )?;
+        let chunk =
+            kernel_wire::dump_blocks(transport, DumpArea::Rom, addr, blocks_this, cfg.timeout)?;
         // Последний batch может вернуть больше байт чем нам нужно — обрезаем.
         let take = chunk.len().min(remaining);
         out.extend_from_slice(&chunk[..take]);
@@ -189,9 +197,9 @@ mod tests {
     #[test]
     fn config_default_targets_sh7058_full_rom() {
         let cfg = KernelDumpConfig::default();
-        assert_eq!(cfg.mcu,        McuFamily::Sh7058);
+        assert_eq!(cfg.mcu, McuFamily::Sh7058);
         assert_eq!(cfg.start_addr, 0);
-        assert_eq!(cfg.length,     1024 * 1024);
+        assert_eq!(cfg.length, 1024 * 1024);
     }
 
     #[test]
@@ -202,19 +210,31 @@ mod tests {
             fn write_all(&mut self, _: &[u8], _: Duration) -> romraider_io::error::IoResult<()> {
                 Ok(())
             }
-            fn read_frame(&mut self, _: &mut [u8], _: Duration) -> romraider_io::error::IoResult<usize> {
+            fn read_frame(
+                &mut self,
+                _: &mut [u8],
+                _: Duration,
+            ) -> romraider_io::error::IoResult<usize> {
                 Ok(0)
             }
-            fn purge(&mut self) -> romraider_io::error::IoResult<()> { Ok(()) }
-            fn description(&self) -> &str { "dummy" }
+            fn purge(&mut self) -> romraider_io::error::IoResult<()> {
+                Ok(())
+            }
+            fn description(&self) -> &str {
+                "dummy"
+            }
         }
         let cfg = KernelDumpConfig {
-            start_addr: 0x100,  // aligned
-            length:     32,
+            start_addr: 0x100, // aligned
+            length: 32,
             ..Default::default()
         };
         let _ = cfg; // structural OK
-        let bad = KernelDumpConfig { start_addr: 0x101, length: 32, ..Default::default() };
+        let bad = KernelDumpConfig {
+            start_addr: 0x101,
+            length: 32,
+            ..Default::default()
+        };
         let mut tr = DummyTransport;
         let err = dump_rom_via_kernel(&mut tr, &bad, |_, _| {}).unwrap_err();
         assert!(matches!(err, KernelError::UploadAborted(_)));

@@ -15,10 +15,10 @@ use super::library::Library;
 /// TODO: подключить реальные channel/filters/ioctl при первом задействовании.
 /// Сейчас это каркас, чтобы зафиксировать публичный контракт.
 pub struct Device {
-    lib:        Arc<Library>,
-    device_id:  DeviceId,
+    lib: Arc<Library>,
+    device_id: DeviceId,
     channel_id: Option<ChannelId>,
-    desc:       String,
+    desc: String,
 }
 
 impl Device {

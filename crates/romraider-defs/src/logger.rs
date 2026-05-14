@@ -83,12 +83,12 @@ impl LoggerDocument {
                     name: parent_type.to_string(),
                 });
             }
-            let parent = self.find_ecu_by_type(parent_type).ok_or_else(|| {
-                DefError::BaseNotFound {
-                    kind: "log-include",
-                    name: parent_type.to_string(),
-                }
-            })?;
+            let parent =
+                self.find_ecu_by_type(parent_type)
+                    .ok_or_else(|| DefError::BaseNotFound {
+                        kind: "log-include",
+                        name: parent_type.to_string(),
+                    })?;
             chain.push(parent);
             current = parent;
         }
@@ -106,10 +106,10 @@ impl LoggerDocument {
         }
 
         Ok(ResolvedLogEcu {
-            id:         ecu.id.clone(),
-            name:       ecu.name.clone(),
-            include:    ecu.include.clone(),
-            kind:       ecu.kind.clone(),
+            id: ecu.id.clone(),
+            name: ecu.name.clone(),
+            include: ecu.include.clone(),
+            kind: ecu.kind.clone(),
             parameters: params,
         })
     }
@@ -119,10 +119,10 @@ impl LoggerDocument {
 /// `parameters` содержит финальный набор без дубликатов.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResolvedLogEcu {
-    pub id:         String,
-    pub name:       String,
-    pub include:    Option<String>,
-    pub kind:       Option<String>,
+    pub id: String,
+    pub name: String,
+    pub include: Option<String>,
+    pub kind: Option<String>,
     pub parameters: Vec<LogParameter>,
 }
 
@@ -268,8 +268,8 @@ impl LogParameter {
         u32::from_str_radix(s, 16)
             .map(Address::new)
             .map_err(|e| DefError::InvalidValue {
-                field:  "offset",
-                value:  self.offset.clone(),
+                field: "offset",
+                value: self.offset.clone(),
                 reason: e.to_string(),
             })
     }
@@ -277,14 +277,14 @@ impl LogParameter {
     /// Скомпилировать параметр в форму, готовую к runtime-eval. Парсит адрес,
     /// `storage_type` (default `uint8`) и выражение через `[value]`-адаптер.
     pub fn compile(&self) -> DefResult<CompiledLogParameter> {
-        let address     = self.parse_offset()?;
-        let st_str      = self.storage_type.as_deref().unwrap_or("uint8");
+        let address = self.parse_offset()?;
+        let st_str = self.storage_type.as_deref().unwrap_or("uint8");
         let storage_type = StorageType::from_str(st_str)?;
-        let expr_str    = self
+        let expr_str = self
             .expr
             .as_deref()
             .ok_or(DefError::MissingRequiredField("log-parameter.expr"))?;
-        let expression  = compile_log_expr(expr_str)?;
+        let expression = compile_log_expr(expr_str)?;
         Ok(CompiledLogParameter {
             source: self.clone(),
             address,
@@ -298,10 +298,10 @@ impl LogParameter {
 /// готово, ничего больше парсить не нужно.
 #[derive(Debug, Clone)]
 pub struct CompiledLogParameter {
-    pub source:       LogParameter,
-    pub address:      Address,
+    pub source: LogParameter,
+    pub address: Address,
     pub storage_type: StorageType,
-    expression:       meval::Expr,
+    expression: meval::Expr,
 }
 
 impl CompiledLogParameter {
@@ -377,11 +377,11 @@ mod tests {
         assert!(ecu.is_template());
         assert_eq!(ecu.parameters.len(), 1);
         let p = &ecu.parameters[0];
-        assert_eq!(p.id,                    "Engine Speed");
-        assert_eq!(p.offset,                "#000E");
+        assert_eq!(p.id, "Engine Speed");
+        assert_eq!(p.offset, "#000E");
         assert_eq!(p.storage_type.as_deref(), Some("uint16"));
-        assert_eq!(p.expr.as_deref(),       Some("[value]/4"));
-        assert_eq!(p.metric.as_deref(),     Some("RPM"));
+        assert_eq!(p.expr.as_deref(), Some("[value]/4"));
+        assert_eq!(p.metric.as_deref(), Some("RPM"));
     }
 
     #[test]
@@ -403,7 +403,7 @@ mod tests {
         let doc = parse_log_str(xml).unwrap();
         let p = &doc.logprotocols.logprotocols[0].ecus[0].parameters[0];
         assert_eq!(p.alts.len(), 2);
-        assert_eq!(p.alts[0].id,     "AM (20118)");
+        assert_eq!(p.alts[0].id, "AM (20118)");
         assert_eq!(p.alts[0].offset, "#20118");
         assert!(p.alts[0].storage_type.is_none());
         assert_eq!(p.alts[1].storage_type.as_deref(), Some("float"));
@@ -422,10 +422,10 @@ mod tests {
         "##;
         let doc = parse_log_str(xml).unwrap();
         let ecu = &doc.logprotocols.logprotocols[0].ecus[0];
-        assert_eq!(ecu.id,                   "1644500305");
-        assert_eq!(ecu.name,                 "MY99 Impreza");
-        assert_eq!(ecu.kind.as_deref(),      Some("AE800"));
-        assert_eq!(ecu.include.as_deref(),   Some("ssmbase16"));
+        assert_eq!(ecu.id, "1644500305");
+        assert_eq!(ecu.name, "MY99 Impreza");
+        assert_eq!(ecu.kind.as_deref(), Some("AE800"));
+        assert_eq!(ecu.include.as_deref(), Some("ssmbase16"));
         assert!(ecu.parameters.is_empty(), "concrete ECU has no own params");
         assert!(!ecu.is_template());
     }

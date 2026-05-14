@@ -4,9 +4,9 @@
 //! среза `raw`. Возвращает `(consumed_bytes, frame)` или [`ParseError`].
 
 /// Протокол-байты, которые Tactrix вставляет в data-фреймы как маркер канала.
-pub const PROTO_ISO9141:  u8 = 0x33;
+pub const PROTO_ISO9141: u8 = 0x33;
 pub const PROTO_ISO14230: u8 = 0x34;
-pub const PROTO_CAN:      u8 = 0x35;
+pub const PROTO_CAN: u8 = 0x35;
 pub const PROTO_ISO15765: u8 = 0x36;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,10 +24,10 @@ pub enum TactrixFrame {
     Data {
         /// Маркер канала: `0x33`..`0x36`. Совпадает с протокол-байтом из `ato`.
         protocol_byte: u8,
-        kind:          PacketKind,
+        kind: PacketKind,
         /// Микросекундный таймстамп от Tactrix (big-endian в wire-формате).
-        timestamp_us:  u32,
-        payload:       Vec<u8>,
+        timestamp_us: u32,
+        payload: Vec<u8>,
     },
 }
 
@@ -66,7 +66,7 @@ impl PacketKind {
             0x60 => Self::LoopbackEnd,
             0x80 => Self::NormalStart,
             0xA0 => Self::TxLoopbackStart,
-            b    => Self::Other(b),
+            b => Self::Other(b),
         }
     }
 }
@@ -106,15 +106,25 @@ pub fn parse_frame(raw: &[u8]) -> Result<(usize, TactrixFrame), ParseError> {
 }
 
 fn parse_ascii_error(raw: &[u8]) -> Result<(usize, TactrixFrame), ParseError> {
-    let lf = raw.iter().position(|&b| b == b'\n').ok_or(ParseError::NeedMoreData)?;
+    let lf = raw
+        .iter()
+        .position(|&b| b == b'\n')
+        .ok_or(ParseError::NeedMoreData)?;
     let line = std::str::from_utf8(&raw[..lf]).map_err(|_| ParseError::InvalidUtf8)?;
     let trimmed = line.trim_end_matches('\r').trim_end();
-    let info = trimmed.strip_prefix("are").unwrap_or(trimmed).trim().to_string();
+    let info = trimmed
+        .strip_prefix("are")
+        .unwrap_or(trimmed)
+        .trim()
+        .to_string();
     Ok((lf + 1, TactrixFrame::Error { info }))
 }
 
 fn parse_ascii_filter_ack(raw: &[u8]) -> Result<(usize, TactrixFrame), ParseError> {
-    let lf = raw.iter().position(|&b| b == b'\n').ok_or(ParseError::NeedMoreData)?;
+    let lf = raw
+        .iter()
+        .position(|&b| b == b'\n')
+        .ok_or(ParseError::NeedMoreData)?;
     let line = std::str::from_utf8(&raw[..lf]).map_err(|_| ParseError::InvalidUtf8)?;
     let trimmed = line.trim_end_matches('\r').trim_end();
     let body = trimmed.strip_prefix("arf").unwrap_or(trimmed).trim();
@@ -123,7 +133,10 @@ fn parse_ascii_filter_ack(raw: &[u8]) -> Result<(usize, TactrixFrame), ParseErro
 }
 
 fn parse_ascii_ack(raw: &[u8]) -> Result<(usize, TactrixFrame), ParseError> {
-    let lf = raw.iter().position(|&b| b == b'\n').ok_or(ParseError::NeedMoreData)?;
+    let lf = raw
+        .iter()
+        .position(|&b| b == b'\n')
+        .ok_or(ParseError::NeedMoreData)?;
     let line = std::str::from_utf8(&raw[..lf]).map_err(|_| ParseError::InvalidUtf8)?;
     let trimmed = line.trim_end_matches('\r');
     let after = trimmed.strip_prefix("aro").unwrap_or("");
@@ -136,10 +149,17 @@ fn parse_ascii_ack(raw: &[u8]) -> Result<(usize, TactrixFrame), ParseError> {
 }
 
 fn parse_ascii_identify(raw: &[u8]) -> Result<(usize, TactrixFrame), ParseError> {
-    let lf = raw.iter().position(|&b| b == b'\n').ok_or(ParseError::NeedMoreData)?;
+    let lf = raw
+        .iter()
+        .position(|&b| b == b'\n')
+        .ok_or(ParseError::NeedMoreData)?;
     let line = std::str::from_utf8(&raw[..lf]).map_err(|_| ParseError::InvalidUtf8)?;
     let trimmed = line.trim_end_matches('\r').trim_end();
-    let info = trimmed.strip_prefix("ari").unwrap_or(trimmed).trim().to_string();
+    let info = trimmed
+        .strip_prefix("ari")
+        .unwrap_or(trimmed)
+        .trim()
+        .to_string();
     Ok((lf + 1, TactrixFrame::Identify { info }))
 }
 
@@ -177,12 +197,15 @@ fn parse_binary(raw: &[u8], proto_byte: u8) -> Result<(usize, TactrixFrame), Par
         (0u32, raw[5..total].to_vec())
     };
 
-    Ok((total, TactrixFrame::Data {
-        protocol_byte: proto_byte,
-        kind,
-        timestamp_us,
-        payload,
-    }))
+    Ok((
+        total,
+        TactrixFrame::Data {
+            protocol_byte: proto_byte,
+            kind,
+            timestamp_us,
+            payload,
+        },
+    ))
 }
 
 #[cfg(test)]
@@ -210,7 +233,12 @@ mod tests {
         let raw = b"ari OpenPort 2.0 v1.30\r\n";
         let (consumed, frame) = parse_frame(raw).unwrap();
         assert_eq!(consumed, raw.len());
-        assert_eq!(frame, TactrixFrame::Identify { info: "OpenPort 2.0 v1.30".into() });
+        assert_eq!(
+            frame,
+            TactrixFrame::Identify {
+                info: "OpenPort 2.0 v1.30".into()
+            }
+        );
     }
 
     #[test]
@@ -219,17 +247,22 @@ mod tests {
         // len=6 → kind(1) + payload(5).
         let raw = &[
             b'a', b'r', 0x33, 0x06, // header + len=6
-            0x00,                    // kind = NORM_MSG
+            0x00, // kind = NORM_MSG
             0x80, 0xF0, 0x10, 0x01, 0xFF, // SSM payload (5 bytes)
         ];
         let (consumed, frame) = parse_frame(raw).unwrap();
         assert_eq!(consumed, raw.len());
         match frame {
-            TactrixFrame::Data { protocol_byte, kind, timestamp_us, payload } => {
+            TactrixFrame::Data {
+                protocol_byte,
+                kind,
+                timestamp_us,
+                payload,
+            } => {
                 assert_eq!(protocol_byte, 0x33);
-                assert_eq!(kind,          PacketKind::Normal);
-                assert_eq!(timestamp_us,  0); // нет timestamp в K-line
-                assert_eq!(payload,       vec![0x80, 0xF0, 0x10, 0x01, 0xFF]);
+                assert_eq!(kind, PacketKind::Normal);
+                assert_eq!(timestamp_us, 0); // нет timestamp в K-line
+                assert_eq!(payload, vec![0x80, 0xF0, 0x10, 0x01, 0xFF]);
             }
             other => panic!("expected Data, got {other:?}"),
         }
@@ -240,17 +273,22 @@ mod tests {
         // CAN/ISO15765: первые 4 байта после kind — timestamp.
         let raw = &[
             b'a', b'r', 0x35, 0x0A, // header + len=10
-            0x00,                    // kind = NORM_MSG
-            0x00, 0x01, 0x02, 0x03,  // ts BE
+            0x00, // kind = NORM_MSG
+            0x00, 0x01, 0x02, 0x03, // ts BE
             0x80, 0xF0, 0x10, 0x01, 0xFF, // payload (5 bytes)
         ];
         let (consumed, frame) = parse_frame(raw).unwrap();
         assert_eq!(consumed, raw.len());
         match frame {
-            TactrixFrame::Data { protocol_byte, timestamp_us, payload, .. } => {
+            TactrixFrame::Data {
+                protocol_byte,
+                timestamp_us,
+                payload,
+                ..
+            } => {
                 assert_eq!(protocol_byte, 0x35);
-                assert_eq!(timestamp_us,  0x00010203);
-                assert_eq!(payload,       vec![0x80, 0xF0, 0x10, 0x01, 0xFF]);
+                assert_eq!(timestamp_us, 0x00010203);
+                assert_eq!(payload, vec![0x80, 0xF0, 0x10, 0x01, 0xFF]);
             }
             other => panic!("expected Data, got {other:?}"),
         }
@@ -263,7 +301,11 @@ mod tests {
         let (consumed, frame) = parse_frame(raw).unwrap();
         assert_eq!(consumed, raw.len());
         match frame {
-            TactrixFrame::Data { kind: PacketKind::RxEnd, payload, .. } => {
+            TactrixFrame::Data {
+                kind: PacketKind::RxEnd,
+                payload,
+                ..
+            } => {
                 assert!(payload.is_empty());
             }
             other => panic!("expected RxEnd, got {other:?}"),
@@ -282,7 +324,10 @@ mod tests {
 
     #[test]
     fn bad_start_marker() {
-        assert_eq!(parse_frame(b"xx\r\n").unwrap_err(), ParseError::BadStartMarker);
+        assert_eq!(
+            parse_frame(b"xx\r\n").unwrap_err(),
+            ParseError::BadStartMarker
+        );
     }
 
     #[test]
@@ -298,7 +343,12 @@ mod tests {
         let raw = b"are\r\n";
         let (consumed, frame) = parse_frame(raw).unwrap();
         assert_eq!(consumed, 5);
-        assert_eq!(frame, TactrixFrame::Error { info: String::new() });
+        assert_eq!(
+            frame,
+            TactrixFrame::Error {
+                info: String::new()
+            }
+        );
     }
 
     #[test]
@@ -306,7 +356,12 @@ mod tests {
         let raw = b"are bad command\r\n";
         let (consumed, frame) = parse_frame(raw).unwrap();
         assert_eq!(consumed, raw.len());
-        assert_eq!(frame, TactrixFrame::Error { info: "bad command".into() });
+        assert_eq!(
+            frame,
+            TactrixFrame::Error {
+                info: "bad command".into()
+            }
+        );
     }
 
     #[test]

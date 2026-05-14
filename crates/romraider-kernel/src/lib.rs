@@ -9,17 +9,17 @@
 
 #![doc = include_str!("../README.md")]
 
+pub mod dump;
+pub mod error;
+pub mod kernel_wire;
+pub mod kernels;
 pub mod kwp2000;
 pub mod seed_key;
 pub mod upload;
-pub mod kernel_wire;
-pub mod dump;
-pub mod kernels;
-pub mod error;
 // CAN/ISO15765 path — для 2007+ Subaru (Forester XT, Impreza).
 pub mod can_upload;
 pub mod can_wire;
 
 pub use dump::{dump_rom_via_kernel, KernelDumpConfig};
 pub use error::{KernelError, KernelResult};
-pub use kernels::{McuFamily, KernelBinary};
+pub use kernels::{KernelBinary, McuFamily};

@@ -39,7 +39,7 @@ mod protocol;
 mod transport;
 
 pub use protocol::{
-    parse_frame, PacketKind, ParseError, TactrixFrame, PROTO_CAN, PROTO_ISO9141, PROTO_ISO14230,
-    PROTO_ISO15765,
+    parse_frame, PacketKind, ParseError, TactrixFrame, PROTO_CAN, PROTO_ISO14230, PROTO_ISO15765,
+    PROTO_ISO9141,
 };
 pub use transport::{TactrixConfig, TactrixTransport, TACTRIX_OP2_PID, TACTRIX_VID};

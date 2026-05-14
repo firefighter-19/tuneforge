@@ -42,20 +42,20 @@ use crate::kwp2000::{self, parse_response, request_response};
 // после handover.
 pub mod kernel_sid {
     pub const STARTCOMM: u8 = 0x81;
-    pub const RECUID:    u8 = 0x1A;
-    pub const RMBA:      u8 = 0x23;
-    pub const WMBA:      u8 = 0x3D;
-    pub const TP:        u8 = 0x3E;
-    pub const DUMP:      u8 = 0xBD;
-    pub const CONF:      u8 = 0xBE;
-    pub const RESET:     u8 = 0x11;
+    pub const RECUID: u8 = 0x1A;
+    pub const RMBA: u8 = 0x23;
+    pub const WMBA: u8 = 0x3D;
+    pub const TP: u8 = 0x3E;
+    pub const DUMP: u8 = 0xBD;
+    pub const CONF: u8 = 0xBE;
+    pub const RESET: u8 = 0x11;
 }
 
 pub mod conf_sub {
-    pub const SET_SPEED:  u8 = 0x01;
+    pub const SET_SPEED: u8 = 0x01;
     pub const SET_EEPROM: u8 = 0x02;
-    pub const CKS1:       u8 = 0x03;
-    pub const LASTERR:    u8 = 0x05;
+    pub const CKS1: u8 = 0x03;
+    pub const LASTERR: u8 = 0x05;
 }
 
 /// Размер одного chunk-а в ответе SID_DUMP (фиксированный).
@@ -74,7 +74,7 @@ impl DumpArea {
     fn as_byte(self) -> u8 {
         match self {
             Self::Eeprom => 0x00,
-            Self::Rom    => 0x01,
+            Self::Rom => 0x01,
         }
     }
 }
@@ -120,11 +120,11 @@ pub fn tester_present(transport: &mut dyn Transport, timeout: Duration) -> Kerne
 /// Чтение блокирующее: ждём `num_blocks` фреймов подряд. Возвращает
 /// `num_blocks * 32` байт payload-а.
 pub fn dump_blocks(
-    transport:     &mut dyn Transport,
-    area:          DumpArea,
+    transport: &mut dyn Transport,
+    area: DumpArea,
     start_address: u32,
-    num_blocks:    u16,
-    timeout:       Duration,
+    num_blocks: u16,
+    timeout: Duration,
 ) -> KernelResult<Vec<u8>> {
     if start_address % 32 != 0 {
         return Err(KernelError::UploadAborted(format!(
@@ -144,15 +144,16 @@ pub fn dump_blocks(
     let payload = [
         area.as_byte(),
         ((num_blocks >> 8) & 0xFF) as u8,
-        ( num_blocks       & 0xFF) as u8,
+        (num_blocks & 0xFF) as u8,
         ((addr_div32 >> 8) & 0xFF) as u8,
-        ( addr_div32       & 0xFF) as u8,
+        (addr_div32 & 0xFF) as u8,
     ];
 
     // Send request (один SID_DUMP).
     let req = kwp2000::build_request(kernel_sid::DUMP, &payload);
     tracing::trace!(
-        addr = format!("0x{start_address:06X}"), num_blocks,
+        addr = format!("0x{start_address:06X}"),
+        num_blocks,
         "SID_DUMP request",
     );
     transport.write_all(&req, timeout)?;
@@ -167,7 +168,7 @@ pub fn dump_blocks(
         if frame.sid != expected_sid {
             return Err(KernelError::UnexpectedSid {
                 expected: kernel_sid::DUMP,
-                got:      frame.sid,
+                got: frame.sid,
             });
         }
         if frame.data.len() != DUMP_CHUNK_SIZE {
@@ -222,8 +223,8 @@ pub const fn brr_from_kspeed(target_baud: u32) -> Option<u8> {
 /// TX уйдёт «не туда». В обычной программе зазор < 10 мс — это OK.
 pub fn set_kernel_speed(
     transport: &mut dyn Transport,
-    brr_div:   u8,
-    timeout:   Duration,
+    brr_div: u8,
+    timeout: Duration,
 ) -> KernelResult<u32> {
     let new_baud = kspeed_from_brr(brr_div);
     tracing::info!(brr_div, new_baud, "switching kernel + host baud");
@@ -262,15 +263,20 @@ mod tests {
     use romraider_io::mock::MockTransport;
     use std::time::Duration;
 
-    fn t() -> Duration { Duration::from_millis(100) }
+    fn t() -> Duration {
+        Duration::from_millis(100)
+    }
 
     /// Хелпер: построить положительный KWP2000-ответ.
     fn build_positive_response(req_sid: u8, data: &[u8]) -> Vec<u8> {
         let response_sid = req_sid | kwp2000::POSITIVE_RESPONSE_MASK;
         let length = 1 + data.len();
         let mut frame = vec![
-            kwp2000::HEADER, kwp2000::TOOL_ADDR, kwp2000::ECU_ADDR,
-            length as u8, response_sid,
+            kwp2000::HEADER,
+            kwp2000::TOOL_ADDR,
+            kwp2000::ECU_ADDR,
+            length as u8,
+            response_sid,
         ];
         frame.extend_from_slice(data);
         let chksm = frame.iter().fold(0u8, |a, b| a.wrapping_add(*b));
@@ -297,7 +303,9 @@ mod tests {
         let data = dump_blocks(&mut mock, DumpArea::Rom, 0x0000, 3, t()).unwrap();
         assert_eq!(data.len(), 3 * DUMP_CHUNK_SIZE);
         assert!(data[0..DUMP_CHUNK_SIZE].iter().all(|&b| b == 0xA1));
-        assert!(data[DUMP_CHUNK_SIZE..2 * DUMP_CHUNK_SIZE].iter().all(|&b| b == 0xB2));
+        assert!(data[DUMP_CHUNK_SIZE..2 * DUMP_CHUNK_SIZE]
+            .iter()
+            .all(|&b| b == 0xB2));
         assert!(data[2 * DUMP_CHUNK_SIZE..].iter().all(|&b| b == 0xC3));
     }
 
@@ -326,11 +334,11 @@ mod tests {
     #[test]
     fn kspeed_brr_formula_matches_npkern() {
         // Точные значения из `nisprog/npk_backend.c`:
-        assert_eq!(kspeed_from_brr(0),    625_000);
-        assert_eq!(kspeed_from_brr(9),     62_500);
-        assert_eq!(kspeed_from_brr(39),    15_625);
+        assert_eq!(kspeed_from_brr(0), 625_000);
+        assert_eq!(kspeed_from_brr(9), 62_500);
+        assert_eq!(kspeed_from_brr(39), 15_625);
         // Обратимость:
-        assert_eq!(brr_from_kspeed(62_500),  Some(9));
+        assert_eq!(brr_from_kspeed(62_500), Some(9));
         assert_eq!(brr_from_kspeed(15_625), Some(39));
         // Граничный случай — слишком медленный baud (BRR > 255):
         assert_eq!(brr_from_kspeed(100), None);

@@ -6,8 +6,7 @@ use std::path::PathBuf;
 use romraider_defs::{parse_log_file, LoggerDocument};
 
 fn load() -> LoggerDocument {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/log_defs.xml");
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/log_defs.xml");
     parse_log_file(&path).unwrap_or_else(|e| panic!("parsing {path:?}: {e}"))
 }
 
@@ -22,7 +21,11 @@ fn top_level_counts_match_upstream_snapshot() {
     assert_eq!(p.kind, "SSM");
     assert_eq!(p.default.as_deref(), Some("ssmbase"));
     // Множество ECU: 3 шаблона + ~много концертных.
-    assert!(p.ecus.len() > 100, "expected many ECUs, got {}", p.ecus.len());
+    assert!(
+        p.ecus.len() > 100,
+        "expected many ECUs, got {}",
+        p.ecus.len()
+    );
 }
 
 #[test]
@@ -36,11 +39,11 @@ fn convert_factors_have_expected_metrics() {
         .collect();
     // Совпадает с шапкой апстрим-файла:
     // afr/AFR, temp/F, press/Bar, speed/mph, inj/%
-    assert!(factors.iter().any(|(k, m)| *k == "afr"   && *m == "AFR"));
-    assert!(factors.iter().any(|(k, m)| *k == "temp"  && *m == "F"));
+    assert!(factors.iter().any(|(k, m)| *k == "afr" && *m == "AFR"));
+    assert!(factors.iter().any(|(k, m)| *k == "temp" && *m == "F"));
     assert!(factors.iter().any(|(k, m)| *k == "press" && *m == "Bar"));
     assert!(factors.iter().any(|(k, m)| *k == "speed" && *m == "mph"));
-    assert!(factors.iter().any(|(k, m)| *k == "inj"   && *m == "%"));
+    assert!(factors.iter().any(|(k, m)| *k == "inj" && *m == "%"));
 }
 
 #[test]
@@ -57,25 +60,31 @@ fn ssmbase_template_has_engine_speed_parameter() {
     let rpm = ssmbase
         .find_parameter("Engine Speed")
         .expect("Engine Speed in ssmbase");
-    assert_eq!(rpm.offset,               "#000E");
+    assert_eq!(rpm.offset, "#000E");
     assert_eq!(rpm.storage_type.as_deref(), Some("uint16"));
-    assert_eq!(rpm.expr.as_deref(),      Some("[value]/4"));
-    assert_eq!(rpm.metric.as_deref(),    Some("RPM"));
-    assert_eq!(rpm.bit.as_deref(),       Some("1"));
-    assert_eq!(rpm.byte.as_deref(),      Some("1"));
+    assert_eq!(rpm.expr.as_deref(), Some("[value]/4"));
+    assert_eq!(rpm.metric.as_deref(), Some("RPM"));
+    assert_eq!(rpm.bit.as_deref(), Some("1"));
+    assert_eq!(rpm.byte.as_deref(), Some("1"));
 }
 
 #[test]
 fn parameter_with_type_links_to_convert_factor() {
     // "Manifold Absolute Pressure" имеет type="press" — должно бить с
     // <convert_factor type="press">.
-    let doc   = load();
+    let doc = load();
     let proto = &doc.logprotocols.logprotocols[0];
-    let base  = proto.ecus.iter().find(|e| e.kind.as_deref() == Some("ssmbase")).unwrap();
-    let map   = base.find_parameter("Manifold Absolute Pressure").unwrap();
+    let base = proto
+        .ecus
+        .iter()
+        .find(|e| e.kind.as_deref() == Some("ssmbase"))
+        .unwrap();
+    let map = base.find_parameter("Manifold Absolute Pressure").unwrap();
     assert_eq!(map.kind.as_deref(), Some("press"));
 
-    let factor = doc.find_convert_factor("press").expect("press convert_factor");
+    let factor = doc
+        .find_convert_factor("press")
+        .expect("press convert_factor");
     assert_eq!(factor.metric, "Bar");
     assert!(factor.expr.contains("[value]"));
 }
@@ -83,7 +92,7 @@ fn parameter_with_type_links_to_convert_factor() {
 #[test]
 fn ssmbase16_extends_ssmbase_and_has_alts() {
     // ssmbase16 шаблон с include="ssmbase" + параметры с <alt>.
-    let doc   = load();
+    let doc = load();
     let proto = &doc.logprotocols.logprotocols[0];
     let ssmbase16 = proto
         .ecus
@@ -97,13 +106,16 @@ fn ssmbase16_extends_ssmbase_and_has_alts() {
         .expect("Advance Multiplier in ssmbase16");
     // У этого параметра в апстриме 5 альтернативных адресов.
     assert_eq!(am.alts.len(), 5);
-    assert!(am.alts.iter().all(|a| a.id.starts_with("Advance Multiplier (")));
+    assert!(am
+        .alts
+        .iter()
+        .all(|a| a.id.starts_with("Advance Multiplier (")));
 }
 
 #[test]
 fn ssmbase32_has_float_alternates() {
     // ssmbase32 содержит float-альты — проверим, что storage_type сохраняется.
-    let doc   = load();
+    let doc = load();
     let proto = &doc.logprotocols.logprotocols[0];
     let ssmbase32 = proto
         .ecus
@@ -112,17 +124,26 @@ fn ssmbase32_has_float_alternates() {
         .expect("ssmbase32 template present");
 
     let am = ssmbase32.find_parameter("Advance Multiplier").unwrap();
-    let float_count = am.alts.iter().filter(|a| a.storage_type.as_deref() == Some("float")).count();
-    assert!(float_count > 5, "expected several float alternates, got {float_count}");
+    let float_count = am
+        .alts
+        .iter()
+        .filter(|a| a.storage_type.as_deref() == Some("float"))
+        .count();
+    assert!(
+        float_count > 5,
+        "expected several float alternates, got {float_count}"
+    );
 }
 
 #[test]
 fn concrete_ecu_can_be_found_by_hex_id() {
     let doc = load();
-    let ecu = doc.find_ecu("1644500305").expect("MY99 Impreza AE800 present");
-    assert_eq!(ecu.name,                "MY99/00 Impreza 2.0 Turbo/WRX/GT (EURO)");
-    assert_eq!(ecu.kind.as_deref(),     Some("AE800"));
-    assert_eq!(ecu.include.as_deref(),  Some("ssmbase16"));
+    let ecu = doc
+        .find_ecu("1644500305")
+        .expect("MY99 Impreza AE800 present");
+    assert_eq!(ecu.name, "MY99/00 Impreza 2.0 Turbo/WRX/GT (EURO)");
+    assert_eq!(ecu.kind.as_deref(), Some("AE800"));
+    assert_eq!(ecu.include.as_deref(), Some("ssmbase16"));
     assert!(ecu.parameters.is_empty());
 }
 
@@ -170,18 +191,18 @@ fn compile_log_parameter_engine_speed_evaluates() {
     // Engine Speed формула: [value]/4 → byte 4000 → 1000 RPM.
     let doc = load();
     let base = doc.find_ecu("base").unwrap();
-    let rpm  = base.find_parameter("Engine Speed").unwrap();
-    let c    = rpm.compile().unwrap();
-    assert_eq!(c.address.raw(),    0x000E);
-    assert_eq!(c.storage_type,     romraider_defs::StorageType::UInt16);
+    let rpm = base.find_parameter("Engine Speed").unwrap();
+    let c = rpm.compile().unwrap();
+    assert_eq!(c.address.raw(), 0x000E);
+    assert_eq!(c.storage_type, romraider_defs::StorageType::UInt16);
     assert!((c.evaluate(4000.0) - 1000.0).abs() < 1e-9);
-    assert!((c.evaluate(0.0)    -    0.0).abs() < 1e-9);
+    assert!((c.evaluate(0.0) - 0.0).abs() < 1e-9);
 }
 
 #[test]
 fn total_template_parameters_match_snapshot() {
     // Smoke-test: суммарно во всех шаблонах должно быть много параметров.
-    let doc   = load();
+    let doc = load();
     let proto = &doc.logprotocols.logprotocols[0];
     let template_params: usize = proto
         .ecus
@@ -189,7 +210,10 @@ fn total_template_parameters_match_snapshot() {
         .filter(|e| e.is_template())
         .map(|e| e.parameters.len())
         .sum();
-    assert!(template_params > 100, "expected 100+ template params, got {template_params}");
+    assert!(
+        template_params > 100,
+        "expected 100+ template params, got {template_params}"
+    );
     let all_alts: usize = proto
         .ecus
         .iter()
@@ -197,5 +221,8 @@ fn total_template_parameters_match_snapshot() {
         .flat_map(|e| e.parameters.iter())
         .map(|p| p.alts.len())
         .sum();
-    assert!(all_alts > 50, "expected 50+ alts across templates, got {all_alts}");
+    assert!(
+        all_alts > 50,
+        "expected 50+ alts across templates, got {all_alts}"
+    );
 }

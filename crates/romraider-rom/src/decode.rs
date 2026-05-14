@@ -13,10 +13,10 @@ use crate::error::{RomError, RomResult};
 /// Декодировать `count` ячеек начиная с `bytes[0]`. Размер буфера должен
 /// быть ровно `count * storage_type.byte_size()`.
 pub fn decode_cells(
-    bytes:        &[u8],
+    bytes: &[u8],
     storage_type: StorageType,
-    endian:       Endian,
-    count:        usize,
+    endian: Endian,
+    count: usize,
 ) -> RomResult<Vec<f64>> {
     let stride = storage_type.byte_size();
     let expected = stride
@@ -24,7 +24,7 @@ pub fn decode_cells(
         .ok_or(RomError::DecodeOverflow { count, stride })?;
     if bytes.len() != expected {
         return Err(RomError::DecodeSizeMismatch {
-            got:      bytes.len(),
+            got: bytes.len(),
             expected,
         });
     }
@@ -40,7 +40,7 @@ pub fn decode_cells(
 #[must_use]
 fn decode_one(bytes: &[u8], storage_type: StorageType, endian: Endian) -> f64 {
     match storage_type {
-        StorageType::UInt8  | StorageType::Hex | StorageType::Char => f64::from(bytes[0]),
+        StorageType::UInt8 | StorageType::Hex | StorageType::Char => f64::from(bytes[0]),
         StorageType::Int8 => f64::from(bytes[0] as i8),
         StorageType::UInt16 => {
             let arr: [u8; 2] = bytes.try_into().expect("uint16 chunk == 2 bytes");
@@ -92,9 +92,7 @@ fn encode_one(value: f64, storage_type: StorageType, endian: Endian, out: &mut V
             out.push(n);
         }
         StorageType::Int8 => {
-            let n = value
-                .clamp(f64::from(i8::MIN), f64::from(i8::MAX))
-                .round() as i8;
+            let n = value.clamp(f64::from(i8::MIN), f64::from(i8::MAX)).round() as i8;
             out.push(n as u8);
         }
         StorageType::UInt16 => {
@@ -133,7 +131,13 @@ mod tests {
 
     #[test]
     fn uint8_passthrough() {
-        let v = decode_cells(&[0x00, 0xFF, 0x80, 0x01], StorageType::UInt8, Endian::Big, 4).unwrap();
+        let v = decode_cells(
+            &[0x00, 0xFF, 0x80, 0x01],
+            StorageType::UInt8,
+            Endian::Big,
+            4,
+        )
+        .unwrap();
         assert_eq!(v, vec![0.0, 255.0, 128.0, 1.0]);
     }
 
@@ -165,8 +169,14 @@ mod tests {
         // декодер должен трактовать байты как big-endian.
         // 1.5 BE: 3F C0 00 00
         let bytes = [0x3F, 0xC0, 0x00, 0x00];
-        assert_eq!(decode_cells(&bytes, StorageType::Float, Endian::Big,    1).unwrap(), vec![1.5]);
-        assert_eq!(decode_cells(&bytes, StorageType::Float, Endian::Little, 1).unwrap(), vec![1.5]);
+        assert_eq!(
+            decode_cells(&bytes, StorageType::Float, Endian::Big, 1).unwrap(),
+            vec![1.5]
+        );
+        assert_eq!(
+            decode_cells(&bytes, StorageType::Float, Endian::Little, 1).unwrap(),
+            vec![1.5]
+        );
     }
 
     #[test]
@@ -182,7 +192,8 @@ mod tests {
 
     #[test]
     fn wrong_buffer_size_is_an_error() {
-        let err = decode_cells(&[0x00, 0x10, 0x00], StorageType::UInt16, Endian::Big, 2).unwrap_err();
+        let err =
+            decode_cells(&[0x00, 0x10, 0x00], StorageType::UInt16, Endian::Big, 2).unwrap_err();
         assert!(matches!(err, RomError::DecodeSizeMismatch { .. }));
     }
 
@@ -195,8 +206,8 @@ mod tests {
     #[test]
     fn encode_uint16_big_endian_round_trip() {
         let original = [0x00, 0x10, 0xFF, 0xFF, 0x80, 0x00];
-        let decoded  = decode_cells(&original, StorageType::UInt16, Endian::Big, 3).unwrap();
-        let encoded  = encode_cells(&decoded, StorageType::UInt16, Endian::Big);
+        let decoded = decode_cells(&original, StorageType::UInt16, Endian::Big, 3).unwrap();
+        let encoded = encode_cells(&decoded, StorageType::UInt16, Endian::Big);
         assert_eq!(encoded, original);
     }
 
@@ -225,16 +236,16 @@ mod tests {
         // Float всегда BE при decode/encode: round-trip даёт идентичные байты,
         // даже если передан Endian::Little.
         let original = [0x3F, 0xC0, 0x00, 0x00]; // 1.5 BE
-        let decoded  = decode_cells(&original, StorageType::Float, Endian::Little, 1).unwrap();
-        let encoded  = encode_cells(&decoded, StorageType::Float, Endian::Little);
+        let decoded = decode_cells(&original, StorageType::Float, Endian::Little, 1).unwrap();
+        let encoded = encode_cells(&decoded, StorageType::Float, Endian::Little);
         assert_eq!(encoded, original);
     }
 
     #[test]
     fn encode_decode_full_cycle_int16() {
         let original = [-32_768.0, -1.0, 0.0, 1.0, 32_767.0];
-        let bytes    = encode_cells(&original, StorageType::Int16, Endian::Big);
-        let decoded  = decode_cells(&bytes, StorageType::Int16, Endian::Big, 5).unwrap();
+        let bytes = encode_cells(&original, StorageType::Int16, Endian::Big);
+        let decoded = decode_cells(&bytes, StorageType::Int16, Endian::Big, 5).unwrap();
         assert_eq!(decoded, original);
     }
 }

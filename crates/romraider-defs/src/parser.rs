@@ -54,15 +54,15 @@ mod tests {
                            format="#" fineincrement="50" coarseincrement="100" />
             </roms>
         "##;
-        let doc  = parse_str(xml).unwrap();
+        let doc = parse_str(xml).unwrap();
         assert_eq!(doc.scaling_bases.len(), 1);
         let s = &doc.scaling_bases[0];
-        assert_eq!(s.name,             "rpm");
+        assert_eq!(s.name, "rpm");
         assert_eq!(s.units.as_deref(), Some("RPM"));
-        assert_eq!(s.expression,       "x");
-        assert_eq!(s.to_byte,          "x");
-        assert_eq!(s.format.as_deref(),           Some("#"));
-        assert_eq!(s.fine_increment.as_deref(),   Some("50"));
+        assert_eq!(s.expression, "x");
+        assert_eq!(s.to_byte, "x");
+        assert_eq!(s.format.as_deref(), Some("#"));
+        assert_eq!(s.fine_increment.as_deref(), Some("50"));
         assert_eq!(s.coarse_increment.as_deref(), Some("100"));
     }
 
@@ -79,10 +79,10 @@ mod tests {
               </rom>
             </roms>
         "#;
-        let doc   = parse_str(xml).unwrap();
+        let doc = parse_str(xml).unwrap();
         let table = &doc.roms[0].tables[0];
-        assert_eq!(table.name.as_deref(),            Some("Outer"));
-        assert_eq!(table.kind.as_deref(),            Some("3D"));
+        assert_eq!(table.name.as_deref(), Some("Outer"));
+        assert_eq!(table.kind.as_deref(), Some("3D"));
         assert_eq!(table.storage_address.as_deref(), Some("0x1000"));
         assert_eq!(table.nested.len(), 2);
         assert_eq!(table.nested[0].kind.as_deref(), Some("X Axis"));
@@ -102,13 +102,13 @@ mod tests {
               </rom>
             </roms>
         "#;
-        let doc      = parse_str(xml).unwrap();
+        let doc = parse_str(xml).unwrap();
         let scalings = &doc.roms[0].tables[0].scalings;
         assert_eq!(scalings.len(), 2);
         assert_eq!(scalings[0].base.as_deref(), Some("rpm"));
         assert!(scalings[0].expression.is_none());
         assert_eq!(scalings[1].expression.as_deref(), Some("x/.84"));
-        assert_eq!(scalings[1].units.as_deref(),      Some("%"));
+        assert_eq!(scalings[1].units.as_deref(), Some("%"));
     }
 
     #[test]
@@ -127,7 +127,7 @@ mod tests {
               </rom>
             </roms>
         "#;
-        let doc  = parse_str(xml).unwrap();
+        let doc = parse_str(xml).unwrap();
         let axis = &doc.roms[0].tables[0].nested[0];
         assert_eq!(axis.data, vec!["Range A", "Range B", "Range C"]);
     }
@@ -177,9 +177,9 @@ mod tests {
             </roms>
         "##;
         let doc = parse_str(xml).unwrap();
-        let t   = &doc.roms[0].tables[0];
+        let t = &doc.roms[0].tables[0];
         assert_eq!(t.kind.as_deref(), Some("Switch"));
-        assert_eq!(t.states.len(),    3);
+        assert_eq!(t.states.len(), 3);
         assert_eq!(t.states[0].name, "On");
         assert_eq!(t.states[0].data, "01");
         assert_eq!(t.states[0].data_bytes().unwrap(), vec![0x01]);
@@ -201,7 +201,7 @@ mod tests {
             </roms>
         "##;
         let doc = parse_str(xml).unwrap();
-        let t   = &doc.roms[0].tables[0];
+        let t = &doc.roms[0].tables[0];
         assert_eq!(t.kind.as_deref(), Some("BitwiseSwitch"));
         assert_eq!(t.bits.len(), 3);
         assert_eq!(t.bits[0].bit_position().unwrap(), 0);
@@ -212,10 +212,13 @@ mod tests {
     #[test]
     fn switch_state_data_bytes_handles_edge_cases() {
         use crate::ecu::SwitchState;
-        let mk = |s: &str| SwitchState { name: "n".into(), data: s.into() };
-        assert_eq!(mk("01").data_bytes().unwrap(),   vec![0x01]);
+        let mk = |s: &str| SwitchState {
+            name: "n".into(),
+            data: s.into(),
+        };
+        assert_eq!(mk("01").data_bytes().unwrap(), vec![0x01]);
         assert_eq!(mk("0x0A").data_bytes().unwrap(), vec![0x0A]);
-        assert_eq!(mk("A").data_bytes().unwrap(),    vec![0x0A]); // нечётная длина — pad
+        assert_eq!(mk("A").data_bytes().unwrap(), vec![0x0A]); // нечётная длина — pad
         assert_eq!(mk("0102").data_bytes().unwrap(), vec![0x01, 0x02]);
         assert_eq!(mk("  0F  ").data_bytes().unwrap(), vec![0x0F]); // trim
         assert!(mk("XY").data_bytes().is_err());

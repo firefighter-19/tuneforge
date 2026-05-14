@@ -26,7 +26,7 @@ fn build_rom_with_correct_checksum() -> RomImage {
     let mut bytes = vec![0u8; 0x30];
     for (i, v) in (1u16..=8).enumerate() {
         let arr = v.to_be_bytes();
-        bytes[i * 2]     = arr[0];
+        bytes[i * 2] = arr[0];
         bytes[i * 2 + 1] = arr[1];
     }
     // Checksum-fix-запись: start=0x00, end=0x10, diff=CHECK_TOTAL - sum.
@@ -42,31 +42,31 @@ fn build_rom_with_correct_checksum() -> RomImage {
         .fold(0u32, u32::wrapping_add);
     let diff = subaru_classic::CHECK_TOTAL.wrapping_sub(sum);
 
-    bytes[0x10..0x14].copy_from_slice(&0x0000_0000u32.to_be_bytes());     // start
-    bytes[0x14..0x18].copy_from_slice(&0x0000_0010u32.to_be_bytes());     // end
-    bytes[0x18..0x1C].copy_from_slice(&diff.to_be_bytes());               // diff
+    bytes[0x10..0x14].copy_from_slice(&0x0000_0000u32.to_be_bytes()); // start
+    bytes[0x14..0x18].copy_from_slice(&0x0000_0010u32.to_be_bytes()); // end
+    bytes[0x18..0x1C].copy_from_slice(&diff.to_be_bytes()); // diff
     RomImage::from_bytes(bytes)
 }
 
 #[test]
 fn verify_passes_on_correct_rom() {
-    let doc      = parse_str(DEF).unwrap();
+    let doc = parse_str(DEF).unwrap();
     let resolved = resolve(&doc).unwrap();
-    let rom      = build_rom_with_correct_checksum();
+    let rom = build_rom_with_correct_checksum();
 
     let results = subaru_classic::verify(&rom, &resolved[0]).unwrap();
     assert_eq!(results.len(), 1);
     assert!(results[0].valid, "должна быть валидной свежесобранная ROM");
     assert!(!results[0].disabled);
     assert_eq!(results[0].start.raw(), 0x0);
-    assert_eq!(results[0].end.raw(),   0x10);
+    assert_eq!(results[0].end.raw(), 0x10);
 }
 
 #[test]
 fn verify_detects_edit_without_fix() {
-    let doc      = parse_str(DEF).unwrap();
+    let doc = parse_str(DEF).unwrap();
     let resolved = resolve(&doc).unwrap();
-    let mut rom  = build_rom_with_correct_checksum();
+    let mut rom = build_rom_with_correct_checksum();
 
     // Изменяем первый байт карты — checksum уже не сходится.
     rom.write(romraider_core::Address::new(0), &[0xFF]).unwrap();
@@ -78,9 +78,9 @@ fn verify_detects_edit_without_fix() {
 
 #[test]
 fn fix_recomputes_diff_to_make_verify_pass() {
-    let doc      = parse_str(DEF).unwrap();
+    let doc = parse_str(DEF).unwrap();
     let resolved = resolve(&doc).unwrap();
-    let mut rom  = build_rom_with_correct_checksum();
+    let mut rom = build_rom_with_correct_checksum();
 
     rom.write(romraider_core::Address::new(0), &[0xFF]).unwrap();
     let before_fix = subaru_classic::verify(&rom, &resolved[0]).unwrap();
@@ -95,13 +95,18 @@ fn fix_recomputes_diff_to_make_verify_pass() {
 
 #[test]
 fn disabled_slots_are_left_alone() {
-    let doc      = parse_str(DEF).unwrap();
+    let doc = parse_str(DEF).unwrap();
     let resolved = resolve(&doc).unwrap();
-    let mut rom  = build_rom_with_correct_checksum();
+    let mut rom = build_rom_with_correct_checksum();
 
     // Превращаем slot в «disabled»: start=0, end=0, diff=значение не важно.
-    rom.write(romraider_core::Address::new(0x10), &[0; 8]).unwrap();
-    rom.write(romraider_core::Address::new(0x18), &[0xCA, 0xFE, 0xBA, 0xBE]).unwrap();
+    rom.write(romraider_core::Address::new(0x10), &[0; 8])
+        .unwrap();
+    rom.write(
+        romraider_core::Address::new(0x18),
+        &[0xCA, 0xFE, 0xBA, 0xBE],
+    )
+    .unwrap();
 
     let results = subaru_classic::verify(&rom, &resolved[0]).unwrap();
     assert!(results[0].valid);
@@ -130,7 +135,7 @@ fn multiple_entries_in_one_fix_table() {
       </rom>
     </roms>
     "##;
-    let doc      = parse_str(def).unwrap();
+    let doc = parse_str(def).unwrap();
     let resolved = resolve(&doc).unwrap();
 
     // Карты + две записи. Изначально оба diff'а нулевые — verify провалится,
@@ -138,7 +143,7 @@ fn multiple_entries_in_one_fix_table() {
     let mut bytes = vec![0u8; 0x40];
     for (i, v) in (1u16..=8).enumerate() {
         let arr = v.to_be_bytes();
-        bytes[i * 2]     = arr[0];
+        bytes[i * 2] = arr[0];
         bytes[i * 2 + 1] = arr[1];
     }
     bytes[0x10..0x14].copy_from_slice(&0x0000_0000u32.to_be_bytes()); // start

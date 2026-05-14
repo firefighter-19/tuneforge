@@ -18,33 +18,37 @@ use tracing::{info, warn};
 
 #[derive(Default)]
 pub struct EditorPanel {
-    rom:                 Option<RomState>,
+    rom: Option<RomState>,
     /// Опциональный второй ROM (base) для compare-режима. Read-only.
-    compare_rom:         Option<RomState>,
-    def:                 Option<DefState>,
-    selected_rom_id:     Option<String>,
+    compare_rom: Option<RomState>,
+    def: Option<DefState>,
+    selected_rom_id: Option<String>,
     selected_table_name: Option<String>,
-    error:               Option<String>,
+    error: Option<String>,
     /// Кратковременное сообщение в статусной строке (например, «Saved to …»).
-    notice:              Option<String>,
+    notice: Option<String>,
     /// Что показывать в ячейках, когда есть `compare_rom`.
-    display_mode:        DisplayMode,
+    display_mode: DisplayMode,
     /// Подсвечивать ли ячейки cool→warm градиентом по значению (когда нет compare).
-    heatmap_enabled:     bool,
+    heatmap_enabled: bool,
     /// Журнал изменений для Undo/Redo.
-    undo_log:            UndoLog,
+    undo_log: UndoLog,
     /// Открыто ли окно «Changes since open».
     changes_window_open: bool,
 }
 
 const MAX_UNDO_HISTORY: usize = 100;
 
-const SHORTCUT_UNDO:   egui::KeyboardShortcut =
+const SHORTCUT_UNDO: egui::KeyboardShortcut =
     egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Z);
 const SHORTCUT_REDO_Y: egui::KeyboardShortcut =
     egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Y);
 const SHORTCUT_REDO_Z: egui::KeyboardShortcut = egui::KeyboardShortcut::new(
-    egui::Modifiers { shift: true, command: true, ..egui::Modifiers::NONE },
+    egui::Modifiers {
+        shift: true,
+        command: true,
+        ..egui::Modifiers::NONE
+    },
     egui::Key::Z,
 );
 
@@ -57,8 +61,8 @@ struct UndoLog {
 #[derive(Debug, Clone)]
 struct EditAction {
     address: Address,
-    before:  Vec<u8>,
-    after:   Vec<u8>,
+    before: Vec<u8>,
+    after: Vec<u8>,
 }
 
 impl UndoLog {
@@ -66,7 +70,11 @@ impl UndoLog {
         if before == after {
             return; // no-op
         }
-        self.undo.push_back(EditAction { address, before, after });
+        self.undo.push_back(EditAction {
+            address,
+            before,
+            after,
+        });
         if self.undo.len() > MAX_UNDO_HISTORY {
             self.undo.pop_front();
         }
@@ -75,7 +83,9 @@ impl UndoLog {
 
     /// Применить откат к ROM. `true` если что-то было откачено.
     fn undo(&mut self, rom: &mut RomImage) -> bool {
-        let Some(action) = self.undo.pop_back() else { return false };
+        let Some(action) = self.undo.pop_back() else {
+            return false;
+        };
         if rom.write(action.address, &action.before).is_err() {
             // Не удалось — возвращаем запись на место, чтобы не потерять.
             self.undo.push_back(action);
@@ -86,7 +96,9 @@ impl UndoLog {
     }
 
     fn redo(&mut self, rom: &mut RomImage) -> bool {
-        let Some(action) = self.redo.pop_back() else { return false };
+        let Some(action) = self.redo.pop_back() else {
+            return false;
+        };
         if rom.write(action.address, &action.after).is_err() {
             self.redo.push_back(action);
             return false;
@@ -100,8 +112,12 @@ impl UndoLog {
         self.redo.clear();
     }
 
-    fn can_undo(&self) -> bool { !self.undo.is_empty() }
-    fn can_redo(&self) -> bool { !self.redo.is_empty() }
+    fn can_undo(&self) -> bool {
+        !self.undo.is_empty()
+    }
+    fn can_redo(&self) -> bool {
+        !self.redo.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -127,7 +143,7 @@ impl ChecksumSummary {
 
 struct RomState {
     path: PathBuf,
-    rom:  RomImage,
+    rom: RomImage,
     /// Снапшот байтов на момент загрузки (или последнего успешного сохранения).
     /// Используется для:
     ///  - подсветки изменённых ячеек жёлтым в `cell_bg`
@@ -138,7 +154,11 @@ struct RomState {
 impl RomState {
     fn new(path: PathBuf, rom: RomImage) -> Self {
         let original_bytes = rom.raw().to_vec();
-        Self { path, rom, original_bytes }
+        Self {
+            path,
+            rom,
+            original_bytes,
+        }
     }
 
     /// Зафиксировать «текущее состояние» как новый baseline (после `Save`).
@@ -149,7 +169,9 @@ impl RomState {
     /// Изменён ли байтовый диапазон `[addr, addr+len)` относительно baseline.
     fn is_range_modified(&self, addr: u32, len: usize) -> bool {
         let a = addr as usize;
-        let Some(end) = a.checked_add(len) else { return false };
+        let Some(end) = a.checked_add(len) else {
+            return false;
+        };
         if end > self.original_bytes.len() {
             return false;
         }
@@ -170,8 +192,8 @@ impl EditorPanel {
     pub fn load_rom(&mut self, path: PathBuf) {
         match RomImage::open(&path) {
             Ok(rom) => {
-                self.rom    = Some(RomState::new(path, rom));
-                self.error  = None;
+                self.rom = Some(RomState::new(path, rom));
+                self.error = None;
                 self.notice = None;
                 // Новый ROM = чистая история (старые undo-байты относятся к другому файлу).
                 self.undo_log.clear();
@@ -183,18 +205,26 @@ impl EditorPanel {
         }
     }
 
-    pub fn can_undo(&self) -> bool { self.undo_log.can_undo() && self.rom.is_some() }
-    pub fn can_redo(&self) -> bool { self.undo_log.can_redo() && self.rom.is_some() }
+    pub fn can_undo(&self) -> bool {
+        self.undo_log.can_undo() && self.rom.is_some()
+    }
+    pub fn can_redo(&self) -> bool {
+        self.undo_log.can_redo() && self.rom.is_some()
+    }
 
     pub fn undo_action(&mut self) {
-        let Some(state) = self.rom.as_mut() else { return };
+        let Some(state) = self.rom.as_mut() else {
+            return;
+        };
         if !self.undo_log.undo(&mut state.rom) {
             self.notice = Some("Nothing to undo".into());
         }
     }
 
     pub fn redo_action(&mut self) {
-        let Some(state) = self.rom.as_mut() else { return };
+        let Some(state) = self.rom.as_mut() else {
+            return;
+        };
         if !self.undo_log.redo(&mut state.rom) {
             self.notice = Some("Nothing to redo".into());
         }
@@ -204,8 +234,8 @@ impl EditorPanel {
         match RomImage::open(&path) {
             Ok(rom) => {
                 self.compare_rom = Some(RomState::new(path, rom));
-                self.error       = None;
-                self.notice      = None;
+                self.error = None;
+                self.notice = None;
             }
             Err(e) => {
                 warn!(?e, "compare rom open failed");
@@ -224,11 +254,11 @@ impl EditorPanel {
         let result = parse_file(&path).and_then(|doc| resolve(&doc));
         match result {
             Ok(roms) => {
-                self.def                 = Some(DefState { path, roms });
-                self.selected_rom_id     = None;
+                self.def = Some(DefState { path, roms });
+                self.selected_rom_id = None;
                 self.selected_table_name = None;
-                self.error               = None;
-                self.notice              = None;
+                self.error = None;
+                self.notice = None;
             }
             Err(e) => {
                 warn!(?e, "def load failed");
@@ -334,11 +364,15 @@ impl EditorPanel {
     }
 
     fn handle_shortcuts(&mut self, ui: &mut egui::Ui) {
-        let undo   = ui.input_mut(|i| i.consume_shortcut(&SHORTCUT_UNDO));
+        let undo = ui.input_mut(|i| i.consume_shortcut(&SHORTCUT_UNDO));
         let redo_y = ui.input_mut(|i| i.consume_shortcut(&SHORTCUT_REDO_Y));
         let redo_z = ui.input_mut(|i| i.consume_shortcut(&SHORTCUT_REDO_Z));
-        if undo   { self.undo_action(); }
-        if redo_y || redo_z { self.redo_action(); }
+        if undo {
+            self.undo_action();
+        }
+        if redo_y || redo_z {
+            self.redo_action();
+        }
     }
 
     pub fn save_rom_as(&mut self, path: PathBuf) {
@@ -353,7 +387,7 @@ impl EditorPanel {
         if let (Some(def), Some(rom_id)) = (&self.def, &self.selected_rom_id) {
             if let Some(rom_def) = def.roms.iter().find(|r| &r.xml_id == rom_id) {
                 match subaru_classic::fix(&mut state.rom, rom_def) {
-                    Ok(0) => {}                                                                  // нет таблиц или нечего обновлять
+                    Ok(0) => {} // нет таблиц или нечего обновлять
                     Ok(n) => fixed_msg = format!(" (auto-fixed {n} checksum entries)"),
                     Err(e) => {
                         warn!(?e, "checksum fix failed");
@@ -385,8 +419,8 @@ impl EditorPanel {
     /// Вычислить сводку по checksum-fix-таблицам выбранного ROM. `None`, если
     /// невозможно (нет ROM/def/выбранного rom_id) или в def нет таких таблиц.
     fn checksum_summary(&self) -> Option<ChecksumSummary> {
-        let rom    = self.rom.as_ref()?;
-        let def    = self.def.as_ref()?;
+        let rom = self.rom.as_ref()?;
+        let def = self.def.as_ref()?;
         let rom_id = self.selected_rom_id.as_deref()?;
         let rom_def = def.roms.iter().find(|r| r.xml_id == rom_id)?;
 
@@ -395,19 +429,28 @@ impl EditorPanel {
             return None;
         }
         let valid = results.iter().filter(|r| r.valid).count();
-        Some(ChecksumSummary { valid, total: results.len() })
+        Some(ChecksumSummary {
+            valid,
+            total: results.len(),
+        })
     }
 
     /// Пересчитать checksum-fix-таблицы прямо сейчас, не сохраняя файл.
     fn fix_checksums_now(&mut self) {
-        let Some(state)  = self.rom.as_mut() else { return };
-        let Some(def)    = self.def.as_ref() else { return };
-        let Some(rom_id) = self.selected_rom_id.as_deref() else { return };
-        let Some(rom_def) = def.roms.iter().find(|r| r.xml_id == rom_id) else { return };
+        let Some(state) = self.rom.as_mut() else {
+            return;
+        };
+        let Some(def) = self.def.as_ref() else { return };
+        let Some(rom_id) = self.selected_rom_id.as_deref() else {
+            return;
+        };
+        let Some(rom_def) = def.roms.iter().find(|r| r.xml_id == rom_id) else {
+            return;
+        };
 
         match subaru_classic::fix(&mut state.rom, rom_def) {
             Ok(n) => {
-                self.error  = None;
+                self.error = None;
                 self.notice = Some(format!("Fixed {n} checksum entries (not yet saved)"));
             }
             Err(e) => {
@@ -419,8 +462,8 @@ impl EditorPanel {
 
     fn render_status(&mut self, ui: &mut egui::Ui) {
         let summary = self.checksum_summary();
-        let mut fix_clicked    = false;
-        let mut clear_compare  = false;
+        let mut fix_clicked = false;
+        let mut clear_compare = false;
 
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("ROM:").strong());
@@ -473,7 +516,9 @@ impl EditorPanel {
             }
             ui.separator();
             ui.checkbox(&mut self.heatmap_enabled, "Heatmap")
-                .on_hover_text("Раскрасить ячейки cool→warm по значению (только в режиме Values без compare ROM)");
+                .on_hover_text(
+                "Раскрасить ячейки cool→warm по значению (только в режиме Values без compare ROM)",
+            );
         });
 
         // Вторая строка: compare-ROM + display-mode toggle.
@@ -481,18 +526,26 @@ impl EditorPanel {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Base:").strong());
                 ui.label(c.path.display().to_string());
-                if ui.small_button("✕").on_hover_text("Close compare ROM").clicked() {
+                if ui
+                    .small_button("✕")
+                    .on_hover_text("Close compare ROM")
+                    .clicked()
+                {
                     clear_compare = true;
                 }
                 ui.separator();
                 ui.label("Show:");
                 ui.selectable_value(&mut self.display_mode, DisplayMode::Values, "Values");
-                ui.selectable_value(&mut self.display_mode, DisplayMode::Diff,   "Diff");
+                ui.selectable_value(&mut self.display_mode, DisplayMode::Diff, "Diff");
             });
         }
 
-        if fix_clicked   { self.fix_checksums_now(); }
-        if clear_compare { self.clear_compare_rom(); }
+        if fix_clicked {
+            self.fix_checksums_now();
+        }
+        if clear_compare {
+            self.clear_compare_rom();
+        }
         if let Some(msg) = self.notice.clone() {
             ui.horizontal(|ui| {
                 ui.colored_label(egui::Color32::LIGHT_BLUE, msg);
@@ -525,11 +578,7 @@ impl EditorPanel {
             .show_ui(ui, |ui| {
                 for rom in &def.roms {
                     let label = rom_label(rom);
-                    ui.selectable_value(
-                        &mut self.selected_rom_id,
-                        Some(rom.xml_id.clone()),
-                        label,
-                    );
+                    ui.selectable_value(&mut self.selected_rom_id, Some(rom.xml_id.clone()), label);
                 }
             });
 
@@ -547,12 +596,12 @@ impl EditorPanel {
 
     fn render_content(&mut self, ui: &mut egui::Ui) {
         // Disjoint-borrow: rom mut, def imm, compare imm, selection imm — все разные поля self.
-        let rom_state   = self.rom.as_mut();
-        let def_state   = self.def.as_ref();
+        let rom_state = self.rom.as_mut();
+        let def_state = self.def.as_ref();
         let compare_rom = self.compare_rom.as_ref().map(|r| &r.rom);
-        let rom_id      = self.selected_rom_id.as_deref();
-        let table_name  = self.selected_table_name.as_deref();
-        let mode        = self.display_mode;
+        let rom_id = self.selected_rom_id.as_deref();
+        let table_name = self.selected_table_name.as_deref();
+        let mode = self.display_mode;
 
         let (Some(rom_state), Some(def_state), Some(rom_id), Some(table_name)) =
             (rom_state, def_state, rom_id, table_name)
@@ -586,15 +635,27 @@ impl EditorPanel {
             .auto_shrink([false, false])
             .show(ui, |ui| match table.kind {
                 Some(TableKind::ThreeD) => render_3d(
-                    ui, &mut rom_state.rom, undo_log, compare_rom, baseline_bytes,
-                    table, mode, heatmap,
+                    ui,
+                    &mut rom_state.rom,
+                    undo_log,
+                    compare_rom,
+                    baseline_bytes,
+                    table,
+                    mode,
+                    heatmap,
                 ),
                 Some(TableKind::TwoD)
                 | Some(TableKind::OneD)
                 | Some(TableKind::XAxis)
                 | Some(TableKind::YAxis) => render_flat(
-                    ui, &mut rom_state.rom, undo_log, compare_rom, baseline_bytes,
-                    table, mode, heatmap,
+                    ui,
+                    &mut rom_state.rom,
+                    undo_log,
+                    compare_rom,
+                    baseline_bytes,
+                    table,
+                    mode,
+                    heatmap,
                 ),
                 Some(TableKind::StaticXAxis) | Some(TableKind::StaticYAxis) => {
                     render_static_axis(ui, table);
@@ -606,17 +667,23 @@ impl EditorPanel {
                     render_bitwise_switch(ui, &mut rom_state.rom, undo_log, table);
                 }
                 None => {
-                    ui.colored_label(egui::Color32::YELLOW, "Table kind unknown after resolution.");
+                    ui.colored_label(
+                        egui::Color32::YELLOW,
+                        "Table kind unknown after resolution.",
+                    );
                 }
             });
     }
 }
 
 fn rom_label(rom: &ResolvedRom) -> String {
-    let make  = rom.romid.make.as_deref().unwrap_or("");
+    let make = rom.romid.make.as_deref().unwrap_or("");
     let model = rom.romid.model.as_deref().unwrap_or("");
-    let sub   = rom.romid.submodel.as_deref().unwrap_or("");
-    let bits: Vec<&str> = [make, model, sub].into_iter().filter(|s| !s.is_empty()).collect();
+    let sub = rom.romid.submodel.as_deref().unwrap_or("");
+    let bits: Vec<&str> = [make, model, sub]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect();
     if bits.is_empty() {
         rom.xml_id.clone()
     } else {
@@ -624,11 +691,7 @@ fn rom_label(rom: &ResolvedRom) -> String {
     }
 }
 
-fn render_table_tree(
-    ui:        &mut egui::Ui,
-    rom_def:   &ResolvedRom,
-    selection: &mut Option<String>,
-) {
+fn render_table_tree(ui: &mut egui::Ui, rom_def: &ResolvedRom, selection: &mut Option<String>) {
     // Subaru-defs наследуют тысячи таблиц от base/template-ROM-ов, но в
     // конкретной прошивке физически присутствуют только те, у которых
     // resolver проставил `storage_address`. Остальные — варианты «для MT»,
@@ -687,7 +750,10 @@ fn render_table_header(ui: &mut egui::Ui, t: &ResolvedTable) {
         ));
         if let Some(scaling) = t.scalings.first() {
             ui.separator();
-            ui.label(format!("units: {}", scaling.units.as_deref().unwrap_or("-")));
+            ui.label(format!(
+                "units: {}",
+                scaling.units.as_deref().unwrap_or("-")
+            ));
         }
     });
     if let Some(desc) = &t.description {
@@ -696,14 +762,14 @@ fn render_table_header(ui: &mut egui::Ui, t: &ResolvedTable) {
 }
 
 fn render_3d(
-    ui:             &mut egui::Ui,
-    rom:            &mut RomImage,
-    undo_log:       &mut UndoLog,
-    compare_rom:    Option<&RomImage>,
+    ui: &mut egui::Ui,
+    rom: &mut RomImage,
+    undo_log: &mut UndoLog,
+    compare_rom: Option<&RomImage>,
     baseline_bytes: Option<&[u8]>,
-    table:          &ResolvedTable,
-    mode:           DisplayMode,
-    heatmap:        bool,
+    table: &ResolvedTable,
+    mode: DisplayMode,
+    heatmap: bool,
 ) {
     let (Some(size_x), Some(size_y)) = (table.size_x, table.size_y) else {
         ui.colored_label(egui::Color32::YELLOW, "3D table is missing sizex/sizey.");
@@ -719,23 +785,29 @@ fn render_3d(
             return;
         }
     };
-    let scaling   = compile_first_scaling(table);
+    let scaling = compile_first_scaling(table);
     let precision = precision_from_format(table.scalings.first().and_then(|s| s.format.as_deref()));
-    let speed     = cell_speed(scaling.as_ref(), precision);
+    let speed = cell_speed(scaling.as_ref(), precision);
 
     // Real-values из current ROM для отображения/редактирования.
     let mut display: Vec<f64> = raw.iter().map(|&x| to_real(scaling.as_ref(), x)).collect();
     // Real-values из base ROM (если задан) — для diff-раскраски.
-    let base_real: Option<Vec<f64>> = compare_rom
-        .and_then(|cr| cr.read_table(table).ok())
-        .map(|raw_b| raw_b.into_iter().map(|x| to_real(scaling.as_ref(), x)).collect());
+    let base_real: Option<Vec<f64>> =
+        compare_rom
+            .and_then(|cr| cr.read_table(table).ok())
+            .map(|raw_b| {
+                raw_b
+                    .into_iter()
+                    .map(|x| to_real(scaling.as_ref(), x))
+                    .collect()
+            });
 
     let x_axis = table.axes.iter().find(|a| a.kind == Some(TableKind::XAxis));
     let y_axis = table.axes.iter().find(|a| a.kind == Some(TableKind::YAxis));
     let x_values = x_axis.and_then(|a| rom.read_cells(a, size_x).ok());
     let y_values = y_axis.and_then(|a| rom.read_cells(a, size_y).ok());
-    let x_scaling   = x_axis.and_then(compile_first_scaling);
-    let y_scaling   = y_axis.and_then(compile_first_scaling);
+    let x_scaling = x_axis.and_then(compile_first_scaling);
+    let y_scaling = y_axis.and_then(compile_first_scaling);
     let x_precision = precision_from_format(
         x_axis.and_then(|a| a.scalings.first().and_then(|s| s.format.as_deref())),
     );
@@ -767,13 +839,13 @@ fn render_3d(
             } else {
                 None
             };
-            let stride        = table.storage_type.map(|s| s.byte_size()).unwrap_or(1);
+            let stride = table.storage_type.map(|s| s.byte_size()).unwrap_or(1);
             let base_addr_raw = table.storage_address.map_or(0, |a| a.raw());
-            let units         = table.scalings.first().and_then(|s| s.units.as_deref());
-            let expression    = scaling
+            let units = table.scalings.first().and_then(|s| s.units.as_deref());
+            let expression = scaling
                 .as_ref()
                 .and_then(|c| c.source.expression.as_deref());
-            let to_byte_expr  = scaling.as_ref().and_then(|c| c.source.to_byte.as_deref());
+            let to_byte_expr = scaling.as_ref().and_then(|c| c.source.to_byte.as_deref());
 
             for y in 0..size_y {
                 if let Some(ys) = &y_values {
@@ -783,11 +855,11 @@ fn render_3d(
                     ui.label(egui::RichText::new(y.to_string()).strong());
                 }
                 for x in 0..size_x {
-                    let idx  = y * size_x + x;
+                    let idx = y * size_x + x;
                     let base = base_real.as_ref().and_then(|b| b.get(idx).copied());
                     let cell_addr = base_addr_raw + (idx * stride) as u32;
-                    let modified  = is_cell_modified(rom, baseline_bytes, cell_addr, stride);
-                    let bg   = cell_bg(display[idx], base, heat_range, modified);
+                    let modified = is_cell_modified(rom, baseline_bytes, cell_addr, stride);
+                    let bg = cell_bg(display[idx], base, heat_range, modified);
                     let tooltip = CellTooltip {
                         addr: Address::new(cell_addr),
                         raw_byte: raw[idx],
@@ -797,7 +869,14 @@ fn render_3d(
                         to_byte: to_byte_expr,
                     };
                     if render_cell(
-                        ui, &mut display[idx], base, bg, mode, precision, speed, &tooltip,
+                        ui,
+                        &mut display[idx],
+                        base,
+                        bg,
+                        mode,
+                        precision,
+                        speed,
+                        &tooltip,
                     ) {
                         changed = true;
                     }
@@ -812,14 +891,14 @@ fn render_3d(
 }
 
 fn render_flat(
-    ui:             &mut egui::Ui,
-    rom:            &mut RomImage,
-    undo_log:       &mut UndoLog,
-    compare_rom:    Option<&RomImage>,
+    ui: &mut egui::Ui,
+    rom: &mut RomImage,
+    undo_log: &mut UndoLog,
+    compare_rom: Option<&RomImage>,
     baseline_bytes: Option<&[u8]>,
-    table:          &ResolvedTable,
-    mode:           DisplayMode,
-    heatmap:        bool,
+    table: &ResolvedTable,
+    mode: DisplayMode,
+    heatmap: bool,
 ) {
     let count = table
         .size_x
@@ -841,27 +920,32 @@ fn render_flat(
             return;
         }
     };
-    let scaling   = compile_first_scaling(table);
+    let scaling = compile_first_scaling(table);
     let precision = precision_from_format(table.scalings.first().and_then(|s| s.format.as_deref()));
-    let speed     = cell_speed(scaling.as_ref(), precision);
+    let speed = cell_speed(scaling.as_ref(), precision);
 
     let mut display: Vec<f64> = raw.iter().map(|&x| to_real(scaling.as_ref(), x)).collect();
     let base_real: Option<Vec<f64>> = compare_rom
         .and_then(|cr| cr.read_cells(table, count).ok())
-        .map(|raw_b| raw_b.into_iter().map(|x| to_real(scaling.as_ref(), x)).collect());
+        .map(|raw_b| {
+            raw_b
+                .into_iter()
+                .map(|x| to_real(scaling.as_ref(), x))
+                .collect()
+        });
 
     let heat_range = if heatmap && base_real.is_none() {
         heatmap_range(scaling.as_ref(), &display)
     } else {
         None
     };
-    let stride        = table.storage_type.map(|s| s.byte_size()).unwrap_or(1);
+    let stride = table.storage_type.map(|s| s.byte_size()).unwrap_or(1);
     let base_addr_raw = table.storage_address.map_or(0, |a| a.raw());
-    let units         = table.scalings.first().and_then(|s| s.units.as_deref());
-    let expression    = scaling
+    let units = table.scalings.first().and_then(|s| s.units.as_deref());
+    let expression = scaling
         .as_ref()
         .and_then(|c| c.source.expression.as_deref());
-    let to_byte_expr  = scaling.as_ref().and_then(|c| c.source.to_byte.as_deref());
+    let to_byte_expr = scaling.as_ref().and_then(|c| c.source.to_byte.as_deref());
 
     let mut changed = false;
     egui::Grid::new("table-flat-grid")
@@ -874,8 +958,8 @@ fn render_flat(
                 }
                 let base = base_real.as_ref().and_then(|b| b.get(i).copied());
                 let cell_addr = base_addr_raw + (i * stride) as u32;
-                let modified  = is_cell_modified(rom, baseline_bytes, cell_addr, stride);
-                let bg   = cell_bg(display[i], base, heat_range, modified);
+                let modified = is_cell_modified(rom, baseline_bytes, cell_addr, stride);
+                let bg = cell_bg(display[i], base, heat_range, modified);
                 let tooltip = CellTooltip {
                     addr: Address::new(base_addr_raw + (i * stride) as u32),
                     raw_byte: raw[i],
@@ -885,7 +969,14 @@ fn render_flat(
                     to_byte: to_byte_expr,
                 };
                 if render_cell(
-                    ui, &mut display[i], base, bg, mode, precision, speed, &tooltip,
+                    ui,
+                    &mut display[i],
+                    base,
+                    bg,
+                    mode,
+                    precision,
+                    speed,
+                    &tooltip,
                 ) {
                     changed = true;
                 }
@@ -904,16 +995,21 @@ fn render_flat(
 fn is_cell_modified(rom: &RomImage, baseline: Option<&[u8]>, addr: u32, len: usize) -> bool {
     let Some(orig) = baseline else { return false };
     let a = addr as usize;
-    let Some(end) = a.checked_add(len) else { return false };
-    if end > orig.len() { return false; }
-    rom.read(Address::new(addr), len).map_or(false, |cur| cur != &orig[a..end])
+    let Some(end) = a.checked_add(len) else {
+        return false;
+    };
+    if end > orig.len() {
+        return false;
+    }
+    rom.read(Address::new(addr), len)
+        .map_or(false, |cur| cur != &orig[a..end])
 }
 
 fn cell_bg(
-    value:      f64,
-    base:       Option<f64>,
+    value: f64,
+    base: Option<f64>,
     heat_range: Option<(f64, f64)>,
-    modified:   bool,
+    modified: bool,
 ) -> egui::Color32 {
     if let Some(b) = base {
         diff_bg(value - b, true)
@@ -930,12 +1026,12 @@ fn cell_bg(
 
 /// Информация для tooltip-а одной ячейки (то, что должно быть видно при hover).
 struct CellTooltip<'a> {
-    addr:       Address,
-    raw_byte:   f64,
-    position:   String,
-    units:      Option<&'a str>,
+    addr: Address,
+    raw_byte: f64,
+    position: String,
+    units: Option<&'a str>,
     expression: Option<&'a str>,
-    to_byte:    Option<&'a str>,
+    to_byte: Option<&'a str>,
 }
 
 /// Универсальная отрисовка одной ячейки: DragValue в Values-режиме, Label
@@ -945,14 +1041,14 @@ struct CellTooltip<'a> {
 ///
 /// Возвращает `true` если значение было изменено (только в Values-режиме).
 fn render_cell(
-    ui:        &mut egui::Ui,
-    value:     &mut f64,
-    base:      Option<f64>,
-    bg:        egui::Color32,
-    mode:      DisplayMode,
+    ui: &mut egui::Ui,
+    value: &mut f64,
+    base: Option<f64>,
+    bg: egui::Color32,
+    mode: DisplayMode,
     precision: usize,
-    speed:     f64,
-    tooltip:   &CellTooltip<'_>,
+    speed: f64,
+    tooltip: &CellTooltip<'_>,
 ) -> bool {
     let mut changed = false;
     let response = egui::Frame::none()
@@ -974,7 +1070,7 @@ fn render_cell(
             DisplayMode::Diff => {
                 let label = match base {
                     Some(b) => format!("{:+.*}", precision, *value - b),
-                    None    => format!("{:.*}",  precision, value),
+                    None => format!("{:.*}", precision, value),
                 };
                 ui.label(label);
             }
@@ -989,11 +1085,11 @@ fn render_cell(
 }
 
 fn cell_tooltip_ui(
-    ui:         &mut egui::Ui,
-    t:          &CellTooltip<'_>,
+    ui: &mut egui::Ui,
+    t: &CellTooltip<'_>,
     real_value: f64,
-    base:       Option<f64>,
-    precision:  usize,
+    base: Option<f64>,
+    precision: usize,
 ) {
     let units = t.units.unwrap_or("");
     ui.label(
@@ -1036,9 +1132,9 @@ fn diff_bg(diff: f64, have_base: bool) -> egui::Color32 {
     // EPSILON-чувствительность чтобы не подсвечивать совсем мелкие float-расхождения.
     const EPSILON: f64 = 1e-9;
     if diff > EPSILON {
-        egui::Color32::from_rgb(80, 35, 35)  // current выше base — красноватый
+        egui::Color32::from_rgb(80, 35, 35) // current выше base — красноватый
     } else if diff < -EPSILON {
-        egui::Color32::from_rgb(35, 65, 35)  // current ниже base — зеленоватый
+        egui::Color32::from_rgb(35, 65, 35) // current ниже base — зеленоватый
     } else {
         egui::Color32::TRANSPARENT
     }
@@ -1055,10 +1151,13 @@ fn heatmap_range(scaling: Option<&CompiledScaling>, data: &[f64]) -> Option<(f64
             }
         }
     }
-    let (mn, mx) = data.iter().copied().filter(|x| x.is_finite()).fold(
-        (f64::INFINITY, f64::NEG_INFINITY),
-        |(a, b), v| (a.min(v), b.max(v)),
-    );
+    let (mn, mx) = data
+        .iter()
+        .copied()
+        .filter(|x| x.is_finite())
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| {
+            (a.min(v), b.max(v))
+        });
     if mn.is_finite() && mx.is_finite() && mn < mx {
         Some((mn, mx))
     } else {
@@ -1070,9 +1169,9 @@ fn heatmap_range(scaling: Option<&CompiledScaling>, data: &[f64]) -> Option<(f64
 /// чтобы текст DragValue поверх оставался читаемым на тёмной теме.
 fn heat_color(value: f64, min: f64, max: f64) -> egui::Color32 {
     let t = ((value - min) / (max - min)).clamp(0.0, 1.0);
-    let (r0, g0, b0) = (28u8,  50,  89);   // холодный, тёмно-синий
-    let (r1, g1, b1) = (75u8,  75,  60);   // нейтральный, тёмно-оливковый
-    let (r2, g2, b2) = (110u8, 35,  35);   // горячий, тёмно-красный
+    let (r0, g0, b0) = (28u8, 50, 89); // холодный, тёмно-синий
+    let (r1, g1, b1) = (75u8, 75, 60); // нейтральный, тёмно-оливковый
+    let (r2, g2, b2) = (110u8, 35, 35); // горячий, тёмно-красный
     let (r, g, b) = if t < 0.5 {
         let u = t * 2.0;
         (lerp_u8(r0, r1, u), lerp_u8(g0, g1, u), lerp_u8(b0, b1, u))
@@ -1092,17 +1191,17 @@ fn lerp_u8(a: u8, b: u8, t: f64) -> u8 {
 /// Сконвертировать «real» значения обратно в байт-репрезентацию, записать в ROM
 /// и зарегистрировать изменение в `undo_log` (для Ctrl+Z).
 fn write_back(
-    rom:      &mut RomImage,
+    rom: &mut RomImage,
     undo_log: &mut UndoLog,
-    table:    &ResolvedTable,
-    display:  &[f64],
-    scaling:  Option<&CompiledScaling>,
+    table: &ResolvedTable,
+    display: &[f64],
+    scaling: Option<&CompiledScaling>,
 ) {
     let raw_back: Vec<f64> = display
         .iter()
         .map(|&v| match scaling {
             Some(s) => s.to_byte(v),
-            None    => v,
+            None => v,
         })
         .collect();
 
@@ -1112,9 +1211,9 @@ fn write_back(
     else {
         return;
     };
-    let after  = encode_cells(&raw_back, st, end);
+    let after = encode_cells(&raw_back, st, end);
     let before = match rom.read(addr, after.len()) {
-        Ok(b)  => b.to_vec(),
+        Ok(b) => b.to_vec(),
         Err(e) => {
             warn!(?e, "write-back: read failed");
             return;
@@ -1130,21 +1229,31 @@ fn write_back(
 fn cell_speed(scaling: Option<&CompiledScaling>, precision: usize) -> f64 {
     scaling
         .and_then(|c| c.source.fine_increment)
-        .unwrap_or(if precision == 0 { 1.0 } else { 10f64.powi(-(precision as i32)) })
+        .unwrap_or(if precision == 0 {
+            1.0
+        } else {
+            10f64.powi(-(precision as i32))
+        })
 }
 
 fn render_switch(
-    ui:       &mut egui::Ui,
-    rom:      &mut RomImage,
+    ui: &mut egui::Ui,
+    rom: &mut RomImage,
     undo_log: &mut UndoLog,
-    table:    &ResolvedTable,
+    table: &ResolvedTable,
 ) {
     let Some(addr) = table.storage_address else {
-        ui.colored_label(egui::Color32::YELLOW, "Switch table is missing storageaddress.");
+        ui.colored_label(
+            egui::Color32::YELLOW,
+            "Switch table is missing storageaddress.",
+        );
         return;
     };
     if table.states.is_empty() {
-        ui.colored_label(egui::Color32::YELLOW, "Switch table has no <state> entries.");
+        ui.colored_label(
+            egui::Color32::YELLOW,
+            "Switch table has no <state> entries.",
+        );
         return;
     }
     // Размер берём из первой state.data (после parse в байты).
@@ -1156,7 +1265,7 @@ fn render_switch(
         }
     };
     let current = match rom.read(addr, first_size) {
-        Ok(b)  => b.to_vec(),
+        Ok(b) => b.to_vec(),
         Err(e) => {
             ui.colored_label(egui::Color32::LIGHT_RED, format!("Read failed: {e}"));
             return;
@@ -1167,9 +1276,13 @@ fn render_switch(
     let mut matched = false;
     ui.vertical(|ui| {
         for state in &table.states {
-            let Ok(bytes) = state.data_bytes() else { continue };
+            let Ok(bytes) = state.data_bytes() else {
+                continue;
+            };
             let selected = bytes == current;
-            if selected { matched = true; }
+            if selected {
+                matched = true;
+            }
             let response = ui.radio(selected, &state.name);
             if response.clicked() && !selected {
                 new_data = Some(bytes);
@@ -1178,7 +1291,10 @@ fn render_switch(
         if !matched {
             ui.colored_label(
                 egui::Color32::YELLOW,
-                format!("Current bytes {} don't match any state", romraider_core::bytes::hex_dump(&current)),
+                format!(
+                    "Current bytes {} don't match any state",
+                    romraider_core::bytes::hex_dump(&current)
+                ),
             );
         }
     });
@@ -1191,21 +1307,27 @@ fn render_switch(
 }
 
 fn render_bitwise_switch(
-    ui:       &mut egui::Ui,
-    rom:      &mut RomImage,
+    ui: &mut egui::Ui,
+    rom: &mut RomImage,
     undo_log: &mut UndoLog,
-    table:    &ResolvedTable,
+    table: &ResolvedTable,
 ) {
     let Some(addr) = table.storage_address else {
-        ui.colored_label(egui::Color32::YELLOW, "BitwiseSwitch table is missing storageaddress.");
+        ui.colored_label(
+            egui::Color32::YELLOW,
+            "BitwiseSwitch table is missing storageaddress.",
+        );
         return;
     };
     if table.bits.is_empty() {
-        ui.colored_label(egui::Color32::YELLOW, "BitwiseSwitch table has no <bit> entries.");
+        ui.colored_label(
+            egui::Color32::YELLOW,
+            "BitwiseSwitch table has no <bit> entries.",
+        );
         return;
     }
     let current = match rom.read(addr, 1) {
-        Ok(b)  => b[0],
+        Ok(b) => b[0],
         Err(e) => {
             ui.colored_label(egui::Color32::LIGHT_RED, format!("Read failed: {e}"));
             return;
@@ -1216,13 +1338,19 @@ fn render_bitwise_switch(
     ui.vertical(|ui| {
         for bit in &table.bits {
             let Ok(pos) = bit.bit_position() else {
-                ui.colored_label(egui::Color32::YELLOW, format!("Invalid bit position: {}", bit.position));
+                ui.colored_label(
+                    egui::Color32::YELLOW,
+                    format!("Invalid bit position: {}", bit.position),
+                );
                 continue;
             };
             if pos >= 8 {
                 ui.colored_label(
                     egui::Color32::YELLOW,
-                    format!("{} — bit position {} > 7 (multi-byte bitwise not supported)", bit.name, pos),
+                    format!(
+                        "{} — bit position {} > 7 (multi-byte bitwise not supported)",
+                        bit.name, pos
+                    ),
                 );
                 continue;
             }
@@ -1273,19 +1401,22 @@ fn to_real(scaling: Option<&CompiledScaling>, value: f64) -> f64 {
 fn precision_from_format(format: Option<&str>) -> usize {
     let Some(f) = format else { return 2 };
     let Some(idx) = f.find('.') else { return 0 };
-    f[idx + 1..].chars().filter(|c| *c == '0' || *c == '#').count()
+    f[idx + 1..]
+        .chars()
+        .filter(|c| *c == '0' || *c == '#')
+        .count()
 }
 
 fn debug_kind(k: Option<TableKind>) -> &'static str {
     match k {
-        Some(TableKind::OneD)          => "1D",
-        Some(TableKind::TwoD)          => "2D",
-        Some(TableKind::ThreeD)        => "3D",
-        Some(TableKind::XAxis)         => "X Axis",
-        Some(TableKind::YAxis)         => "Y Axis",
-        Some(TableKind::StaticXAxis)   => "Static X Axis",
-        Some(TableKind::StaticYAxis)   => "Static Y Axis",
-        Some(TableKind::Switch)        => "Switch",
+        Some(TableKind::OneD) => "1D",
+        Some(TableKind::TwoD) => "2D",
+        Some(TableKind::ThreeD) => "3D",
+        Some(TableKind::XAxis) => "X Axis",
+        Some(TableKind::YAxis) => "Y Axis",
+        Some(TableKind::StaticXAxis) => "Static X Axis",
+        Some(TableKind::StaticYAxis) => "Static Y Axis",
+        Some(TableKind::Switch) => "Switch",
         Some(TableKind::BitwiseSwitch) => "BitwiseSwitch",
         None => "?",
     }
@@ -1293,22 +1424,22 @@ fn debug_kind(k: Option<TableKind>) -> &'static str {
 
 fn debug_storage(s: Option<StorageType>) -> &'static str {
     match s {
-        Some(StorageType::UInt8)  => "uint8",
-        Some(StorageType::Int8)   => "int8",
+        Some(StorageType::UInt8) => "uint8",
+        Some(StorageType::Int8) => "int8",
         Some(StorageType::UInt16) => "uint16",
-        Some(StorageType::Int16)  => "int16",
+        Some(StorageType::Int16) => "int16",
         Some(StorageType::UInt32) => "uint32",
-        Some(StorageType::Int32)  => "int32",
-        Some(StorageType::Float)  => "float",
-        Some(StorageType::Hex)    => "hex",
-        Some(StorageType::Char)   => "char",
+        Some(StorageType::Int32) => "int32",
+        Some(StorageType::Float) => "float",
+        Some(StorageType::Hex) => "hex",
+        Some(StorageType::Char) => "char",
         None => "?",
     }
 }
 
 fn debug_endian(e: Option<Endian>) -> &'static str {
     match e {
-        Some(Endian::Big)    => "big",
+        Some(Endian::Big) => "big",
         Some(Endian::Little) => "little",
         None => "?",
     }
@@ -1317,42 +1448,48 @@ fn debug_endian(e: Option<Endian>) -> &'static str {
 /// Описание одной изменённой ячейки для окна «Changes since open».
 struct ChangedCell {
     /// Подпись ячейки (`"x=3, y=5"` для 3D, `"#7"` для плоских).
-    label:       String,
+    label: String,
     before_real: f64,
-    after_real:  f64,
+    after_real: f64,
 }
 
 struct ChangedTable {
-    name:  String,
+    name: String,
     cells: Vec<ChangedCell>,
 }
 
 struct ChangesSummary {
     total_cells: usize,
-    tables:      Vec<ChangedTable>,
+    tables: Vec<ChangedTable>,
 }
 
 /// Найти все ячейки, отличающиеся от baseline-снапшота, и сгруппировать
 /// по таблицам. Возвращает порядок таблиц — как в defs (стабильный).
 fn collect_changes(rom_state: &RomState, rom_def: &ResolvedRom) -> ChangesSummary {
-    let mut tables  = Vec::new();
-    let mut total   = 0usize;
-    let baseline    = rom_state.original_bytes.as_slice();
+    let mut tables = Vec::new();
+    let mut total = 0usize;
+    let baseline = rom_state.original_bytes.as_slice();
 
     for t in &rom_def.tables {
-        let Some(addr) = t.storage_address else { continue };
-        let Some(stype) = t.storage_type else { continue };
+        let Some(addr) = t.storage_address else {
+            continue;
+        };
+        let Some(stype) = t.storage_type else {
+            continue;
+        };
         let stride = stype.byte_size();
         // Сколько ячеек: для 3D — size_x*size_y, иначе одна из размерностей или 1.
         let count: usize = match (t.size_x, t.size_y, t.kind) {
             (Some(x), Some(y), Some(TableKind::ThreeD)) => x as usize * y as usize,
-            (Some(x), _, _)                              => x as usize,
-            (_, Some(y), _)                              => y as usize,
+            (Some(x), _, _) => x as usize,
+            (_, Some(y), _) => y as usize,
             _ => 1,
         };
-        if count == 0 { continue }
+        if count == 0 {
+            continue;
+        }
 
-        let scaling   = compile_first_scaling(t);
+        let scaling = compile_first_scaling(t);
         let mut cells = Vec::new();
         for idx in 0..count {
             let cell_addr = addr.raw() + (idx * stride) as u32;
@@ -1360,11 +1497,19 @@ fn collect_changes(rom_state: &RomState, rom_def: &ResolvedRom) -> ChangesSummar
                 continue;
             }
             // Сырые байтовые значения → f64-ячейки → scaling в real units.
-            let cur_raw  = decode_one_at(&rom_state.rom.raw(), cell_addr as usize, stride, stype, t.endian);
-            let orig_raw = decode_one_at(baseline,             cell_addr as usize, stride, stype, t.endian);
-            let (Some(cur), Some(orig)) = (cur_raw, orig_raw) else { continue };
+            let cur_raw = decode_one_at(
+                &rom_state.rom.raw(),
+                cell_addr as usize,
+                stride,
+                stype,
+                t.endian,
+            );
+            let orig_raw = decode_one_at(baseline, cell_addr as usize, stride, stype, t.endian);
+            let (Some(cur), Some(orig)) = (cur_raw, orig_raw) else {
+                continue;
+            };
             let before_real = scaling.as_ref().map_or(orig, |c| c.to_real(orig));
-            let after_real  = scaling.as_ref().map_or(cur, |c| c.to_real(cur));
+            let after_real = scaling.as_ref().map_or(cur, |c| c.to_real(cur));
             let label = match (t.size_x, t.size_y, t.kind) {
                 (Some(x), Some(_), Some(TableKind::ThreeD)) => {
                     let cols = x as usize;
@@ -1372,23 +1517,33 @@ fn collect_changes(rom_state: &RomState, rom_def: &ResolvedRom) -> ChangesSummar
                 }
                 _ => format!("#{idx}"),
             };
-            cells.push(ChangedCell { label, before_real, after_real });
+            cells.push(ChangedCell {
+                label,
+                before_real,
+                after_real,
+            });
         }
         if !cells.is_empty() {
             total += cells.len();
-            tables.push(ChangedTable { name: t.name.clone(), cells });
+            tables.push(ChangedTable {
+                name: t.name.clone(),
+                cells,
+            });
         }
     }
-    ChangesSummary { total_cells: total, tables }
+    ChangesSummary {
+        total_cells: total,
+        tables,
+    }
 }
 
 /// Декодировать одну ячейку из произвольного байтового буфера по заданному
 /// смещению. Возвращает `None` если буфер короче.
 fn decode_one_at(
-    buf:    &[u8],
+    buf: &[u8],
     offset: usize,
     stride: usize,
-    stype:  StorageType,
+    stype: StorageType,
     endian: Option<Endian>,
 ) -> Option<f64> {
     if offset.checked_add(stride)? > buf.len() {
@@ -1398,7 +1553,7 @@ fn decode_one_at(
     let endian = endian.unwrap_or(Endian::Big);
     Some(match stype {
         StorageType::UInt8 | StorageType::Hex | StorageType::Char => f64::from(chunk[0]),
-        StorageType::Int8  => f64::from(chunk[0] as i8),
+        StorageType::Int8 => f64::from(chunk[0] as i8),
         StorageType::UInt16 => {
             let arr: [u8; 2] = chunk.try_into().ok()?;
             f64::from(endian.read_u16(&arr))
@@ -1429,18 +1584,18 @@ mod tests {
 
     #[test]
     fn precision_picks_zeros_and_hashes_after_decimal() {
-        assert_eq!(precision_from_format(Some("0.00")),   2);
+        assert_eq!(precision_from_format(Some("0.00")), 2);
         assert_eq!(precision_from_format(Some("#0.000")), 3);
-        assert_eq!(precision_from_format(Some("0")),      0);
-        assert_eq!(precision_from_format(Some("0.0##")),  3);
-        assert_eq!(precision_from_format(None),           2);
+        assert_eq!(precision_from_format(Some("0")), 0);
+        assert_eq!(precision_from_format(Some("0.0##")), 3);
+        assert_eq!(precision_from_format(None), 2);
     }
 
     #[test]
     fn heatmap_range_uses_data_when_scaling_missing() {
         let data = [1.0, 5.0, 3.0, 10.0, 2.0];
         let (mn, mx) = heatmap_range(None, &data).unwrap();
-        assert_eq!(mn,  1.0);
+        assert_eq!(mn, 1.0);
         assert_eq!(mx, 10.0);
     }
 
@@ -1454,18 +1609,18 @@ mod tests {
 
     #[test]
     fn heat_color_clamps_outside_range() {
-        let cold     = heat_color(-10.0, 0.0, 100.0);
-        let cold_in  = heat_color(0.0,   0.0, 100.0);
+        let cold = heat_color(-10.0, 0.0, 100.0);
+        let cold_in = heat_color(0.0, 0.0, 100.0);
         assert_eq!(cold, cold_in, "out-of-range clamps to cold edge");
-        let hot      = heat_color(200.0, 0.0, 100.0);
-        let hot_in   = heat_color(100.0, 0.0, 100.0);
+        let hot = heat_color(200.0, 0.0, 100.0);
+        let hot_in = heat_color(100.0, 0.0, 100.0);
         assert_eq!(hot, hot_in, "out-of-range clamps to hot edge");
     }
 
     #[test]
     fn heat_color_endpoints_differ() {
         let cold = heat_color(0.0, 0.0, 1.0);
-        let hot  = heat_color(1.0, 0.0, 1.0);
+        let hot = heat_color(1.0, 0.0, 1.0);
         assert_ne!(cold, hot);
     }
 
@@ -1473,9 +1628,9 @@ mod tests {
     fn undo_log_records_and_undoes() {
         let mut log = UndoLog::default();
         let mut rom = RomImage::from_bytes(vec![0u8; 16]);
-        let addr    = Address::new(0);
-        let before  = vec![0, 0, 0, 0];
-        let after   = vec![1, 2, 3, 4];
+        let addr = Address::new(0);
+        let before = vec![0, 0, 0, 0];
+        let after = vec![1, 2, 3, 4];
 
         rom.write(addr, &after).unwrap();
         log.record(addr, before.clone(), after.clone());
@@ -1496,7 +1651,7 @@ mod tests {
     fn undo_log_clears_redo_on_new_action() {
         let mut log = UndoLog::default();
         let mut rom = RomImage::from_bytes(vec![0u8; 4]);
-        let addr    = Address::new(0);
+        let addr = Address::new(0);
 
         log.record(addr, vec![0], vec![1]);
         log.undo(&mut rom);
@@ -1524,15 +1679,15 @@ mod tests {
 
     #[test]
     fn format_byte_integer_when_whole_number() {
-        assert_eq!(format_byte(128.0),   "128");
-        assert_eq!(format_byte(255.0),   "255");
-        assert_eq!(format_byte(0.0),     "0");
-        assert_eq!(format_byte(-1.0),    "-1");
+        assert_eq!(format_byte(128.0), "128");
+        assert_eq!(format_byte(255.0), "255");
+        assert_eq!(format_byte(0.0), "0");
+        assert_eq!(format_byte(-1.0), "-1");
     }
 
     #[test]
     fn format_byte_fractional_when_float() {
-        assert_eq!(format_byte(1.5),      "1.5000");
+        assert_eq!(format_byte(1.5), "1.5000");
         assert_eq!(format_byte(0.001333), "0.0013");
     }
 
@@ -1540,7 +1695,7 @@ mod tests {
     fn multiple_undo_redo_steps() {
         let mut log = UndoLog::default();
         let mut rom = RomImage::from_bytes(vec![0u8; 4]);
-        let addr    = Address::new(0);
+        let addr = Address::new(0);
 
         rom.write(addr, &[1, 0, 0, 0]).unwrap();
         log.record(addr, vec![0, 0, 0, 0], vec![1, 0, 0, 0]);

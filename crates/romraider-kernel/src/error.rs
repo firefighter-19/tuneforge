@@ -10,12 +10,18 @@ pub enum KernelError {
     Framing(String),
 
     #[error("Negative response from ECU: SID 0x{request:02X} → NRC 0x{nrc:02X} ({nrc_meaning})")]
-    NegativeResponse { request: u8, nrc: u8, nrc_meaning: &'static str },
+    NegativeResponse {
+        request: u8,
+        nrc: u8,
+        nrc_meaning: &'static str,
+    },
 
     #[error("Unexpected response: expected SID 0x{expected:02X} response (0x{:02X}), got 0x{got:02X}", expected | 0x40)]
     UnexpectedSid { expected: u8, got: u8 },
 
-    #[error("Security access failed: seed/key challenge rejected by ECU (10-second lockout starts)")]
+    #[error(
+        "Security access failed: seed/key challenge rejected by ECU (10-second lockout starts)"
+    )]
     SecurityAccessRejected,
 
     #[error("Kernel upload aborted: {0}")]

@@ -13,11 +13,11 @@ use crate::transport::Transport;
 /// (см. `com.romraider.io.connection.ConnectionProperties`).
 #[derive(Debug, Clone)]
 pub struct SerialConfig {
-    pub path:        String,
-    pub baud_rate:   u32,
-    pub data_bits:   DataBits,
-    pub parity:      Parity,
-    pub stop_bits:   StopBits,
+    pub path: String,
+    pub baud_rate: u32,
+    pub data_bits: DataBits,
+    pub parity: Parity,
+    pub stop_bits: StopBits,
     pub flow_control: FlowControl,
 }
 
@@ -25,11 +25,11 @@ impl SerialConfig {
     #[must_use]
     pub fn ssm(path: impl Into<String>) -> Self {
         Self {
-            path:        path.into(),
-            baud_rate:   4800,
-            data_bits:   DataBits::Eight,
-            parity:      Parity::None,
-            stop_bits:   StopBits::One,
+            path: path.into(),
+            baud_rate: 4800,
+            data_bits: DataBits::Eight,
+            parity: Parity::None,
+            stop_bits: StopBits::One,
             flow_control: FlowControl::None,
         }
     }
@@ -50,7 +50,10 @@ impl SerialTransport {
             .flow_control(cfg.flow_control)
             .timeout(Duration::from_millis(50))
             .open()?;
-        Ok(Self { desc: format!("serial:{}@{}", cfg.path, cfg.baud_rate), port })
+        Ok(Self {
+            desc: format!("serial:{}@{}", cfg.path, cfg.baud_rate),
+            port,
+        })
     }
 }
 
@@ -66,9 +69,11 @@ impl Transport for SerialTransport {
     fn read_frame(&mut self, buf: &mut [u8], timeout: Duration) -> IoResult<usize> {
         self.port.set_timeout(timeout)?;
         match self.port.read(buf) {
-            Ok(0)  => Err(IoError::ReadTimeout(timeout)),
-            Ok(n)  => Ok(n),
-            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => Err(IoError::ReadTimeout(timeout)),
+            Ok(0) => Err(IoError::ReadTimeout(timeout)),
+            Ok(n) => Ok(n),
+            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                Err(IoError::ReadTimeout(timeout))
+            }
             Err(e) => Err(e.into()),
         }
     }

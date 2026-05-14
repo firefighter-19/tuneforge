@@ -28,47 +28,47 @@ use tracing::warn;
 const MAX_POINTS_PER_PARAM: usize = 600; // 60 s @ 10 Hz
 
 pub struct LoggerPanel {
-    log_def:         Option<DefState>,
-    resolved:        Option<ResolvedLogEcu>,
-    ecu_id:          String,
+    log_def: Option<DefState>,
+    resolved: Option<ResolvedLogEcu>,
+    ecu_id: String,
     selected_params: BTreeSet<String>,
-    port:            String,
-    baud:            u32,
-    interval_ms:     u64,
-    timeout_ms:      u64,
+    port: String,
+    baud: u32,
+    interval_ms: u64,
+    timeout_ms: u64,
 
-    worker:     Option<Worker>,
-    history:    BTreeMap<String, VecDeque<[f64; 2]>>,
+    worker: Option<Worker>,
+    history: BTreeMap<String, VecDeque<[f64; 2]>>,
     started_at: Option<Instant>,
-    error:      Option<String>,
+    error: Option<String>,
 }
 
 struct DefState {
     path: PathBuf,
-    doc:  LoggerDocument,
+    doc: LoggerDocument,
 }
 
 struct Worker {
     stop_flag: Arc<AtomicBool>,
     sample_rx: mpsc::Receiver<Sample>,
-    _handle:   JoinHandle<()>,
+    _handle: JoinHandle<()>,
 }
 
 impl Default for LoggerPanel {
     fn default() -> Self {
         Self {
-            log_def:         None,
-            resolved:        None,
-            ecu_id:          "base".into(),
+            log_def: None,
+            resolved: None,
+            ecu_id: "base".into(),
             selected_params: BTreeSet::new(),
-            port:            String::new(),
-            baud:            4800,
-            interval_ms:     100,
-            timeout_ms:      1500,
-            worker:          None,
-            history:         BTreeMap::new(),
-            started_at:      None,
-            error:           None,
+            port: String::new(),
+            baud: 4800,
+            interval_ms: 100,
+            timeout_ms: 1500,
+            worker: None,
+            history: BTreeMap::new(),
+            started_at: None,
+            error: None,
         }
     }
 }
@@ -149,11 +149,7 @@ impl LoggerPanel {
                 .show(ui, |ui| {
                     for p in &resolved.parameters {
                         let mut on = self.selected_params.contains(&p.id);
-                        let label = format!(
-                            "{}  ({})",
-                            p.id,
-                            p.metric.as_deref().unwrap_or("-")
-                        );
+                        let label = format!("{}  ({})", p.id, p.metric.as_deref().unwrap_or("-"));
                         if ui.checkbox(&mut on, label).changed() {
                             if on {
                                 self.selected_params.insert(p.id.clone());
@@ -186,10 +182,7 @@ impl LoggerPanel {
                 egui::TextEdit::singleline(&mut self.port).desired_width(180.0),
             );
             ui.label("Baud:");
-            ui.add_enabled(
-                !running,
-                egui::DragValue::new(&mut self.baud).speed(100.0),
-            );
+            ui.add_enabled(!running, egui::DragValue::new(&mut self.baud).speed(100.0));
             ui.label("Interval ms:");
             ui.add(
                 egui::DragValue::new(&mut self.interval_ms)
@@ -225,10 +218,7 @@ impl LoggerPanel {
                 self.history.clear();
             }
             if running {
-                let elapsed = self
-                    .started_at
-                    .map(|t| t.elapsed().as_secs())
-                    .unwrap_or(0);
+                let elapsed = self.started_at.map(|t| t.elapsed().as_secs()).unwrap_or(0);
                 let total: usize = self.history.values().map(VecDeque::len).sum();
                 ui.colored_label(
                     egui::Color32::LIGHT_GREEN,
@@ -244,8 +234,7 @@ impl LoggerPanel {
             .legend(Legend::default())
             .show(ui, |plot_ui| {
                 for (id, history) in &self.history {
-                    let points: PlotPoints =
-                        history.iter().copied().collect::<Vec<_>>().into();
+                    let points: PlotPoints = history.iter().copied().collect::<Vec<_>>().into();
                     plot_ui.line(Line::new(points).name(id));
                 }
             });
@@ -272,11 +261,10 @@ impl LoggerPanel {
         match d.doc.resolve_ecu(&self.ecu_id) {
             Ok(r) => {
                 // Удаляем из selection параметры, которых нет в новом resolved.
-                let valid: BTreeSet<String> =
-                    r.parameters.iter().map(|p| p.id.clone()).collect();
+                let valid: BTreeSet<String> = r.parameters.iter().map(|p| p.id.clone()).collect();
                 self.selected_params.retain(|p| valid.contains(p));
                 self.resolved = Some(r);
-                self.error    = None;
+                self.error = None;
             }
             Err(e) => {
                 self.resolved = None;
@@ -325,10 +313,10 @@ impl LoggerPanel {
         }
 
         // 3. Channels + thread.
-        let stop_flag  = Arc::new(AtomicBool::new(false));
+        let stop_flag = Arc::new(AtomicBool::new(false));
         let stop_clone = Arc::clone(&stop_flag);
-        let (tx, rx)   = mpsc::channel::<Sample>();
-        let interval   = Duration::from_millis(self.interval_ms);
+        let (tx, rx) = mpsc::channel::<Sample>();
+        let interval = Duration::from_millis(self.interval_ms);
 
         let handle = std::thread::Builder::new()
             .name("romraider-logger".into())
@@ -337,11 +325,11 @@ impl LoggerPanel {
 
         self.history.clear();
         self.started_at = Some(Instant::now());
-        self.error      = None;
-        self.worker     = Some(Worker {
+        self.error = None;
+        self.worker = Some(Worker {
             stop_flag,
             sample_rx: rx,
-            _handle:   handle,
+            _handle: handle,
         });
     }
 
@@ -354,7 +342,9 @@ impl LoggerPanel {
     }
 
     fn drain_samples(&mut self) {
-        let Some(worker) = self.worker.as_ref() else { return };
+        let Some(worker) = self.worker.as_ref() else {
+            return;
+        };
         let t0 = self.started_at.map(|t| t.elapsed().as_secs_f64());
         let Some(t0) = t0 else { return };
         let _ = t0; // for completeness
@@ -381,11 +371,11 @@ impl Drop for LoggerPanel {
 }
 
 fn logger_worker(
-    session:   LoggerSession,
+    session: LoggerSession,
     mut transport: SerialTransport,
-    tx:        mpsc::Sender<Sample>,
+    tx: mpsc::Sender<Sample>,
     stop_flag: Arc<AtomicBool>,
-    interval:  Duration,
+    interval: Duration,
 ) {
     while !stop_flag.load(Ordering::Relaxed) {
         let started = Instant::now();

@@ -24,14 +24,14 @@ pub const CHECK_TOTAL: u32 = 0x5AA5_A55A;
 /// Результат проверки одной `(start, end, diff)`-записи checksum-fix-таблицы.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EntryStatus {
-    pub table_name:    String,
-    pub entry_idx:     usize,
-    pub start:         Address,
-    pub end:           Address,
-    pub stored_diff:   u32,
+    pub table_name: String,
+    pub entry_idx: usize,
+    pub start: Address,
+    pub end: Address,
+    pub stored_diff: u32,
     pub computed_diff: u32,
-    pub valid:         bool,
-    pub disabled:      bool,
+    pub valid: bool,
+    pub disabled: bool,
 }
 
 /// Пересчитать и записать `diff` для всех checksum-fix-таблиц в `def`.
@@ -67,13 +67,13 @@ pub fn verify(rom: &RomImage, def: &ResolvedRom) -> RomResult<Vec<EntryStatus>> 
             calculate_diff(rom.raw(), entry.start, entry.end)?
         };
         out.push(EntryStatus {
-            table_name:    entry.table_name,
-            entry_idx:     entry.entry_idx,
-            start:         Address::new(entry.start),
-            end:           Address::new(entry.end),
-            stored_diff:   entry.stored_diff,
+            table_name: entry.table_name,
+            entry_idx: entry.entry_idx,
+            start: Address::new(entry.start),
+            end: Address::new(entry.end),
+            stored_diff: entry.stored_diff,
             computed_diff: computed,
-            valid:         disabled || entry.stored_diff == computed,
+            valid: disabled || entry.stored_diff == computed,
             disabled,
         });
     }
@@ -107,13 +107,13 @@ pub fn calculate_diff(bytes: &[u8], start: u32, end: u32) -> RomResult<u32> {
 // ---------------------------------------------------------- внутреннее ---
 
 struct ParsedEntry {
-    table_name:  String,
-    entry_idx:   usize,
-    start:       u32,
-    end:         u32,
+    table_name: String,
+    entry_idx: usize,
+    start: u32,
+    end: u32,
     stored_diff: u32,
     /// Адрес 4-байтного слова diff в ROM — куда писать обновлённое значение.
-    diff_addr:   u32,
+    diff_addr: u32,
 }
 
 fn iter_entries(rom: &RomImage, def: &ResolvedRom) -> RomResult<Vec<ParsedEntry>> {
@@ -122,26 +122,30 @@ fn iter_entries(rom: &RomImage, def: &ResolvedRom) -> RomResult<Vec<ParsedEntry>
         if !is_checksum_fix_table(table) {
             continue;
         }
-        let Some(table_addr) = table.storage_address else { continue };
-        let Some(total_bytes) = byte_count(table) else { continue };
+        let Some(table_addr) = table.storage_address else {
+            continue;
+        };
+        let Some(total_bytes) = byte_count(table) else {
+            continue;
+        };
         if total_bytes == 0 || total_bytes % 12 != 0 {
             continue;
         }
         let n = total_bytes / 12;
         for entry_idx in 0..n {
             let entry_offset = (entry_idx * 12) as u32;
-            let entry_addr   = table_addr.raw() + entry_offset;
+            let entry_addr = table_addr.raw() + entry_offset;
             let raw: [u8; 12] = rom
                 .read(Address::new(entry_addr), 12)?
                 .try_into()
                 .expect("12");
             entries.push(ParsedEntry {
-                table_name:  table.name.clone(),
+                table_name: table.name.clone(),
                 entry_idx,
-                start:       u32::from_be_bytes(raw[0..4].try_into().unwrap()),
-                end:         u32::from_be_bytes(raw[4..8].try_into().unwrap()),
+                start: u32::from_be_bytes(raw[0..4].try_into().unwrap()),
+                end: u32::from_be_bytes(raw[4..8].try_into().unwrap()),
                 stored_diff: u32::from_be_bytes(raw[8..12].try_into().unwrap()),
-                diff_addr:   entry_addr + 8,
+                diff_addr: entry_addr + 8,
             });
         }
     }
@@ -175,10 +179,8 @@ mod tests {
     fn calculate_diff_known_sum() {
         // 4 BE-слова: 1, 2, 3, 4 → sum=10. diff = CHECK_TOTAL - 10
         let bytes = [
-            0x00, 0x00, 0x00, 0x01,
-            0x00, 0x00, 0x00, 0x02,
-            0x00, 0x00, 0x00, 0x03,
-            0x00, 0x00, 0x00, 0x04,
+            0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00,
+            0x00, 0x04,
         ];
         let diff = calculate_diff(&bytes, 0, 16).unwrap();
         assert_eq!(diff, CHECK_TOTAL.wrapping_sub(10));
@@ -187,10 +189,7 @@ mod tests {
     #[test]
     fn calculate_diff_wraps_on_overflow() {
         // 0xFFFFFFFF + 0x00000001 = 0 (wrap) → diff = CHECK_TOTAL
-        let bytes = [
-            0xFF, 0xFF, 0xFF, 0xFF,
-            0x00, 0x00, 0x00, 0x01,
-        ];
+        let bytes = [0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x01];
         let diff = calculate_diff(&bytes, 0, 8).unwrap();
         assert_eq!(diff, CHECK_TOTAL);
     }
@@ -212,10 +211,7 @@ mod tests {
     #[test]
     fn calculate_diff_inverse_relationship() {
         // Главное свойство: sum + diff == CHECK_TOTAL для любого региона.
-        let bytes = [
-            0xDE, 0xAD, 0xBE, 0xEF,
-            0xCA, 0xFE, 0xBA, 0xBE,
-        ];
+        let bytes = [0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE];
         let diff = calculate_diff(&bytes, 0, 8).unwrap();
         let s1 = u32::from_be_bytes([0xDE, 0xAD, 0xBE, 0xEF]);
         let s2 = u32::from_be_bytes([0xCA, 0xFE, 0xBA, 0xBE]);

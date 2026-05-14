@@ -14,6 +14,11 @@ pub mod ssm;
 #[cfg(feature = "obd2")]
 pub mod obd2;
 
+/// UDS (ISO-14229) сервисы поверх ISO15765/CAN. Generic — без Subaru-специфики.
+/// Используется для ReadMemoryByAddress (0x23) — Subaru tuner-grade params.
+#[cfg(feature = "obd2")]
+pub mod uds;
+
 #[cfg(feature = "ds2")]
 pub mod ds2;
 
