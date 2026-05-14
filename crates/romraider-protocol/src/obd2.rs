@@ -48,11 +48,27 @@ pub struct ObdiiPid {
     pub units: &'static str,
 }
 
-/// Стандартные SAE J1979 Mode 01 PID-ы, обычно полезные для тюнинга
-/// Subaru. Pid-ы 0x01–0x4F гарантированно поддерживаются почти всеми
-/// OBD-II ECU; некоторые (0x42 Control Module Voltage, 0x46 Ambient Temp)
-/// поддерживаются не всегда — в этом случае `read_pid()` вернёт ошибку.
+/// Стандартные SAE J1979 Mode 01 PID-ы. Покрывают большинство полезных
+/// для тюнинга/диагностики параметров в диапазоне 0x01–0x51. Реальный
+/// набор поддержки ECU вычисляется через [`discover_supported_pids`].
+///
+/// Spec: <https://en.wikipedia.org/wiki/OBD-II_PIDs> (тот же текст что
+/// SAE J1979 standard, но без paywall-а).
 pub const STANDARD_PIDS: &[ObdiiPid] = &[
+    // ── Status / monitor bitmaps (raw uint, для interpretation см. SAE J1979) ──
+    ObdiiPid {
+        name:  "Monitor Status",      // PID 0x01: 4-byte bitmap, MIL+DTC count+test readiness.
+        pid:   0x01, bytes: 4,
+        scale: |b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as f64,
+        units: "raw",
+    },
+    ObdiiPid {
+        name:  "Fuel System Status",  // PID 0x03: byte A=bank1 state, byte B=bank2 state (enum).
+        pid:   0x03, bytes: 2,
+        scale: |b| (b[0] as f64 * 256.0 + b[1] as f64),
+        units: "raw",
+    },
+    // ── Fuel system & basic engine ───────────────────────────────────────
     ObdiiPid {
         name:  "Engine Load",
         pid:   0x04, bytes: 1,
@@ -64,6 +80,30 @@ pub const STANDARD_PIDS: &[ObdiiPid] = &[
         pid:   0x05, bytes: 1,
         scale: |b| b[0] as f64 - 40.0,
         units: "C",
+    },
+    ObdiiPid {
+        name:  "STFT B1",  // Short-Term Fuel Trim, Bank 1
+        pid:   0x06, bytes: 1,
+        scale: |b| (b[0] as f64 - 128.0) * 100.0 / 128.0,
+        units: "%",
+    },
+    ObdiiPid {
+        name:  "LTFT B1",  // Long-Term Fuel Trim, Bank 1
+        pid:   0x07, bytes: 1,
+        scale: |b| (b[0] as f64 - 128.0) * 100.0 / 128.0,
+        units: "%",
+    },
+    ObdiiPid {
+        name:  "STFT B2",
+        pid:   0x08, bytes: 1,
+        scale: |b| (b[0] as f64 - 128.0) * 100.0 / 128.0,
+        units: "%",
+    },
+    ObdiiPid {
+        name:  "LTFT B2",
+        pid:   0x09, bytes: 1,
+        scale: |b| (b[0] as f64 - 128.0) * 100.0 / 128.0,
+        units: "%",
     },
     ObdiiPid {
         name:  "Fuel Pressure",
@@ -114,10 +154,130 @@ pub const STANDARD_PIDS: &[ObdiiPid] = &[
         units: "%",
     },
     ObdiiPid {
+        name:  "Secondary Air Status",  // PID 0x12: enum (1=upstream, 2=downstream, 4=off, 8=pump on)
+        pid:   0x12, bytes: 1,
+        scale: |b| b[0] as f64,
+        units: "raw",
+    },
+    ObdiiPid {
+        name:  "O2 Sensors Present 2B",  // PID 0x13: bitmap of installed O2 in 2 banks
+        pid:   0x13, bytes: 1,
+        scale: |b| b[0] as f64,
+        units: "raw",
+    },
+    // ── O2 sensors (Bank 1) ──────────────────────────────────────────────
+    // PIDs 0x14–0x1B: каждый возвращает [voltage_byte, stft_byte].
+    // voltage = A/200 (V), stft = (B-128)*100/128 (%).
+    // Если STFT == 0xFF → датчик не используется для closed-loop.
+    ObdiiPid {
+        name:  "O2 B1S1 Voltage",
+        pid:   0x14, bytes: 2,
+        scale: |b| b[0] as f64 / 200.0,
+        units: "V",
+    },
+    ObdiiPid {
+        name:  "O2 B1S2 Voltage",
+        pid:   0x15, bytes: 2,
+        scale: |b| b[0] as f64 / 200.0,
+        units: "V",
+    },
+    ObdiiPid {
+        name:  "OBD Standards",       // PID 0x1C: enum (1=OBD-II Calif, 3=OBD/OBD-II, 6=EOBD, ...)
+        pid:   0x1C, bytes: 1,
+        scale: |b| b[0] as f64,
+        units: "raw",
+    },
+    // ── Run time + chain bridge ──────────────────────────────────────────
+    ObdiiPid {
         name:  "Run Time",
         pid:   0x1F, bytes: 2,
         scale: |b| b[0] as f64 * 256.0 + b[1] as f64,
         units: "s",
+    },
+    // ── Emissions + secondary range (0x21–0x40) ──────────────────────────
+    ObdiiPid {
+        name:  "Distance with MIL",
+        pid:   0x21, bytes: 2,
+        scale: |b| b[0] as f64 * 256.0 + b[1] as f64,
+        units: "km",
+    },
+    ObdiiPid {
+        name:  "Fuel Rail Pressure (vac)",
+        pid:   0x22, bytes: 2,
+        scale: |b| (b[0] as f64 * 256.0 + b[1] as f64) * 0.079,
+        units: "kPa",
+    },
+    ObdiiPid {
+        name:  "Fuel Rail Pressure",
+        pid:   0x23, bytes: 2,
+        scale: |b| (b[0] as f64 * 256.0 + b[1] as f64) * 10.0,
+        units: "kPa",
+    },
+    ObdiiPid {
+        // PID 0x24: wide-range O2 sensor 1, 4 bytes. A,B = lambda*2/65536;
+        // C,D = voltage*8/65536. Шкалируем только lambda (главное значение
+        // для тюнинга closed-loop).
+        name:  "O2 B1S1 Wideband Lambda",
+        pid:   0x24, bytes: 4,
+        scale: |b| (b[0] as f64 * 256.0 + b[1] as f64) * 2.0 / 65536.0,
+        units: "lambda",
+    },
+    ObdiiPid {
+        // PID 0x34: тот же wide-range S1, но с current вместо voltage.
+        // C,D = current*(1/256)-128 mA. Опять-таки лямбда главное.
+        name:  "O2 B1S1 Wideband Lambda (I)",
+        pid:   0x34, bytes: 4,
+        scale: |b| (b[0] as f64 * 256.0 + b[1] as f64) * 2.0 / 65536.0,
+        units: "lambda",
+    },
+    ObdiiPid {
+        name:  "Commanded EGR",
+        pid:   0x2C, bytes: 1,
+        scale: |b| b[0] as f64 * 100.0 / 255.0,
+        units: "%",
+    },
+    ObdiiPid {
+        name:  "EGR Error",
+        pid:   0x2D, bytes: 1,
+        scale: |b| (b[0] as f64 - 128.0) * 100.0 / 128.0,
+        units: "%",
+    },
+    ObdiiPid {
+        name:  "Commanded Evap Purge",
+        pid:   0x2E, bytes: 1,
+        scale: |b| b[0] as f64 * 100.0 / 255.0,
+        units: "%",
+    },
+    ObdiiPid {
+        name:  "Fuel Tank Level",
+        pid:   0x2F, bytes: 1,
+        scale: |b| b[0] as f64 * 100.0 / 255.0,
+        units: "%",
+    },
+    ObdiiPid {
+        name:  "Warm-ups Since Cleared",
+        pid:   0x30, bytes: 1,
+        scale: |b| b[0] as f64,
+        units: "count",
+    },
+    ObdiiPid {
+        name:  "Distance Since Cleared",
+        pid:   0x31, bytes: 2,
+        scale: |b| b[0] as f64 * 256.0 + b[1] as f64,
+        units: "km",
+    },
+    ObdiiPid {
+        name:  "Barometric Pressure",
+        pid:   0x33, bytes: 1,
+        scale: |b| b[0] as f64,
+        units: "kPa",
+    },
+    // ── Third range (0x41–0x60) ──────────────────────────────────────────
+    ObdiiPid {
+        name:  "Monitor Status DC",   // PID 0x41: this drive cycle, same encoding как 0x01
+        pid:   0x41, bytes: 4,
+        scale: |b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as f64,
+        units: "raw",
     },
     ObdiiPid {
         name:  "Battery Voltage",
@@ -126,12 +286,136 @@ pub const STANDARD_PIDS: &[ObdiiPid] = &[
         units: "V",
     },
     ObdiiPid {
+        name:  "Absolute Load",
+        pid:   0x43, bytes: 2,
+        scale: |b| (b[0] as f64 * 256.0 + b[1] as f64) * 100.0 / 255.0,
+        units: "%",
+    },
+    ObdiiPid {
+        name:  "Commanded AFR",
+        pid:   0x44, bytes: 2,
+        scale: |b| (b[0] as f64 * 256.0 + b[1] as f64) * 2.0 / 65536.0,
+        units: "lambda",
+    },
+    ObdiiPid {
+        name:  "Relative TPS",
+        pid:   0x45, bytes: 1,
+        scale: |b| b[0] as f64 * 100.0 / 255.0,
+        units: "%",
+    },
+    ObdiiPid {
         name:  "Ambient Temp",
         pid:   0x46, bytes: 1,
         scale: |b| b[0] as f64 - 40.0,
         units: "C",
     },
+    ObdiiPid {
+        name:  "Absolute TPS B",
+        pid:   0x47, bytes: 1,
+        scale: |b| b[0] as f64 * 100.0 / 255.0,
+        units: "%",
+    },
+    ObdiiPid {
+        name:  "Accel Pedal D",
+        pid:   0x49, bytes: 1,
+        scale: |b| b[0] as f64 * 100.0 / 255.0,
+        units: "%",
+    },
+    ObdiiPid {
+        name:  "Accel Pedal E",
+        pid:   0x4A, bytes: 1,
+        scale: |b| b[0] as f64 * 100.0 / 255.0,
+        units: "%",
+    },
+    ObdiiPid {
+        name:  "Commanded Throttle",
+        pid:   0x4C, bytes: 1,
+        scale: |b| b[0] as f64 * 100.0 / 255.0,
+        units: "%",
+    },
+    ObdiiPid {
+        name:  "Time with MIL",
+        pid:   0x4D, bytes: 2,
+        scale: |b| b[0] as f64 * 256.0 + b[1] as f64,
+        units: "min",
+    },
+    ObdiiPid {
+        name:  "Time Since Cleared",
+        pid:   0x4E, bytes: 2,
+        scale: |b| b[0] as f64 * 256.0 + b[1] as f64,
+        units: "min",
+    },
+    ObdiiPid {
+        name:  "Fuel Type",           // PID 0x51: enum (1=Gas, 4=Diesel, 5=LPG, ...)
+        pid:   0x51, bytes: 1,
+        scale: |b| b[0] as f64,
+        units: "raw",
+    },
+    ObdiiPid {
+        name:  "Relative Accel Pedal",
+        pid:   0x5A, bytes: 1,
+        scale: |b| b[0] as f64 * 100.0 / 255.0,
+        units: "%",
+    },
 ];
+
+/// Опросить ECU по chain Mode 01 PID 0x00/0x20/0x40/... и вернуть список
+/// **всех PID-ов, которые ECU объявляет поддерживаемыми**.
+///
+/// Каждый «supported-PIDs» PID отвечает 4-байтовым bitmap-ом:
+/// - bit 31 (MSB) = `<probe_pid> + 1` поддержан/нет
+/// - bit  0 (LSB) = `<probe_pid> + 0x20` — этот же PID одновременно
+///   служит «next-chain-query». Если LSB=1 → надо запросить `<probe_pid+0x20>`
+///   чтобы получить bitmap для следующих 32-х PID-ов; LSB=0 → конец chain-а.
+///
+/// Возвращает отсортированный список PID-байтов. Включает сам chain-PID
+/// (`0x20`, `0x40`, …) если он поддержан — это **корректно**, потому что эти
+/// PID-ы возвращают реальные данные (supported-bitmap).
+pub fn discover_supported_pids<T: Transport + ?Sized>(
+    tr:      &mut T,
+    timeout: Duration,
+) -> ProtocolResult<Vec<u8>> {
+    let mut supported = Vec::new();
+    let mut probe_pid: u8 = 0x00;
+    loop {
+        let bitmap_bytes = read_pid(tr, probe_pid, timeout)?;
+        if bitmap_bytes.len() < 4 {
+            break;
+        }
+        let bitmap = u32::from_be_bytes([
+            bitmap_bytes[0], bitmap_bytes[1],
+            bitmap_bytes[2], bitmap_bytes[3],
+        ]);
+        for i in 0..32u8 {
+            if bitmap & (1u32 << (31 - i)) != 0 {
+                supported.push(probe_pid + i + 1);
+            }
+        }
+        // LSB sigaled "next 32-PID range supported" — продолжаем chain.
+        if bitmap & 1 == 0 {
+            break;
+        }
+        match probe_pid.checked_add(0x20) {
+            Some(next) => probe_pid = next,
+            None       => break,
+        }
+        // safety: max 8 ranges = 256 PIDs.
+        if probe_pid >= 0xE0 {
+            break;
+        }
+    }
+    Ok(supported)
+}
+
+/// Сколько PID-ов в нашей встроенной таблице **и** в списке ECU-supported.
+/// Удобно для рапорта в `--list --probe`.
+#[must_use]
+pub fn known_supported(supported: &[u8]) -> Vec<&'static ObdiiPid> {
+    STANDARD_PIDS
+        .iter()
+        .filter(|p| supported.contains(&p.pid))
+        .collect()
+}
 
 /// Найти PID по человеческому имени (case-insensitive).
 #[must_use]

@@ -47,12 +47,14 @@
 | 20    | Live `ssm-init --tactrix` end-to-end (ROM `4E42504007`, SSM_ID `A2 10 11`, 96 cap-байт) | следующий коммит |
 | 22    | Defs integration на реальной фикстуре (1 МБ SH7058 ROM): float-endian fix, multi-byte switch parser, GUI modified-highlight + Changes-since-open | следующий коммит |
 | 23    | **Mac-native ROM dump через UDS/ISO15765**: CAN seed/key RE (firmware-specific 16-word round-key table из ROM `0x05972C`), kernel-upload (64× SID 0xB6), kernel handshake/read_memory, Tactrix CAN multi-frame strip → dump 1 МБ за 43.7 с, SHA-256 = `3016ce24…` совпадает с EcuFlash-fixture-ом byte-for-byte | следующий коммит |
+| 24    | **Live datalogger через OBD-II Mode 01 / CAN**: K-Line SSM2 `ReadAddresses` на 2007 USDM Forester блокируется анти-fuzz (init OK, дальше silent) → pivot на CAN. Новый `obd2`-модуль (40 SAE J1979 PID-ов от Engine Load до Relative Accel Pedal), `discover_supported_pids` через bitmap chain (0x00/0x20/0x40/...), CLI `logger-can --list[--probe] | --params NAMES | --all-supported`. Live проверено на машине: ECU поддержал 42 PID-а, 40 из них в нашей таблице — 4 Hz polling всех сразу, lambda/coolant/RPM/MAF/voltage реалистичны | следующий коммит |
 
 ## Запланированные слайсы
 
 | Слайс | Тема                                                                | Статус |
 | ----- | ------------------------------------------------------------------- | :----: |
-| 24    | **Live logger E2E через Tactrix K-Line** — `logger --tactrix` ходит к живому ECU, опрашивает RPM/Coolant/MAF/MAP/IAT/TPS через `ReadAddresses` (0xA8), пишет CSV, preview значений в stderr. Backend (Slice 16/17) и CLI-флаг уже готовы — ждём прогона на машине | 🟡 в работе |
+| 24b   | **PID batching для скорости** — до 6 PIDов в одном Mode 01 запросе через ISO-TP multi-frame, ~10× speedup → 20-30 Hz polling. Опционально; 4 Hz уже достаточно для большинства тюнинг-сценариев | 🔵 опц. |
+| 24c   | **Subaru-specific extended params через UDS Mode 0x23 ReadMemoryByAddress** — knock correction, fine-grained AFR, individual cyl data, через firmware-specific RAM-адреса из `<ecuparams>` блока в апстрим `logger.xml` (для нашего ROM `4E42504007`) | 🔵 опц. |
 | 25    | **Generic protocol abstraction** — единый `EcuClient` trait, auto-detect протокола (K-Line vs CAN) через ECU-init capability-байты, `--protocol auto\|ssm\|can\|kwp` в CLI. Уберёт разделение `dump-rom` vs `dump-rom-can`, `peek-vin` vs `ssm-init` и т.п. | 🔵 запланирован |
 | 26    | **GUI ECU-tools menu** — пункт меню «ECU» с действиями: `Read ROM from ECU…` (модал с reminders «turn ignition ON» / `OFF`, progress-bar для upload + dump phase, file-save после успеха, опционально auto-open в редакторе); `View ECU info` (VIN/CVN); placeholder-пункты `Write ROM` / `Erase ROM` (disabled, tooltip про необходимость donor-ECU). Worker thread + mpsc для прогресса, как уже сделано в XY-plot. ⚠️ Открытый вопрос — `sudo` для libusb на macOS (варианты: запуск GUI с sudo, helper-binary с правами + IPC, или «дамп через CLI → GUI открывает результат») | 🔵 запланирован |
 

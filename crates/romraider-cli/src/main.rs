@@ -263,8 +263,14 @@ enum Cmd {
         #[arg(long, value_delimiter = ',', num_args = 0..)]
         params: Vec<String>,
 
+        /// Авто-подписаться на **все** PID-ы, которые ECU объявил поддержанными
+        /// через chain bitmap-ов 0x00/0x20/0x40/... (и которые есть в нашей
+        /// встроенной таблице). Игнорирует `--params`.
+        #[arg(long)]
+        all_supported: bool,
+
         /// Куда писать CSV-датлог.
-        #[arg(long, required_unless_present = "list")]
+        #[arg(long, required_unless_present_any = ["list"])]
         out: Option<PathBuf>,
 
         /// Интервал между опросами (мс).
@@ -279,9 +285,15 @@ enum Cmd {
         #[arg(long, default_value_t = 500)]
         timeout_ms: u64,
 
-        /// Просто вывести таблицу доступных PID-ов и выйти.
+        /// Вывести таблицу PID-ов и выйти. С `--probe` дополнительно подключится
+        /// к ECU и пометит каждый PID как ✓ / ✗ по результату chain-bitmap-ов.
         #[arg(long)]
         list: bool,
+
+        /// С `--list`: подключиться к ECU и опросить supported-PIDs chain,
+        /// чтобы пометить таблицу галочками. Без `--list` игнорируется.
+        #[arg(long)]
+        probe: bool,
     },
 
     /// Загрузить ROM-файл вместе с XML-определением и распечатать значения
@@ -397,10 +409,10 @@ fn main() -> Result<()> {
             Duration::from_millis(timeout_ms), tactrix,
         ),
         Cmd::LoggerCan {
-            params, out, interval_ms, duration_secs, timeout_ms, list,
+            params, all_supported, out, interval_ms, duration_secs, timeout_ms, list, probe,
         } => logger_can_cmd(
-            &params, out.as_ref(), interval_ms, duration_secs,
-            Duration::from_millis(timeout_ms), list,
+            &params, all_supported, out.as_ref(), interval_ms, duration_secs,
+            Duration::from_millis(timeout_ms), list, probe,
         ),
     }
 }
@@ -742,67 +754,115 @@ fn logger_cmd(
 }
 
 fn logger_can_cmd(
-    param_names:   &[String],
-    out_path:      Option<&PathBuf>,
-    interval_ms:   u64,
-    duration_secs: u64,
-    timeout:       Duration,
-    list:          bool,
+    param_names:    &[String],
+    all_supported:  bool,
+    out_path:       Option<&PathBuf>,
+    interval_ms:    u64,
+    duration_secs:  u64,
+    timeout:        Duration,
+    list:           bool,
+    probe:          bool,
 ) -> Result<()> {
-    use romraider_protocol::obd2::{find_pid, read_pid, ObdiiPid, STANDARD_PIDS};
+    use romraider_protocol::obd2::{
+        discover_supported_pids, find_pid, read_pid, ObdiiPid, STANDARD_PIDS,
+    };
 
-    // --list режим: просто распечатать таблицу.
+    // --list режим: распечатать таблицу. Если есть --probe — заодно спросить ECU.
     if list {
+        let supported: Option<Vec<u8>> = if probe {
+            let mut tr = open_tactrix_can()?;
+            eprintln!("Probing ECU for supported PIDs via bitmap chain…");
+            let pids = discover_supported_pids(&mut tr, timeout)
+                .context("discover_supported_pids failed")?;
+            eprintln!("  ECU reports {} supported PIDs.", pids.len());
+            Some(pids)
+        } else {
+            None
+        };
         println!("Available OBD-II Mode 01 PIDs:");
-        println!(
-            "  {:<22}  {:<5}  {:<5}  {}",
-            "Name", "PID", "Bytes", "Units",
-        );
+        if supported.is_some() {
+            println!("  ✓/✗  {:<22}  {:<5}  {:<5}  {}", "Name", "PID", "Bytes", "Units");
+        } else {
+            println!("       {:<22}  {:<5}  {:<5}  {}", "Name", "PID", "Bytes", "Units");
+        }
         for p in STANDARD_PIDS {
+            let mark = match &supported {
+                Some(s) if s.contains(&p.pid) => " ✓ ",
+                Some(_)                       => " ✗ ",
+                None                          => "   ",
+            };
             println!(
-                "  {:<22}  0x{:02X}   {:<5}  {}",
+                "  {mark}  {:<22}  0x{:02X}   {:<5}  {}",
                 p.name, p.pid, p.bytes, p.units,
             );
+        }
+        if let Some(s) = supported {
+            // Покажем PIDs, которые ECU объявил, но **которых нет** в нашей таблице.
+            let unknown: Vec<u8> = s.iter()
+                .filter(|pid| !STANDARD_PIDS.iter().any(|p| &p.pid == *pid))
+                .copied()
+                .collect();
+            if !unknown.is_empty() {
+                println!(
+                    "\nECU также сообщил поддержку {} PID-ов **без scaling-формулы** в нашей таблице:",
+                    unknown.len(),
+                );
+                let hex: Vec<String> = unknown.iter().map(|p| format!("0x{p:02X}")).collect();
+                println!("  {}", hex.join(", "));
+                println!("(добавь их в STANDARD_PIDS чтобы логировать.)");
+            }
         }
         return Ok(());
     }
 
-    if param_names.is_empty() {
-        anyhow::bail!("at least one --params name is required (or use --list)");
-    }
     let out_path = out_path.expect("clap required_unless_present validates this");
 
-    // 1. Резолв имён в PID-таблицу.
-    let mut pids: Vec<&'static ObdiiPid> = Vec::new();
-    for name in param_names {
-        let p = find_pid(name).ok_or_else(|| {
-            anyhow::anyhow!("unknown PID '{name}' — use `logger-can --list` to see available names")
-        })?;
-        pids.push(p);
-        eprintln!("  + {} (PID 0x{:02X}, {})", p.name, p.pid, p.units);
-    }
-
-    // 2. Открыть Tactrix в CAN-mode + flow-control filter.
+    // 1. Открыть Tactrix в CAN-mode.
     let mut tr = open_tactrix_can()?;
 
-    // 3. Wake-up: Mode 01 PID 0x00 (supported PIDs bitmap) — стандартный ping.
-    //    Если ECU отвечает, значит OBD-II стек жив.
-    eprintln!("Pinging ECU via OBD-II Mode 01 PID 0x00 (supported PIDs)…");
-    match read_pid(&mut tr, 0x00, timeout) {
-        Ok(supported) if supported.len() >= 4 => {
-            let bitmap = u32::from_be_bytes([supported[0], supported[1], supported[2], supported[3]]);
-            eprintln!(
-                "  ECU supported PIDs 0x01–0x20 bitmap: 0x{:08X} ({} PIDs)",
-                bitmap, bitmap.count_ones(),
+    // 2. Резолв подписок: либо явный список, либо all-supported через discover.
+    let pids: Vec<&'static ObdiiPid> = if all_supported {
+        eprintln!("Probing ECU for supported PIDs via bitmap chain…");
+        let supported = discover_supported_pids(&mut tr, timeout)
+            .context("discover_supported_pids failed")?;
+        let mut chosen: Vec<&'static ObdiiPid> = STANDARD_PIDS
+            .iter()
+            .filter(|p| supported.contains(&p.pid))
+            .collect();
+        // PID 0x00/0x20/0x40 — bitmap-pidы, неинтересны для логгинга.
+        chosen.retain(|p| ![0x00, 0x20, 0x40, 0x60, 0x80, 0xA0].contains(&p.pid));
+        if chosen.is_empty() {
+            anyhow::bail!(
+                "ECU reports {} PIDs but none are in our STANDARD_PIDS table",
+                supported.len(),
             );
         }
-        Ok(short) => {
-            eprintln!("  ⚠️  Short response ({} bytes), bus may be cold-starting", short.len());
+        eprintln!(
+            "  Subscribing to {} PIDs (intersection of ECU-supported and our table):",
+            chosen.len(),
+        );
+        for p in &chosen {
+            eprintln!("    + {} (PID 0x{:02X}, {})", p.name, p.pid, p.units);
         }
-        Err(e) => {
-            eprintln!("  ⚠️  ECU ping failed: {e} — продолжаем в надежде что разогрелось");
+        chosen
+    } else {
+        if param_names.is_empty() {
+            anyhow::bail!(
+                "at least one --params name is required (or use --all-supported / --list)"
+            );
         }
-    }
+        let mut chosen = Vec::with_capacity(param_names.len());
+        for name in param_names {
+            let p = find_pid(name).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "unknown PID '{name}' — use `logger-can --list` to see available names"
+                )
+            })?;
+            chosen.push(p);
+            eprintln!("  + {} (PID 0x{:02X}, {})", p.name, p.pid, p.units);
+        }
+        chosen
+    };
 
     // 4. CSV.
     let mut datalog = romraider_logger::datalog::DatalogWriter::create(out_path)
