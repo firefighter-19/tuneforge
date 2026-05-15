@@ -83,6 +83,13 @@ enum Cmd {
         /// `--port` в этом режиме игнорируется.
         #[arg(long)]
         tactrix: bool,
+
+        /// Workaround для анти-fuzz Subaru ECU (2007+, например USDM Forester
+        /// XT): пересоздавать K-Line канал перед каждым ReadBlock. Очень
+        /// медленно (~6 ч на 1 МБ). По умолчанию **выключено** — обычные
+        /// SSM2 ECU (до 2007) принимают серию ReadBlock в одной сессии.
+        #[arg(long)]
+        reset_per_chunk: bool,
     },
 
     /// (feature `kernel-upload`) Дамп прошивки **через RAM-резидентный kernel**
@@ -162,6 +169,12 @@ enum Cmd {
 
         #[arg(long, default_value_t = 1500)]
         timeout_ms: u64,
+
+        /// Перед Mode 0xA8 послать UDS `10 03` (ExtendedDiagnosticSession).
+        /// Иногда разблокирует доступ к ecuparams-адресам (0xFFxxxx),
+        /// которые в default session режутся NRC 0x12.
+        #[arg(long)]
+        extended_session: bool,
     },
 
     /// (Slice 23 Phase C+D+E, feature `kernel-upload`) **Полный Mac-native ROM
@@ -476,6 +489,7 @@ fn main() -> Result<()> {
             chunk_size,
             timeout_ms,
             tactrix,
+            reset_per_chunk,
         } => dump_rom_cmd(
             &port,
             baud,
@@ -485,6 +499,7 @@ fn main() -> Result<()> {
             chunk_size,
             Duration::from_millis(timeout_ms),
             tactrix,
+            reset_per_chunk,
         ),
         #[cfg(feature = "kernel-upload")]
         Cmd::DumpRomKernel {
@@ -523,7 +538,8 @@ fn main() -> Result<()> {
             addr,
             len,
             timeout_ms,
-        } => peek_ram_can_cmd(&addr, len, Duration::from_millis(timeout_ms)),
+            extended_session,
+        } => peek_ram_can_cmd(&addr, len, Duration::from_millis(timeout_ms), extended_session),
         Cmd::DtcCan { timeout_ms } => dtc_can_cmd(Duration::from_millis(timeout_ms)),
         #[cfg(feature = "kernel-upload")]
         Cmd::PeekSeed {
@@ -615,6 +631,7 @@ fn dump_rom_cmd(
     chunk_size: usize,
     timeout: Duration,
     tactrix: bool,
+    reset_per_chunk: bool,
 ) -> Result<()> {
     let start_addr = parse_int_or_hex_u32(start).with_context(|| format!("--start `{start}`"))?;
     let length_val =
@@ -624,12 +641,17 @@ fn dump_rom_cmd(
     }
 
     if tactrix {
-        // Subaru SSM2 на 2007 Forester XT (и аналогах) держит только ОДИН
-        // ReadBlock-ответ на сессию: второй и далее ECU игнорирует. Поэтому
-        // для Tactrix-режима делаем «session-per-chunk» — для каждого
-        // chunk заново открываем Tactrix, делаем ecu_init, читаем один блок,
-        // закрываем. Медленно, но единственный надёжный путь без kernel-upload.
-        dump_rom_tactrix_session_per_chunk(start_addr, length_val, chunk_size, timeout, output)
+        if reset_per_chunk {
+            // Workaround под анти-fuzz Subaru ECU 2007+: каждый ReadBlock
+            // в свежей K-Line-сессии. Очень медленно (~6 часов на 1 МБ),
+            // но единственный путь когда ECU режет повторные ReadBlock.
+            dump_rom_tactrix_session_per_chunk(start_addr, length_val, chunk_size, timeout, output)
+        } else {
+            // Обычный SSM2 (до анти-fuzz, 2003–2006 Subaru): один ecu_init,
+            // дальше серия ReadBlock в одной сессии. ~22 мин на 512 КБ через
+            // K-Line @ 4800 baud.
+            dump_rom_tactrix_continuous(start_addr, length_val, chunk_size, timeout, output)
+        }
     } else {
         if port.is_empty() {
             anyhow::bail!("--port required when --tactrix is not set");
@@ -641,6 +663,62 @@ fn dump_rom_cmd(
         tr.purge()?;
         do_dump_rom(&mut tr, start_addr, length_val, chunk_size, timeout, output)
     }
+}
+
+/// Tactrix-дамп через **одну** SSM2-сессию: ecu_init один раз, дальше серия
+/// ReadBlock-запросов. Это «нормальный» режим SSM2 — работает на 2003–2006
+/// Subaru до анти-fuzz эры. Намного быстрее `session_per_chunk`-варианта.
+fn dump_rom_tactrix_continuous(
+    start_addr: u32,
+    length: usize,
+    chunk_size: usize,
+    timeout: Duration,
+    output: &PathBuf,
+) -> Result<()> {
+    let mut tr = open_tactrix()?;
+
+    let init = ssm::ecu_init(&mut tr, timeout)
+        .context("SSM ecu-init failed (ignition ON? engine running?)")?;
+    eprintln!(
+        "  ECU online: ROM {} ({} cap bytes)",
+        bytes::hex_dump(&init.rom_id),
+        init.capabilities.len()
+    );
+
+    let started = std::time::Instant::now();
+    eprintln!(
+        "Dumping {length} bytes from 0x{start_addr:06X} via Tactrix \
+         (chunks of {chunk_size}, single session, timeout {}ms)…",
+        timeout.as_millis()
+    );
+    let mut last_percent = -1i32;
+    let bytes = ssm::dump_rom(
+        &mut tr,
+        Address::new(start_addr),
+        length,
+        chunk_size,
+        timeout,
+        |done, total| {
+            let percent = (done as i64 * 100 / total as i64) as i32;
+            if percent != last_percent {
+                let elapsed = started.elapsed().as_secs_f64();
+                let rate = done as f64 / elapsed.max(1e-6);
+                let eta = (total - done) as f64 / rate.max(1.0);
+                eprintln!("  {done}/{total} ({percent}%)  {rate:.0} B/s  ETA {eta:.0}s");
+                last_percent = percent;
+            }
+        },
+    )
+    .context("dump_rom failed")?;
+
+    std::fs::write(output, &bytes).with_context(|| format!("writing {}", output.display()))?;
+    eprintln!(
+        "Done in {:.1}s. {} bytes written to {}",
+        started.elapsed().as_secs_f64(),
+        bytes.len(),
+        output.display()
+    );
+    Ok(())
 }
 
 /// Дамп через одну USB-сессию Tactrix, но с пересозданием K-Line канала
@@ -1140,7 +1218,12 @@ fn dtc_can_cmd(timeout: Duration) -> Result<()> {
     Ok(())
 }
 
-fn peek_ram_can_cmd(addr_str: &str, len: u8, timeout: Duration) -> Result<()> {
+fn peek_ram_can_cmd(
+    addr_str:         &str,
+    len:              u8,
+    timeout:          Duration,
+    extended_session: bool,
+) -> Result<()> {
     use romraider_protocol::subaru;
 
     let raw_addr = parse_int_or_hex_u32(addr_str).with_context(|| format!("--addr `{addr_str}`"))?;
@@ -1156,6 +1239,31 @@ fn peek_ram_can_cmd(addr_str: &str, len: u8, timeout: Duration) -> Result<()> {
     }
 
     let mut tr = open_tactrix_can()?;
+
+    if extended_session {
+        // UDS DiagnosticSessionControl (0x10) под-функция 0x03 = ExtendedDiagSession.
+        eprintln!("Entering UDS ExtendedDiagnosticSession (10 03)…");
+        let mut tx = Vec::with_capacity(4 + 2);
+        tx.extend_from_slice(&0x7E0u32.to_be_bytes());
+        tx.push(0x10);
+        tx.push(0x03);
+        tr.write_all(&tx, timeout).context("10 03 TX")?;
+        let mut rb = [0u8; 64];
+        match tr.read_frame(&mut rb, timeout) {
+            Ok(n) if n >= 5 => {
+                let uds = &rb[4..n];
+                if uds[0] == 0x7F {
+                    eprintln!("  ⚠️  ExtendedDiag rejected: NRC 0x{:02X}", uds[2]);
+                } else if uds[0] == 0x50 {
+                    eprintln!("  ✅ ExtendedDiag granted (0x50 echo)");
+                } else {
+                    eprintln!("  unexpected: {:02X?}", uds);
+                }
+            }
+            Ok(n) => eprintln!("  short RX ({n} bytes)"),
+            Err(e) => eprintln!("  RX error: {e}"),
+        }
+    }
 
     // SSM-CAN protocol требует ECU init (`AA` → `EA <info>`) перед любыми
     // 0xAx-командами. Без него ECU режет всё через NRC 0x12 — это **не**
