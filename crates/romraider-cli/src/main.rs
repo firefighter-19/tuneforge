@@ -128,6 +128,18 @@ enum Cmd {
         timeout_ms: u64,
     },
 
+    /// Прочитать **DTC коды** (Diagnostic Trouble Codes) через OBD-II
+    /// Mode 0x03 (confirmed/stored) + Mode 0x07 (pending) поверх CAN.
+    /// Это **бесплатная** диагностика — никакой security, default session.
+    ///
+    /// Возвращает 5-символьные DTC коды в стандартном формате
+    /// (`P0301` = misfire cyl 1, `P0420` = catalyst efficiency, и т.п.).
+    /// Расшифровка кодов — Google или официальный список SAE J2012.
+    DtcCan {
+        #[arg(long, default_value_t = 1500)]
+        timeout_ms: u64,
+    },
+
     /// Прочитать произвольный RAM-адрес ECU через **UDS Mode 0x23
     /// ReadMemoryByAddress** поверх CAN/ISO15765. Используется для проверки,
     /// что ECU отдаёт Subaru-specific tuner-grade параметры (knock correction,
@@ -318,6 +330,51 @@ enum Cmd {
         probe: bool,
     },
 
+    /// **Subaru SSM3 логгер через CAN** — опрашивает Subaru-specific
+    /// параметры из стандартного `<parameters>`-блока RomRaider `logger.xml`
+    /// (capability-bitmap'd, отличаются от OBD-II Mode 01 PID-ов!) через
+    /// proprietary cmd `0xA8` ReadAddresses-over-CAN.
+    ///
+    /// На 2007+ Subaru это **единственный** способ снять tuner-grade данные:
+    /// Knock Correction Advance (P23), A/F Sensor (P58), Fine Learning Knock
+    /// (P91), WGDC (P36) и т.п. — то, чего нет в стандартном OBD-II.
+    ///
+    /// `<ecuparams>`-адреса (0xFFxxxx, float) в default session блокируются
+    /// анти-fuzz-ом (NRC 0x12) — для них нужен kernel-upload, но он halt-ит
+    /// engine, поэтому для live-логгинга непригоден.
+    LoggerSsmCan {
+        /// Список параметров по ID (`P8,P23,P3`) или имени
+        /// (`"RPM,Knock Correction,A/F Correction #1"`), case-insensitive.
+        #[arg(long, value_delimiter = ',', num_args = 0..)]
+        params: Vec<String>,
+
+        /// Авто-подписаться на **все** параметры из встроенной таблицы (~15
+        /// тщательно подобранных под диагностику knock/AFR/boost).
+        #[arg(long)]
+        all: bool,
+
+        /// Куда писать CSV.
+        #[arg(long, required_unless_present_any = ["list"])]
+        out: Option<PathBuf>,
+
+        /// Интервал между опросами (мс). При батчинге всех ~15 параметров
+        /// в одном запросе реально достижимы 20+ Hz через `--interval-ms 50`.
+        #[arg(long, default_value_t = 100)]
+        interval_ms: u64,
+
+        /// Длительность; `0` = бесконечно.
+        #[arg(long, default_value_t = 0)]
+        duration_secs: u64,
+
+        /// Timeout на один запрос (мс).
+        #[arg(long, default_value_t = 500)]
+        timeout_ms: u64,
+
+        /// Распечатать таблицу доступных SSM-параметров и выйти.
+        #[arg(long)]
+        list: bool,
+    },
+
     /// Загрузить ROM-файл вместе с XML-определением и распечатать значения
     /// одной таблицы (raw + scaled, с осями для 3D).
     ReadTable {
@@ -467,6 +524,7 @@ fn main() -> Result<()> {
             len,
             timeout_ms,
         } => peek_ram_can_cmd(&addr, len, Duration::from_millis(timeout_ms)),
+        Cmd::DtcCan { timeout_ms } => dtc_can_cmd(Duration::from_millis(timeout_ms)),
         #[cfg(feature = "kernel-upload")]
         Cmd::PeekSeed {
             send_key,
@@ -527,6 +585,23 @@ fn main() -> Result<()> {
             Duration::from_millis(timeout_ms),
             list,
             probe,
+        ),
+        Cmd::LoggerSsmCan {
+            params,
+            all,
+            out,
+            interval_ms,
+            duration_secs,
+            timeout_ms,
+            list,
+        } => logger_ssm_can_cmd(
+            &params,
+            all,
+            out.as_ref(),
+            interval_ms,
+            duration_secs,
+            Duration::from_millis(timeout_ms),
+            list,
         ),
     }
 }
@@ -883,21 +958,227 @@ fn logger_cmd(
     Ok(())
 }
 
-fn peek_ram_can_cmd(addr_str: &str, len: u8, timeout: Duration) -> Result<()> {
-    use romraider_protocol::uds;
+fn logger_ssm_can_cmd(
+    param_keys:    &[String],
+    all:           bool,
+    out_path:      Option<&PathBuf>,
+    interval_ms:   u64,
+    duration_secs: u64,
+    timeout:       Duration,
+    list:          bool,
+) -> Result<()> {
+    use romraider_protocol::subaru::{
+        self, find_ssm_param, read_ssm_params_can, SsmParam, SUBARU_SSM_PARAMS,
+    };
 
-    let addr = parse_int_or_hex_u32(addr_str).with_context(|| format!("--addr `{addr_str}`"))?;
+    if list {
+        println!("Available Subaru SSM3 parameters (via CAN Mode 0xA8):");
+        println!("  {:<5}  {:<32}  {:<10}  {:<5}  {}", "ID", "Name", "Addr", "Bytes", "Units");
+        for p in SUBARU_SSM_PARAMS {
+            println!(
+                "  {:<5}  {:<32}  0x{:06X}    {:<5}  {}",
+                p.id, p.name, p.address, p.bytes, p.units,
+            );
+        }
+        return Ok(());
+    }
+
+    let out_path = out_path.expect("clap required_unless_present validates this");
+
+    // 1. Резолв параметров.
+    let chosen: Vec<&'static SsmParam> = if all {
+        SUBARU_SSM_PARAMS.iter().collect()
+    } else {
+        if param_keys.is_empty() {
+            anyhow::bail!("at least one --params is required (or --all / --list)");
+        }
+        let mut v = Vec::new();
+        for key in param_keys {
+            let p = find_ssm_param(key).ok_or_else(|| {
+                anyhow::anyhow!("unknown SSM param '{key}' — use `--list`")
+            })?;
+            v.push(p);
+        }
+        v
+    };
+    eprintln!("Subscribing to {} SSM param(s):", chosen.len());
+    for p in &chosen {
+        eprintln!("  + {:<4} {:<32} addr=0x{:06X} ({}B, {})",
+            p.id, p.name, p.address, p.bytes, p.units);
+    }
+
+    // 2. Открыть CAN + SSM-CAN ECU init.
+    let mut tr = open_tactrix_can()?;
+    eprintln!("SSM-CAN ECU init (cmd 0xAA)…");
+    let info = subaru::ecu_init_can(&mut tr, timeout)
+        .context("SSM-CAN ECU init failed")?;
+    if info.len() >= 8 {
+        eprintln!(
+            "  ECU online: SSM-ID {:02X} {:02X} {:02X}, ROM-ID {} ({} cap-bytes)",
+            info[0], info[1], info[2],
+            bytes::hex_dump(&info[3..8]),
+            info.len() - 8,
+        );
+    }
+
+    // 3. CSV.
+    let mut datalog = romraider_logger::datalog::DatalogWriter::create(out_path)
+        .with_context(|| format!("opening {}", out_path.display()))?;
+
+    // 4. Loop с батчингом — все параметры в одном Mode 0xA8 запросе.
+    let interval = Duration::from_millis(interval_ms);
+    let deadline = if duration_secs > 0 {
+        Some(std::time::Instant::now() + Duration::from_secs(duration_secs))
+    } else {
+        None
+    };
+    let mut count = 0u64;
+    eprintln!(
+        "Starting SSM-CAN log to {} (interval {} ms, {} params batched)…",
+        out_path.display(), interval_ms, chosen.len(),
+    );
+    loop {
+        let started = std::time::Instant::now();
+        match read_ssm_params_can(&mut tr, &chosen, timeout) {
+            Ok(per_param) => {
+                let mut values = Vec::with_capacity(chosen.len());
+                for (p, raw) in chosen.iter().zip(&per_param) {
+                    let v = (p.scale)(raw);
+                    values.push(SampleValue {
+                        parameter_id: p.name.into(),
+                        raw: raw.clone(),
+                        value: v,
+                    });
+                }
+                let sample = Sample {
+                    timestamp: std::time::SystemTime::now(),
+                    values,
+                };
+                datalog.write_sample(&sample)?;
+                count += 1;
+                if count == 1 || count % 10 == 0 {
+                    let preview = sample.values.iter()
+                        .map(|v| format!("{}={:.2}", v.parameter_id, v.value))
+                        .collect::<Vec<_>>()
+                        .join("  ");
+                    eprintln!("  [{count:>5}]  {preview}");
+                }
+            }
+            Err(e) => eprintln!("  poll error: {e}"),
+        }
+        if let Some(d) = deadline {
+            if std::time::Instant::now() >= d { break; }
+        }
+        if let Some(rem) = interval.checked_sub(started.elapsed()) {
+            std::thread::sleep(rem);
+        }
+    }
+    datalog.flush()?;
+    eprintln!("Done. {count} samples written to {}", out_path.display());
+    Ok(())
+}
+
+fn dtc_can_cmd(timeout: Duration) -> Result<()> {
+    let mut tr = open_tactrix_can()?;
+
+    for (mode, label) in [(0x03u8, "Stored DTCs (Mode 0x03)"),
+                          (0x07u8, "Pending DTCs (Mode 0x07)"),
+                          (0x0Au8, "Permanent DTCs (Mode 0x0A)")] {
+        eprintln!("\n=== {label} ===");
+        let mut tx = Vec::with_capacity(5);
+        tx.extend_from_slice(&0x7E0u32.to_be_bytes());
+        tx.push(mode);
+        if let Err(e) = tr.write_all(&tx, timeout) {
+            eprintln!("  TX error: {e}");
+            continue;
+        }
+        let mut buf = [0u8; 512];
+        let n = match tr.read_frame(&mut buf, timeout) {
+            Ok(n) => n,
+            Err(e) => { eprintln!("  RX error: {e}"); continue; }
+        };
+        if n < 5 {
+            eprintln!("  RX too short ({n} bytes)");
+            continue;
+        }
+        let uds = &buf[4..n];
+        if uds[0] == 0x7F {
+            eprintln!("  NRC: {:02X}", uds[2]);
+            continue;
+        }
+        let expected_resp = mode | 0x40;
+        if uds[0] != expected_resp {
+            eprintln!("  unexpected response: {:02X?}", uds);
+            continue;
+        }
+        // Mode 03/07/0A response: <SID+0x40> <count> <DTC pairs ...>
+        // Each DTC is 2 bytes encoded SAE J2012 (5-char string like P0420).
+        let count = uds.get(1).copied().unwrap_or(0);
+        eprintln!("  ECU reported {count} DTC(s):");
+        if count == 0 {
+            eprintln!("    (нет кодов)");
+            continue;
+        }
+        let dtc_bytes = &uds[2..];
+        for chunk in dtc_bytes.chunks_exact(2) {
+            let hi = chunk[0];
+            let lo = chunk[1];
+            // First nibble of hi → letter
+            let letter = match (hi >> 6) & 0x3 {
+                0 => 'P', 1 => 'C', 2 => 'B', 3 => 'U', _ => '?',
+            };
+            // Bits 5-4 of hi → second digit (0-3)
+            let d1 = (hi >> 4) & 0x3;
+            // Bits 3-0 of hi → third digit
+            let d2 = hi & 0x0F;
+            // lo high/low nibbles → fourth/fifth digit
+            let d3 = (lo >> 4) & 0x0F;
+            let d4 = lo & 0x0F;
+            eprintln!("    {letter}{d1}{d2:X}{d3:X}{d4:X}");
+        }
+    }
+    Ok(())
+}
+
+fn peek_ram_can_cmd(addr_str: &str, len: u8, timeout: Duration) -> Result<()> {
+    use romraider_protocol::subaru;
+
+    let raw_addr = parse_int_or_hex_u32(addr_str).with_context(|| format!("--addr `{addr_str}`"))?;
+    // SSM-over-CAN использует 24-bit адреса (`0xFF7664`). ECU сам подставляет
+    // верхний `0xFF` для RAM-доступа. Принимаем и 32-bit форму (`0xFFFF7664`) —
+    // просто маскируем младшие 24 бита.
+    let addr = raw_addr & 0x00FF_FFFF;
+    if raw_addr != addr {
+        eprintln!("  (маскировал --addr 0x{raw_addr:08X} → 24-bit SSM 0x{addr:06X})");
+    }
     if len == 0 || len > 64 {
         anyhow::bail!("--len must be 1..=64");
     }
 
     let mut tr = open_tactrix_can()?;
 
+    // SSM-CAN protocol требует ECU init (`AA` → `EA <info>`) перед любыми
+    // 0xAx-командами. Без него ECU режет всё через NRC 0x12 — это **не**
+    // тот же init что K-Line `BF` (тот sends только для K-Line bus).
+    eprintln!("SSM-CAN ECU init (cmd 0xAA) …");
+    match subaru::ecu_init_can(&mut tr, timeout) {
+        Ok(info) => {
+            eprintln!(
+                "  EA response ({} bytes): {}",
+                info.len(),
+                bytes::hex_dump(&info[..info.len().min(16)]),
+            );
+        }
+        Err(e) => {
+            eprintln!("  ⚠️  SSM-CAN init failed: {e} — продолжаем, вдруг ECU и без него отвечает");
+        }
+    }
+
     eprintln!(
-        "Reading {} byte(s) from 0x{:08X} via UDS Mode 0x23 ReadMemoryByAddress…",
+        "Reading {} byte(s) from 24-bit SSM addr 0x{:06X} via Mode 0xA8 ReadAddresses-over-CAN…",
         len, addr,
     );
-    match uds::read_memory_by_address(&mut tr, addr, len, timeout) {
+    match subaru::read_block_can(&mut tr, addr, len as usize, timeout) {
         Ok(data) => {
             println!("Raw ({} bytes):  {}", data.len(), bytes::hex_dump(&data));
             if data.len() == 4 {
@@ -912,18 +1193,19 @@ fn peek_ram_can_cmd(addr_str: &str, len: u8, timeout: Duration) -> Result<()> {
                 println!("As uint8:       {}", data[0]);
             }
             println!(
-                "\n✅ UDS Mode 0x23 работает в default session — можно строить ecuparams-логгер."
+                "\n✅ Mode 0xA8 SSM-over-CAN работает — можно строить ecuparams-логгер."
             );
         }
         Err(e) => {
-            eprintln!("\n❌ UDS Mode 0x23 failed: {e}");
+            eprintln!("\n❌ Mode 0xA8 SSM-over-CAN failed: {e}");
             eprintln!(
-                "Если NRC 0x22 (Conditions Not Correct) — попробовать после `10 03` (ExtendedDiagSession).\n\
-                 Если NRC 0x33 (Security Access Denied) — этот адрес защищён.\n\
-                 Если NRC 0x31 (Out Of Range) — адрес не в read-allowed диапазоне.\n\
-                 Если timeout — ECU вообще не отвечает на Mode 0x23 (надо пробовать Mode 0xA8 SSM-over-CAN).",
+                "Если timeout — ECU не отвечает на Mode 0xA8 в default session.\n\
+                 Возможные следующие шаги:\n\
+                 - попробовать ExtendedDiagSession (`10 03`) перед Mode 0xA8\n\
+                 - попробовать SSM Mode 0xA0 ReadBlock (cmd `A0 <pad> <addr 3B> <size 1B>`)\n\
+                 - в крайнем случае — kernel-upload с расширением kernel-side read commands.",
             );
-            anyhow::bail!("read_memory_by_address failed");
+            anyhow::bail!("read_addresses_can failed");
         }
     }
     Ok(())

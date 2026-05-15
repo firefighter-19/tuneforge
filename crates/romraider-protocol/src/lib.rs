@@ -15,9 +15,17 @@ pub mod ssm;
 pub mod obd2;
 
 /// UDS (ISO-14229) сервисы поверх ISO15765/CAN. Generic — без Subaru-специфики.
-/// Используется для ReadMemoryByAddress (0x23) — Subaru tuner-grade params.
+/// Используется для ReadMemoryByAddress (0x23) — стандартный путь, но на 2007+
+/// Subaru ECU этот сервис не реализован, поэтому используем [`subaru`].
 #[cfg(feature = "obd2")]
 pub mod uds;
+
+/// Subaru-specific SSM-команды (Mode 0xA8 ReadAddresses) поверх ISO15765/CAN.
+/// Это то, что Java-RomRaider называет «SSM3» — используется для tuner-grade
+/// параметров (knock correction, A/F learning, boost target) на современных
+/// Subaru, у которых стандартный UDS Mode 0x23 в default-сессии не отвечает.
+#[cfg(feature = "ssm")]
+pub mod subaru;
 
 #[cfg(feature = "ds2")]
 pub mod ds2;
