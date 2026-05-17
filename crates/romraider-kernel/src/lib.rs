@@ -20,6 +20,11 @@ pub mod upload;
 pub mod can_upload;
 pub mod can_wire;
 
+/// High-level orchestrator (Phase A → E) — используется и CLI, и GUI.
+/// Требует feature `sh7058` (содержит pre-encrypted CAN kernel V1.07).
+#[cfg(feature = "sh7058")]
+pub mod orchestrator;
+
 pub use dump::{dump_rom_via_kernel, KernelDumpConfig};
 pub use error::{KernelError, KernelResult};
 pub use kernels::{KernelBinary, McuFamily};

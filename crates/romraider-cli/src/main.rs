@@ -2093,137 +2093,96 @@ fn dump_rom_can_cmd(
     chunk_size: u16,
     timeout: Duration,
 ) -> Result<()> {
-    use romraider_kernel::{
-        can_upload::{self, CAN_KERNEL_V107_ENCRYPTED},
-        can_wire,
-        seed_key::subaru_genkey_can,
-    };
+    use romraider_kernel::orchestrator::{dump_rom_via_can, DumpProgress};
 
     let start_addr = parse_int_or_hex_u32(start).with_context(|| format!("--start `{start}`"))?;
-    let length_val = if length == 0 { 1024 * 1024 } else { length };
 
     eprintln!("=== Phase A: Open Tactrix in CAN mode ===");
     let mut tr = open_tactrix_can()?;
 
-    eprintln!("\n=== Phase A: OBD-II wake-up ===");
-    let mut probe = |label: &str, mode: u8, pid: u8| -> Result<()> {
-        let r = uds_request(&mut tr, &[mode, pid], timeout)?;
-        eprintln!("  {label}: {}", bytes::hex_dump(&r));
-        Ok(())
-    };
-    probe("Mode 01 PID 00", 0x01, 0x00)?;
-    probe("Mode 09 PID 02 (VIN)", 0x09, 0x02)?;
-    probe("Mode 09 PID 06 (CVN)", 0x09, 0x06)?;
-
-    eprintln!("\n=== Phase B: ExtendedDiagnosticSession + SecurityAccess ===");
-    let resp = uds_request(&mut tr, &[0x10, 0x03], timeout)?;
-    if resp.first() != Some(&0x50) {
-        anyhow::bail!("SID 10 03 failed: {}", bytes::hex_dump(&resp));
-    }
-    eprintln!("  ✅ Extended session active");
-
-    let resp = uds_request(&mut tr, &[0x27, 0x01], timeout)?;
-    if resp.len() < 6 || resp[0] != 0x67 || resp[1] != 0x01 {
-        anyhow::bail!("SID 27 01 failed: {}", bytes::hex_dump(&resp));
-    }
-    let seed = [resp[2], resp[3], resp[4], resp[5]];
-    eprintln!("  Seed: {}", bytes::hex_dump(&seed));
-    let key = subaru_genkey_can(seed);
-    eprintln!("  Key (computed): {}", bytes::hex_dump(&key));
-    let mut send = Vec::with_capacity(6);
-    send.push(0x27);
-    send.push(0x02);
-    send.extend_from_slice(&key);
-    let resp = uds_request(&mut tr, &send, timeout)?;
-    if resp.first() != Some(&0x67) || resp.get(1) != Some(&0x02) {
-        anyhow::bail!("SID 27 02 rejected: {}", bytes::hex_dump(&resp));
-    }
-    eprintln!("  ✅ SecurityAccess granted (67 02)");
-
-    // Switch to ProgrammingSession — без этого SID 0x34 отвергается с NRC 0x22.
-    // (Из defaultSession 10 02 отвергался, но после SecurityAccess принимается.)
-    let resp = uds_request(&mut tr, &[0x10, 0x02], timeout)?;
-    if resp.first() != Some(&0x50) || resp.get(1) != Some(&0x02) {
-        anyhow::bail!(
-            "SID 10 02 (ProgrammingSession) failed: {}",
-            bytes::hex_dump(&resp)
-        );
-    }
-    eprintln!("  ✅ ProgrammingSession active (50 02)");
-
-    eprintln!("\n=== Phase C: Kernel upload (8192 bytes encrypted, 64 chunks) ===");
-    let kernel = CAN_KERNEL_V107_ENCRYPTED;
-    eprintln!(
-        "  Using bundled OpenECU CAN Kernel V1.07 ({} bytes encrypted)",
-        kernel.len()
-    );
-    let started_upload = std::time::Instant::now();
-    can_upload::upload_and_jump(&mut tr, kernel, timeout).context("kernel upload failed")?;
-    eprintln!(
-        "  ✅ Kernel uploaded + jumped in {:.2}s",
-        started_upload.elapsed().as_secs_f64()
-    );
-
-    eprintln!("\n=== Phase D: Kernel handshake ===");
-    let banner = can_wire::handshake(&mut tr, timeout)
-        .context("kernel handshake failed (did the jump succeed?)")?;
-    eprintln!("  ✅ Kernel banner: {banner:?}");
-
-    eprintln!("\n=== Phase E: ROM dump loop ===");
-    eprintln!(
-        "  Reading {} bytes from 0x{:06X} (chunks of {})…",
-        length_val, start_addr, chunk_size,
-    );
-    let started = std::time::Instant::now();
     let mut last_pct = -1i32;
-    let bytes_dumped = can_wire::dump_rom_via_can_kernel(
+    let bytes_dumped = dump_rom_via_can(
         &mut tr,
         start_addr,
-        length_val,
+        length,
         chunk_size,
         timeout,
-        |done, total| {
-            let pct = (done as i64 * 100 / total.max(1) as i64) as i32;
-            if pct != last_pct {
-                let rate = done as f64 / started.elapsed().as_secs_f64().max(1e-6);
-                eprintln!("  {done}/{total} ({pct}%) — {rate:.0} B/s");
-                last_pct = pct;
+        |event| match event {
+            DumpProgress::PhaseAObdiiWake { mode01_response } => {
+                eprintln!("\n=== Phase A: OBD-II wake-up ===");
+                eprintln!("  Mode 01 PID 00: {}", bytes::hex_dump(&mode01_response));
+            }
+            DumpProgress::PhaseAVin { vin_raw } => {
+                eprintln!("  Mode 09 PID 02 (VIN): {}", bytes::hex_dump(&vin_raw));
+            }
+            DumpProgress::PhaseACvn { cvn_raw } => {
+                eprintln!("  Mode 09 PID 06 (CVN): {}", bytes::hex_dump(&cvn_raw));
+            }
+            DumpProgress::PhaseBExtSession => {
+                eprintln!("\n=== Phase B: ExtendedDiagnosticSession + SecurityAccess ===");
+                eprintln!("  ✅ Extended session active");
+            }
+            DumpProgress::PhaseBSeed { seed } => {
+                eprintln!("  Seed: {}", bytes::hex_dump(&seed));
+            }
+            DumpProgress::PhaseBKey { key } => {
+                eprintln!("  Key (computed): {}", bytes::hex_dump(&key));
+            }
+            DumpProgress::PhaseBGranted => {
+                eprintln!("  ✅ SecurityAccess granted (67 02)");
+            }
+            DumpProgress::PhaseBProgSession => {
+                eprintln!("  ✅ ProgrammingSession active (50 02)");
+            }
+            DumpProgress::PhaseCUploadStart { total_bytes } => {
+                eprintln!("\n=== Phase C: Kernel upload ({total_bytes} bytes encrypted) ===");
+            }
+            DumpProgress::PhaseCUploadDone { elapsed_secs } => {
+                eprintln!("  ✅ Kernel uploaded + jumped in {elapsed_secs:.2}s");
+            }
+            DumpProgress::PhaseDBanner { banner } => {
+                eprintln!("\n=== Phase D: Kernel handshake ===");
+                eprintln!("  ✅ Kernel banner: {banner:?}");
+            }
+            DumpProgress::PhaseEReadStart {
+                start_addr,
+                total,
+                chunk_size,
+            } => {
+                eprintln!("\n=== Phase E: ROM dump loop ===");
+                eprintln!(
+                    "  Reading {total} bytes from 0x{start_addr:06X} (chunks of {chunk_size})…"
+                );
+            }
+            DumpProgress::PhaseEReadProgress {
+                done,
+                total,
+                rate_bps,
+            } => {
+                let pct = (done as i64 * 100 / total.max(1) as i64) as i32;
+                if pct != last_pct {
+                    eprintln!("  {done}/{total} ({pct}%) — {rate_bps:.0} B/s");
+                    last_pct = pct;
+                }
+            }
+            DumpProgress::PhaseEDone {
+                bytes_dumped,
+                elapsed_secs,
+            } => {
+                eprintln!("\n✅✅✅ DONE — {bytes_dumped} байт за {elapsed_secs:.1}s");
             }
         },
     )?;
 
     std::fs::write(output, &bytes_dumped)
         .with_context(|| format!("writing {}", output.display()))?;
-    eprintln!(
-        "\n✅✅✅ DONE — {} байт за {:.1}s, сохранено в {}",
-        bytes_dumped.len(),
-        started.elapsed().as_secs_f64(),
-        output.display(),
-    );
+    eprintln!("Сохранено в {}", output.display());
     eprintln!("\nProTip: сверь с fixture:");
     eprintln!(
         "    cmp {} fixtures/forester-xt-2007-4E42504007.bin",
         output.display(),
     );
     Ok(())
-}
-
-/// Хелпер: отправить UDS-команду по CAN и получить response (без CAN_ID prefix).
-#[cfg(feature = "kernel-upload")]
-fn uds_request(tr: &mut TactrixTransport, uds_tx: &[u8], timeout: Duration) -> Result<Vec<u8>> {
-    let mut tx = Vec::with_capacity(4 + uds_tx.len());
-    tx.extend_from_slice(&OBD2_ECU_REQUEST_ID.to_be_bytes());
-    tx.extend_from_slice(uds_tx);
-    tr.write_all(&tx, timeout).context("CAN write_all")?;
-
-    let mut buf = [0u8; 512];
-    let n = tr.read_frame(&mut buf, timeout).context("CAN read_frame")?;
-    let raw = &buf[..n];
-    if raw.len() < 4 {
-        anyhow::bail!("RX too short: {n} bytes");
-    }
-    // strip 4-byte CAN ID prefix
-    Ok(raw[4..].to_vec())
 }
 
 /// Открыть Tactrix в CAN-mode + установить flow-control filter.
@@ -2245,6 +2204,7 @@ fn open_tactrix_can() -> Result<TactrixTransport> {
 
 #[cfg(feature = "kernel-upload")]
 fn peek_seed_cmd(send_key: bool, timeout: Duration) -> Result<()> {
+    use romraider_kernel::orchestrator::uds_request;
     use romraider_kernel::seed_key::{subaru_genkey, subaru_genkey_can};
 
     let mut tr = open_tactrix_can()?;

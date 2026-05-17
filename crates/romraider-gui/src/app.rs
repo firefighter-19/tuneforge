@@ -1,11 +1,15 @@
 use eframe::CreationContext;
 
 use crate::panels::{editor::EditorPanel, logger::LoggerPanel};
+#[cfg(feature = "ecu-tools")]
+use crate::panels::ecu_tools::EcuToolsPanel;
 
 pub struct App {
     active: Tab,
     editor: EditorPanel,
     logger: LoggerPanel,
+    #[cfg(feature = "ecu-tools")]
+    ecu_tools: EcuToolsPanel,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,6 +24,8 @@ impl App {
             active: Tab::Editor,
             editor: EditorPanel::default(),
             logger: LoggerPanel::default(),
+            #[cfg(feature = "ecu-tools")]
+            ecu_tools: EcuToolsPanel::default(),
         }
     }
 }
@@ -96,6 +102,31 @@ impl eframe::App for App {
                         self.editor.redo_action();
                     }
                 });
+                #[cfg(feature = "ecu-tools")]
+                ui.menu_button("ECU", |ui| {
+                    if ui.button("Read ROM from ECU…").clicked() {
+                        ui.close_menu();
+                        self.ecu_tools.open_read_rom();
+                    }
+                    if ui.button("View ECU Info…").clicked() {
+                        ui.close_menu();
+                        self.ecu_tools.open_view_info();
+                    }
+                    ui.separator();
+                    // Placeholder-пункты для flash-операций, disabled
+                    // намеренно (нет donor-ECU = нет safe тестов).
+                    let write_btn = egui::Button::new("Write ROM to ECU…");
+                    let erase_btn = egui::Button::new("Erase ROM");
+                    ui.add_enabled(false, write_btn)
+                        .on_disabled_hover_text(
+                            "Flash-write не реализован: для безопасной разработки\n\
+                             требуется donor-ECU. Текущая стратегия проекта — read-only.",
+                        );
+                    ui.add_enabled(false, erase_btn)
+                        .on_disabled_hover_text(
+                            "Erase не реализован — см. tooltip выше про donor-ECU.",
+                        );
+                });
                 ui.separator();
                 ui.selectable_value(&mut self.active, Tab::Editor, "Editor");
                 ui.selectable_value(&mut self.active, Tab::Logger, "Logger");
@@ -106,5 +137,8 @@ impl eframe::App for App {
             Tab::Editor => self.editor.ui(ui),
             Tab::Logger => self.logger.ui(ui),
         });
+
+        #[cfg(feature = "ecu-tools")]
+        self.ecu_tools.ui(ctx);
     }
 }

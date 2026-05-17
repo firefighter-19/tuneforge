@@ -1,120 +1,183 @@
 # Архитектура romraider-rs
 
-Этот документ фиксирует структуру воркспейса и план переезда оригинального
-Java-проекта (`../RomRaider`) на Rust. Делается **итерационно**: сперва
-ядро (I/O + протоколы + ROM-модель), потом логгер, потом GUI. Старый
-Java-проект всё это время остаётся рабочим эталоном.
+Документ описывает **текущее состояние** проекта — структуру воркспейса,
+зависимости между крейтами, ключевые архитектурные решения. Для
+slice-by-slice progress смотри [`../PROGRESS.md`](../PROGRESS.md).
 
-## Слои
+> **Статус (2026-05-15):** core + IO + protocols + ROM + defs + logger
+> + kernel-upload + GUI (editor + logger + ECU-tools) — все слои живые
+> и протестированы на железе. Закрыты слайсы 1-26. Полный list — в
+> `PROGRESS.md`.
 
-```
-┌──────────────────────────────────────────────────────────────┐
+## Слои и зависимости
+
+```text
+┌───────────────────────────────────────────────────────────────┐
 │ romraider-gui  (eframe/egui)                                  │
-│   editor panel  ·  logger panel  ·  file dialogs             │
-└──────────────────────────────────────────────────────────────┘
-            │                              │
-            ▼                              ▼
-┌──────────────────────┐   ┌──────────────────────────────────┐
-│ romraider-rom        │   │ romraider-logger                 │
-│ ROM image            │   │ session, datalog, external sens. │
-│ Tables 1D/2D/3D      │   │                                  │
-│ Checksum modules     │   │                                  │
-└──────────────────────┘   └──────────────────────────────────┘
-            │                              │
-            ▼                              ▼
-┌──────────────────────┐   ┌──────────────────────────────────┐
-│ romraider-defs       │   │ romraider-protocol               │
-│ ECU/logger XML       │   │ SSM · OBD-II · DS2 · NCS         │
-│ scaling, axes        │   │                                  │
-└──────────────────────┘   └──────────────────────────────────┘
-                                          │
-                                          ▼
-                              ┌──────────────────────────────┐
-                              │ romraider-io                 │
-                              │ Transport trait              │
-                              │ serial · ELM327 · J2534      │
-                              └──────────────────────────────┘
-                                          │
-                                          ▼
-                              ┌──────────────────────────────┐
-                              │ romraider-core               │
-                              │ Address · Endian · errors    │
-                              └──────────────────────────────┘
+│   editor panel · logger panel · ecu-tools panel (Slice 26)    │
+│   File / Edit / ECU menubar                                   │
+└───────────────────────────────────────────────────────────────┘
+        │            │             │
+        ▼            ▼             ▼ (feature "ecu-tools")
+┌──────────────┐  ┌──────────────┐  ┌──────────────────────────────┐
+│ romraider-   │  │ romraider-   │  │ romraider-kernel             │
+│ rom          │  │ logger       │  │ (GPL-3.0, opt-in)            │
+│ tables 1D/2D │  │ session/poll │  │ K-Line + CAN kernel-upload   │
+│ 3D, scaling, │  │ datalog      │  │ seed/key (Feistel + RE'd     │
+│ checksum     │  │ XY-plot feed │  │ round-keys), orchestrator    │
+└──────────────┘  └──────────────┘  └──────────────────────────────┘
+        │            │             │
+        └────────────┼─────────────┤
+                     ▼             ▼
+┌──────────────┐  ┌──────────────────────────────────────────────┐
+│ romraider-   │  │ romraider-protocol                           │
+│ defs         │  │ ssm (K-Line) · obd2 (Mode 01/09) ·           │
+│ ECU/logger   │  │ uds (Mode 0x23) · subaru (SSM3-CAN A8/AA) ·  │
+│ XML, scaling │  │ ds2 · ncs                                    │
+└──────────────┘  └──────────────────────────────────────────────┘
+                              │
+                              ▼
+                  ┌──────────────────────────────┐
+                  │ romraider-io                 │
+                  │ Transport trait              │
+                  │ serial · ELM327 · J2534 ·    │
+                  │ tactrix (rusb K-Line + CAN)  │
+                  │ mock (for tests)             │
+                  └──────────────────────────────┘
+                              │
+                              ▼
+                  ┌──────────────────────────────┐
+                  │ romraider-core               │
+                  │ Address · Endian · bytes ·   │
+                  │ errors · format helpers      │
+                  └──────────────────────────────┘
 ```
 
-Правило зависимостей: **строго сверху вниз**. `core` ни от кого не зависит,
-GUI зависит от всего, логгер не знает про GUI.
+**Правило:** зависимости **строго сверху вниз**. `core` ни от кого не
+зависит, GUI зависит от всего нужного, логгер не знает про GUI,
+протоколы не знают про ROM/логгер. CLI (`romraider-cli`) — параллельный
+бинарный крейт, делит deps с GUI кроме `egui`.
+
+## Workspace layout
+
+| Crate                | Версия | Лицензия       | Описание                                                                      |
+| -------------------- | ------ | -------------- | ----------------------------------------------------------------------------- |
+| `romraider-core`     | 0.1.0  | GPL-2.0+       | Общие типы: `Address`, `Endian`, `bytes::hex_dump`, `RomError`                |
+| `romraider-io`       | 0.1.0  | GPL-2.0+       | `Transport`-trait + impls: serial (serialport), J2534, ELM327, **Tactrix** (rusb K-Line + CAN), MockTransport |
+| `romraider-protocol` | 0.1.0  | GPL-2.0+       | SSM2 K-Line, OBD-II Mode 01/09 (CAN), UDS ISO-14229, Subaru SSM3-CAN, DS2, NCS |
+| `romraider-defs`     | 0.1.0  | GPL-2.0+       | Парсер `ecu_defs.xml` + `log_defs.xml`, scaling-формулы (meval), include-резолв |
+| `romraider-rom`      | 0.1.0  | GPL-2.0+       | `RomImage`, 1D/2D/3D таблицы, checksum (Subaru STD/ALT/4-byte)                 |
+| `romraider-logger`   | 0.1.0  | GPL-2.0+       | `LoggerSession::poll_once`/`run`, CSV-datalog, broadcast-канал                |
+| `romraider-kernel`   | 0.1.0  | **GPL-3.0+**   | Kernel-upload (K-Line + CAN), seed/key Feistel + RE'd round-keys, orchestrator (Slice 23). **Opt-in за feature flag-ом** — workspace остаётся под GPL-2.0+ если не подключён. |
+| `romraider-cli`      | 0.1.0  | GPL-2.0+       | Headless CLI: `ssm-init`, `dump-rom[-can]`, `logger[-can][-ssm-can]`, `inspect-*`, `peek-*`, `dtc-can` |
+| `romraider-gui`      | 0.1.0  | GPL-2.0+       | egui-приложение: Editor (ROM редактор) + Logger (XY-plot) + ECU-tools (опц.) |
 
 ## Маппинг Java → Rust
 
-| Java-пакет (`com.romraider.*`)            | Rust-крейт                              |
-| ----------------------------------------- | --------------------------------------- |
-| `io.connection`, `io.serial`              | `romraider-io::serial`                  |
-| `io.elm327`                               | `romraider-io::elm327`                  |
-| `io.j2534.*`                              | `romraider-io::j2534`                   |
-| `io.protocol.ssm`                         | `romraider-protocol::ssm`               |
-| `io.protocol.obd`                         | `romraider-protocol::obd2`              |
-| `io.protocol.ds2`                         | `romraider-protocol::ds2`               |
-| `io.protocol.ncs`                         | `romraider-protocol::ncs`               |
-| `xml.*` + `definitions/*.xml`             | `romraider-defs` (XML — без изменений)  |
-| `maps.*`                                  | `romraider-rom::table`                  |
-| `maps.checksum.*`                         | `romraider-rom::checksum`               |
-| `logger.ecu.*`                            | `romraider-logger::session`             |
-| `logger.external.*` + `plugins/*.plugin`  | `romraider-logger::external` + WASM/ABI |
-| `swing.*`, `editor.*`                     | `romraider-gui` (полная замена на egui) |
-| `dataflowSimulation`                      | TBD — отдельный крейт после MVP         |
+(Java-пакеты из `../RomRaider/src/main/java/com/romraider/*`.)
 
-## Дорожная карта
+| Java-пакет                                | Rust-крейт                                                   |
+| ----------------------------------------- | ------------------------------------------------------------ |
+| `io.connection`, `io.serial`              | `romraider-io::serial`                                       |
+| `io.elm327`                               | `romraider-io::elm327`                                       |
+| `io.j2534.*`                              | `romraider-io::j2534`                                        |
+| **(нет аналога)**                         | `romraider-io::tactrix` (Mac-native через rusb, без J2534)   |
+| `io.protocol.ssm.iso9141`                 | `romraider-protocol::ssm` (K-Line)                           |
+| `io.protocol.ssm.iso15765`                | `romraider-protocol::subaru` (SSM3-CAN, cmd 0xAA/0xA8/0xA0)  |
+| `io.protocol.obd`                         | `romraider-protocol::obd2` (Mode 01/09, PID-таблица)         |
+| **(нет аналога)**                         | `romraider-protocol::uds` (ISO-14229 Mode 0x23)              |
+| `io.protocol.ds2` / `ncs`                 | `romraider-protocol::ds2` / `ncs` (заглушки, неактивны)      |
+| `xml.*` + `definitions/*.xml`             | `romraider-defs` (XML **не модифицируются**, парсятся as-is) |
+| `maps.*`                                  | `romraider-rom::table`                                       |
+| `maps.checksum.*`                         | `romraider-rom::checksum`                                    |
+| `logger.ecu.*`                            | `romraider-logger::session` (+ async-broadcast)              |
+| `logger.external.*`                       | TBD (внешние датчики AEM/Innovate)                           |
+| `editor.*` + `swing.*`                    | `romraider-gui::panels::editor` (egui, полностью переписан)  |
+| **(нет аналога)**                         | `romraider-gui::panels::logger` (XY-plot live через mpsc)    |
+| **(нет аналога)**                         | `romraider-gui::panels::ecu_tools` (Slice 26: Read ROM modal) |
+| `ramtune.*`                               | NOT planned (flash explicit non-goal — нет donor-ECU)        |
+| **(нет аналога)**                         | `romraider-kernel` (K-Line npkern + CAN kernel-upload-flow)  |
 
-### Этап 1 — ядро (≈2–4 мес)
+## Ключевые архитектурные решения
 
-- [x] Скелет воркспейса
-- [ ] Полный SSM-протокол с тестами на захваченных дампах из Java-логгера
-- [ ] Парсер `ecu_defs.xml` через `quick-xml::de`
-- [ ] Парсер `logger.xml`
-- [ ] Реализация `RomImage::read/write` с проверкой границ
-- [ ] Загрузка таблиц 1D/2D/3D со scaling (линейный)
-- [ ] Парсер произвольных выражений (через `evalexpr` или `meval`)
-- [ ] Юнит-тесты на checksum для одной семьи ECU (Subaru 32-bit)
+### 1. **`romraider-kernel` изолирован под GPL-3.0**
 
-### Этап 2 — логгер (≈3–4 мес)
+Crate использует наработки от GPL-3 проектов
+([fenugrec/nisprog](https://github.com/fenugrec/nisprog),
+[fenugrec/npkern](https://github.com/fenugrec/npkern)). Чтобы не
+«заразить» workspace под GPL-3, crate подключается **только через
+feature-flag-и** (`kernel-upload` в CLI, `ecu-tools` в GUI). По
+умолчанию остальные крейты — под **GPL-2.0+** (apстримная лицензия
+Java RomRaider).
 
-- [ ] Полный цикл `LoggerSession::run`: запрос → парс → broadcast
-- [ ] Datalog в CSV-формате, совместимом с Java-RomRaider
-- [ ] Внешние датчики: AEM, Innovate (минимум 2 для смоук-теста)
-- [ ] Headless-режим в `romraider-cli logger --params=…`
+### 2. **Два транспорта — K-Line и CAN — через единый `Transport` trait**
 
-### Этап 3 — GUI (≈6 мес)
+`romraider-io::transport::Transport` имеет `write_all`/`read_frame`/
+`purge`/`set_baud`. Все реализации (Serial, Tactrix, Mock) interchangeable.
+Tactrix-impl настраивается через `TactrixConfig::ssm()` (K-Line ISO9141)
+или `iso15765_500k()` (CAN 500kbps + flow-control filter). Высокоуровневые
+flow-ы (kernel upload, logger poll) написаны generic-ом над transport-ом
+→ unit-тесты на `MockTransport`, integration-тесты на захваченных дампах.
 
-- [ ] Open/Save ROM через `rfd`
-- [ ] Просмотр таблиц 1D/2D в `egui_extras::TableBuilder`
-- [ ] Heatmap 3D-таблиц (egui_plot heatmap или собственный widget)
-- [ ] 3D-визуализация (вместо Java3D) — отдельный модуль на `wgpu`
-- [ ] Интеграция с `LoggerSession` через broadcast-канал
-- [ ] Сравнение двух ROM (порт `CompareImagesForm`)
-- [ ] Локализация (i18n из оригинала, ресурсы перенести как есть)
+### 3. **XML — source of truth, не модифицируется**
 
-### Этап 4 — равенство фич (≈6+ мес)
+`ecu_defs.xml` (334+ ROM-ов) и `log_defs.xml` (156 SSM-параметров) —
+self-contained артефакты сообщества с 2009 года. Наш парсер консумит
+их as-is, никакой регенерации/нормализации. Если в апстриме что-то
+обновляется — мы просто берём новую версию файла. Это **ключевая
+причина почему проект жизнеспособен** — не нужно мигрировать БД таблиц.
 
-- [ ] Reflasher (RamTune) — это самая опасная часть, делать после полного покрытия тестами SSM
-- [ ] DS2/NCS — на железе или дампах коммьюнити
-- [ ] Плагинная система: WASM-runtime для пользовательских внешних датчиков
-- [ ] Бандлы (Linux AppImage / macOS .app / Windows .msi) — `cargo dist`
+### 4. **Защита от случайной потери данных в редакторе**
+
+Editor-panel хранит **modified-since-open** mask, отрисовывает
+изменённые ячейки жёлтым. `File → Save ROM As…` обязательный — нет
+silent overwrite. Undo/Redo с history=100. Checksum auto-fix перед
+save (Slice 10).
+
+### 5. **Worker thread + mpsc для всего что блокирует**
+
+Логгер polling — worker в отдельном thread, samples через
+`std::sync::mpsc::channel`, UI drain-ит каждый frame.
+ECU-tools (Read ROM) — то же самое: worker делает 45-сек dump,
+шлёт `DumpProgress` events, UI рисует progress-bar. **GUI thread
+никогда не блокируется** на USB/serial.
+
+### 6. **Read-only стратегия проекта**
+
+Flash-write **не реализован и не будет** без donor-ECU. Kernel-upload
+пишет только в RAM (`0xFFFF3000`), не в flash. В GUI placeholder-пункты
+`Write ROM` / `Erase ROM` присутствуют в меню как disabled с tooltip-ом.
+Это **намеренный design choice** — авторы предпочитают «работающий
+read-only тул» «брикнутому ECU».
+
+### 7. **Mac-native первичный таргет**
+
+Tactrix Openport 2.0 через rusb (libusb), без J2534 DLL и без Wine.
+Это **главное отличие** от Java-RomRaider, который на Mac/Linux требует
+J2534 эмуляции через DLL-wrappers. Trade-off — `sudo` для USB-bulk
+доступа на macOS (kernel security model).
+
+## Open questions
+
+- **GUI sudo на macOS:** сейчас `sudo cargo run -p romraider-gui --features ecu-tools` —
+  ugly UX, но простое и работает. Долгосрочная альтернатива — отдельный
+  helper-binary с правами + IPC. Решить когда будет реальный distribution
+  (bundle/app-image).
+- **Анти-fuzz ECU 2007+:** некоторые SSM2 read-команды и UDS-сервисы
+  блокируются Subaru-защитой в default session, разблокируются только
+  через SecurityAccess+ProgrammingSession (что halts engine). Live-логгинг
+  ecuparams **невозможен** на этих машинах — это архитектурное
+  ограничение Subaru, не баг нашего кода (см. Slice 24c в PROGRESS.md).
+- **KWP2000 K-Line:** для JDM-машин 2003-2005 которые могут иметь
+  KWP2000 вместо SSM2 — нужен отдельный модуль (Slice 27 опц.). Ждёт
+  hardware-pretexta.
+- **Плагины внешних датчиков** (AEM/Innovate): WASM-runtime vs нативные
+  trait-objects — решить после стабилизации SSM2-логгера.
 
 ## Что точно **не** меняется
 
 - XML-определения ECU (`../RomRaider/definitions`, `../RomRaider/customize`)
-- DTD-схемы (`*.dtd`) — это контракт с коммьюнити
-- i18n-ресурсы (`../RomRaider/i18n`) — формат и ключи
+- DTD-схемы (`*.dtd`) — контракт с коммьюнити
+- Алгоритмы checksum — копируются 1:1 из `com.romraider.maps.checksum.*`
 - Формат datalog-файлов
-
-## Открытые вопросы
-
-- **3D-визуализация:** `wgpu`-окно встроено в `egui` через
-  [`egui_wgpu::Callback`], но нужно прототипировать — мини-MVP до того, как
-  закладывать архитектуру.
-- **Плагины:** WASM (быстрая разработка, портируемость) vs нативные `.so`/`.dll`
-  через trait-objects (быстрее, но требует один компилятор). Решить по итогам
-  опроса коммьюнити RomRaider.
-- **Реалтайм-логгер на high-speed CAN:** нужен ли отдельный поток с
-  `std::thread::Builder::spawn` и `priority`-API ОС? Замерять после этапа 2.
+- i18n-ресурсы — формат и ключи (когда дойдём до GUI-локализации)

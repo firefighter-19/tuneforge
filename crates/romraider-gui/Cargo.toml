@@ -17,9 +17,15 @@ path = "src/main.rs"
 [dependencies]
 romraider-core     = { workspace = true }
 romraider-defs     = { workspace = true }
-romraider-io       = { workspace = true }
+romraider-io       = { workspace = true, features = ["serial", "tactrix"] }
 romraider-rom      = { workspace = true }
 romraider-logger   = { workspace = true }
+
+# ECU-tools panel (Slice 26): «Read ROM from ECU» через kernel-upload + UDS/CAN.
+# Изолирован за feature-flag-ом `ecu-tools`, чтобы GUI по умолчанию оставался
+# под GPL-2.0+ (romraider-kernel — GPL-3.0+).
+romraider-kernel   = { workspace = true, features = ["sh7058"], optional = true }
+romraider-protocol = { workspace = true, optional = true }
 
 eframe       = { workspace = true }
 egui         = { workspace = true }
@@ -30,3 +36,7 @@ rfd          = { workspace = true }
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow             = { workspace = true }
+
+[features]
+default   = []
+ecu-tools = ["dep:romraider-kernel", "dep:romraider-protocol"]
