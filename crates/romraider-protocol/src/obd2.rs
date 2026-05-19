@@ -540,6 +540,134 @@ pub fn read_pid<T: Transport + ?Sized>(
     Ok(data.to_vec())
 }
 
+/// Max PIDs в одном batched Mode 01 запросе. Per SAE J1979, ECU обязан
+/// принимать до 6 PIDs (`01 <pid1>..<pid6>` = 7 байт = max ISO-TP single-frame).
+/// Subaru ECU 2007+ принимает ровно 6, проверено живьём на 2007 Forester XT.
+pub const MAX_BATCH_PIDS: usize = 6;
+
+/// Один результат batched-чтения: `pid → raw data bytes`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatchedPidValue {
+    pub pid:  u8,
+    pub data: Vec<u8>,
+}
+
+/// **Slice 24b — batched read**. Шлёт `01 <PID1> <PID2> ... <PIDN>`
+/// (`N` ≤ [`MAX_BATCH_PIDS`]), дождаться `41 <pid_a> <data_a> <pid_b> ...`,
+/// вернуть распарсенный список (`pid`, `data`).
+///
+/// **Парсинг by-echo**: каждый встреченный байт `<pid>` ищем в списке
+/// запрошенных, на основании [`ObdiiPid::bytes`] потребляем нужное
+/// количество data-байтов. Robust к **ordering changes** ECU и к
+/// **частичным ответам** (ECU dropped non-supported PIDs).
+///
+/// `pid_defs` — список `ObdiiPid` для всех запрошенных PIDов. Используется
+/// для знания `bytes`-counts (нужно при парсинге). Все элементы должны
+/// принадлежать [`STANDARD_PIDS`].
+///
+/// **Multi-frame ISO-TP**: для 6 PIDs (`41 <pid> <data> × 6` ≈ 14-19 байт)
+/// ответ ECU будет multi-frame ISO-TP. Tactrix-transport уже это handles
+/// transparently — мы получаем уже-склеенный UDS payload.
+pub fn read_pids_batched<T: Transport + ?Sized>(
+    tr:       &mut T,
+    pid_defs: &[&ObdiiPid],
+    timeout:  Duration,
+) -> ProtocolResult<Vec<BatchedPidValue>> {
+    if pid_defs.is_empty() {
+        return Err(ProtocolError::ResponseTooShort {
+            got: 0,
+            expected: 1,
+        });
+    }
+    if pid_defs.len() > MAX_BATCH_PIDS {
+        return Err(ProtocolError::ResponseTooShort {
+            got:      pid_defs.len(),
+            expected: MAX_BATCH_PIDS,
+        });
+    }
+
+    // Build wire: <CAN_ID 4B BE> 01 <pid1> <pid2> ... <pidN>
+    let mut tx = Vec::with_capacity(4 + 1 + pid_defs.len());
+    tx.extend_from_slice(&OBD_REQUEST_ID.to_be_bytes());
+    tx.push(0x01);
+    for p in pid_defs {
+        tx.push(p.pid);
+    }
+    tr.write_all(&tx, timeout)?;
+
+    let mut buf = [0u8; 256];
+    let n = tr.read_frame(&mut buf, timeout)?;
+    if n < 4 + 2 {
+        return Err(ProtocolError::ResponseTooShort {
+            got:      n,
+            expected: 4 + 2,
+        });
+    }
+    let resp_id = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]);
+    if resp_id != OBD_RESPONSE_ID {
+        return Err(ProtocolError::UnexpectedResponse(buf[0]));
+    }
+    let uds = &buf[4..n];
+    parse_mode_01_batched(uds, pid_defs)
+}
+
+/// Парс multi-PID Mode 01 response payload (без CAN_ID prefix-а):
+/// `41 <pid_a> <data_a> <pid_b> <data_b> ...`. Извлечён как pure-функция
+/// из [`read_pids_batched`] чтобы unit-тестить без hardware.
+pub fn parse_mode_01_batched(
+    uds:      &[u8],
+    pid_defs: &[&ObdiiPid],
+) -> ProtocolResult<Vec<BatchedPidValue>> {
+    if uds.len() < 2 {
+        return Err(ProtocolError::ResponseTooShort {
+            got:      uds.len(),
+            expected: 2,
+        });
+    }
+    // Negative response: `7F 01 <NRC>` — например NRC `0x13` (Incorrect Format)
+    // если ECU не любит batched запрос с слишком многими PIDs.
+    if uds[0] == 0x7F {
+        let nrc = uds.get(2).copied().unwrap_or(0);
+        return Err(ProtocolError::UnexpectedResponse(nrc));
+    }
+    if uds[0] != MODE_01_RESPONSE {
+        return Err(ProtocolError::UnexpectedResponse(uds[0]));
+    }
+
+    let mut out = Vec::with_capacity(pid_defs.len());
+    let mut i = 1; // skip `41` echo
+    while i < uds.len() {
+        let pid = uds[i];
+        i += 1;
+        // Найти определение PID-а в нашем requested-наборе.
+        let Some(def) = pid_defs.iter().find(|p| p.pid == pid) else {
+            // Unknown PID echo — может быть padding-байт (`0x00`) или ECU
+            // вернул лишний PID. Если 0x00 — конец полезных данных, выход.
+            // Иначе — лог-warn и continue (но потеряем sync; для robustness
+            // лучше break).
+            if pid == 0x00 {
+                break;
+            }
+            tracing::warn!(
+                pid = format!("{:02X}", pid),
+                "unexpected PID echo in batched response (not in request)"
+            );
+            break;
+        };
+        // Извлечь bytes data-байт.
+        if i + def.bytes > uds.len() {
+            return Err(ProtocolError::ResponseTooShort {
+                got:      uds.len() - i,
+                expected: def.bytes,
+            });
+        }
+        let data = uds[i..i + def.bytes].to_vec();
+        i += def.bytes;
+        out.push(BatchedPidValue { pid, data });
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -595,5 +723,70 @@ mod tests {
     fn parse_mode_01_rejects_wrong_pid() {
         let resp = [0x41, 0x05, 0x50];
         assert!(parse_mode_01(0x0C, &resp).is_err());
+    }
+
+    #[test]
+    fn parse_batched_decodes_mixed_lengths() {
+        // Запрашиваем 3 PIDa: RPM (2B) + Coolant (1B) + MAF (2B).
+        let rpm = find_pid("RPM").unwrap();
+        let cool = find_pid("Coolant Temp").unwrap();
+        let maf = find_pid("MAF").unwrap();
+        let pids = &[rpm, cool, maf];
+
+        // Synthetic response: 41 0C <hi> <lo> 05 <val> 10 <hi> <lo>
+        // RPM raw 4000 (= 1000 RPM); Coolant raw 120 (= 80°C); MAF raw 500 (= 5.0 g/s).
+        let uds = [
+            0x41, // Mode 01 response
+            0x0C, 0x0F, 0xA0, // RPM = 4000
+            0x05, 120, // Coolant
+            0x10, 0x01, 0xF4, // MAF = 500
+        ];
+        let parsed = parse_mode_01_batched(&uds, pids).unwrap();
+        assert_eq!(parsed.len(), 3);
+        assert_eq!(parsed[0].pid, 0x0C);
+        assert_eq!(parsed[0].data, vec![0x0F, 0xA0]);
+        assert_eq!(parsed[1].pid, 0x05);
+        assert_eq!(parsed[1].data, vec![120]);
+        assert_eq!(parsed[2].pid, 0x10);
+        assert_eq!(parsed[2].data, vec![0x01, 0xF4]);
+    }
+
+    #[test]
+    fn parse_batched_handles_reordered_response() {
+        // ECU вернул PIDы не в том порядке что запрос (legal per spec) —
+        // парсер должен правильно разобрать by-echo.
+        let rpm = find_pid("RPM").unwrap();
+        let tps = find_pid("TPS").unwrap();
+        let pids = &[rpm, tps];
+
+        // Запрос: RPM, TPS; ответ: TPS first, RPM after.
+        let uds = [0x41, 0x11, 0x80, 0x0C, 0x0F, 0xA0];
+        let parsed = parse_mode_01_batched(&uds, pids).unwrap();
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].pid, 0x11);
+        assert_eq!(parsed[1].pid, 0x0C);
+    }
+
+    #[test]
+    fn parse_batched_rejects_nrc() {
+        let rpm = find_pid("RPM").unwrap();
+        // NRC `7F 01 13` (Incorrect Message Length/Format) — ECU не любит batch.
+        let uds = [0x7F, 0x01, 0x13];
+        let err = parse_mode_01_batched(&uds, &[rpm]).unwrap_err();
+        // Должно вернуться 0x13 NRC через UnexpectedResponse.
+        match err {
+            ProtocolError::UnexpectedResponse(nrc) => assert_eq!(nrc, 0x13),
+            _ => panic!("expected UnexpectedResponse(0x13), got {err:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_batched_stops_on_zero_pad() {
+        // Tactrix иногда оставляет padding-байты после полезных данных.
+        let rpm = find_pid("RPM").unwrap();
+        let uds = [0x41, 0x0C, 0x0F, 0xA0, 0x00, 0x00, 0x00];
+        let parsed = parse_mode_01_batched(&uds, &[rpm]).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].data, vec![0x0F, 0xA0]);
     }
 }

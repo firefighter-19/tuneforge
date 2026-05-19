@@ -1330,7 +1330,8 @@ fn logger_can_cmd(
     probe: bool,
 ) -> Result<()> {
     use romraider_protocol::obd2::{
-        discover_supported_pids, find_pid, read_pid, ObdiiPid, STANDARD_PIDS,
+        discover_supported_pids, find_pid, read_pid, read_pids_batched, ObdiiPid,
+        MAX_BATCH_PIDS, STANDARD_PIDS,
     };
 
     // --list режим: распечатать таблицу. Если есть --probe — заодно спросить ECU.
@@ -1457,35 +1458,77 @@ fn logger_can_cmd(
     );
     loop {
         let started = std::time::Instant::now();
-        // Sequential one-PID-per-request: проще debug, при 500 kbps оверхед
-        // пренебрежимо мал. Optimization (батч до 6 PID в single-frame) — позже.
+        // **Slice 24b — batched polling**: чанк-им подписки по `MAX_BATCH_PIDS`
+        // (= 6) и отправляем одним Mode 01 запросом. ECU отвечает multi-frame
+        // ISO-TP (Tactrix сам склеит). Это даёт ~5-6× speedup для большой
+        // подписки (например 40 PIDs → 7 cycles вместо 40). Если batched
+        // запрос фейлится — fall back на single-PID для этого чанка.
         let mut values = Vec::with_capacity(pids.len());
         let mut all_ok = true;
-        for p in &pids {
-            match read_pid(&mut tr, p.pid, timeout) {
-                Ok(data) if data.len() >= p.bytes => {
-                    let raw = data[..p.bytes].to_vec();
-                    let value = (p.scale)(&raw);
-                    values.push(SampleValue {
-                        parameter_id: p.name.into(),
-                        raw,
-                        value,
-                    });
+        'outer: for chunk in pids.chunks(MAX_BATCH_PIDS) {
+            match read_pids_batched(&mut tr, chunk, timeout) {
+                Ok(batched) => {
+                    for p in chunk {
+                        let raw = batched
+                            .iter()
+                            .find(|b| b.pid == p.pid)
+                            .map(|b| b.data.clone());
+                        match raw {
+                            Some(d) if d.len() >= p.bytes => {
+                                let raw = d[..p.bytes].to_vec();
+                                let value = (p.scale)(&raw);
+                                values.push(SampleValue {
+                                    parameter_id: p.name.into(),
+                                    raw,
+                                    value,
+                                });
+                            }
+                            _ => {
+                                eprintln!(
+                                    "  poll error: {} missing in batched response",
+                                    p.name
+                                );
+                                all_ok = false;
+                                break 'outer;
+                            }
+                        }
+                    }
                 }
-                Ok(short) => {
-                    eprintln!(
-                        "  poll error: {} returned {} bytes (expected {})",
-                        p.name,
-                        short.len(),
-                        p.bytes,
+                Err(batched_err) => {
+                    // Fallback: некоторые ECU отвергают batch с >N PID (NRC 0x13).
+                    // Делаем sequential single-PID для этого chunk-а.
+                    tracing::debug!(
+                        "batched read failed ({batched_err}), falling back to single-PID for chunk of {}",
+                        chunk.len()
                     );
-                    all_ok = false;
-                    break;
-                }
-                Err(e) => {
-                    eprintln!("  poll error: {}: {e}", p.name);
-                    all_ok = false;
-                    break;
+                    for p in chunk {
+                        match read_pid(&mut tr, p.pid, timeout) {
+                            Ok(data) if data.len() >= p.bytes => {
+                                let raw = data[..p.bytes].to_vec();
+                                let value = (p.scale)(&raw);
+                                values.push(SampleValue {
+                                    parameter_id: p.name.into(),
+                                    raw,
+                                    value,
+                                });
+                            }
+                            Ok(short) => {
+                                eprintln!(
+                                    "  poll error: {} returned {} bytes (expected {})",
+                                    p.name,
+                                    short.len(),
+                                    p.bytes,
+                                );
+                                all_ok = false;
+                                break 'outer;
+                            }
+                            Err(e) => {
+                                eprintln!("  poll error: {}: {e}", p.name);
+                                all_ok = false;
+                                break 'outer;
+                            }
+                        }
+                    }
                 }
             }
         }
