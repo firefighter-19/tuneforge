@@ -134,7 +134,11 @@ meval       = "0.2"
 clap        = { version = "4", features = ["derive"] }
 
 # GUI
-eframe      = { version = "0.30", default-features = false, features = ["default_fonts", "glow", "persistence"] }
+# eframe c `default-features = false` отключает в т.ч. linux-бэкенды winit-а.
+# `wayland`+`x11` обязательны иначе на Ubuntu CI получаем compile_error из
+# `winit/platform_impl/mod.rs` ("The platform you're compiling for is not supported by winit").
+# На macOS используется AppKit-бэкенд независимо от этих фич.
+eframe      = { version = "0.30", default-features = false, features = ["default_fonts", "glow", "persistence", "wayland", "x11"] }
 egui        = "0.30"
 egui_extras = { version = "0.30", features = ["all_loaders"] }
 egui_plot   = "0.30"

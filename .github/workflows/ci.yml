@@ -37,13 +37,18 @@ jobs:
       - name: Cache cargo registry + target/
         uses: Swatinem/rust-cache@v2
 
-      # rusb (Tactrix transport) линкуется с системным libusb-1.0.
-      # serialport на Linux тянет libudev-sys → нужен libudev-dev.
-      # На macOS обе библиотеки есть из коробки; на Ubuntu runner — вручную.
-      - name: Install libusb + libudev
+      # Системные зависимости на Ubuntu для нашего стэка:
+      #   - libusb-1.0-0-dev — rusb (Tactrix transport)
+      #   - libudev-dev — serialport (через libudev-sys)
+      #   - libxkbcommon-dev, libwayland-dev, libxcb1-dev — winit/eframe bаckends
+      #   - libgl1-mesa-dev — glow (OpenGL renderer для egui)
+      # На macOS всё из коробки (IOKit + AppKit), отдельный install не нужен.
+      - name: Install system libs
         run: |
           sudo apt-get update
-          sudo apt-get install -y libusb-1.0-0-dev libudev-dev pkg-config
+          sudo apt-get install -y \
+            libusb-1.0-0-dev libudev-dev pkg-config \
+            libxkbcommon-dev libwayland-dev libxcb1-dev libgl1-mesa-dev
 
       # Билд с default-features — проверка что без opt-in feature-флагов
       # всё компилируется (важно для license-isolation: GPL-3 kernel-crate
@@ -70,6 +75,46 @@ jobs:
           cargo run -p romraider-cli --quiet -- --help > /dev/null
           cargo run -p romraider-cli --quiet --features kernel-upload -- --help > /dev/null
 
+  # Mac build — primary user target (Mac ARM). Линковочный граф отличается
+  # от Linux: нет libudev-sys, но есть Cocoa/CoreFoundation крейты через
+  # rfd/eframe + IOKit для serialport. macos-latest = ARM (M1+) с 2024.
+  # Tactrix usb-driver работает только тут — в Linux нужен ручной udev rule,
+  # на Windows — отдельный D2XX-driver, поэтому фокус на mac валидно.
+  build-and-test-macos:
+    name: Build & test (macOS ARM)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target/
+        uses: Swatinem/rust-cache@v2
+
+      # libusb-1.0 на macOS ставится через Homebrew (предустановлен на runner-е).
+      # libudev на macOS не нужна — serialport использует IOKit (system framework).
+      - name: Install libusb
+        run: brew install libusb pkg-config
+
+      - name: Build workspace (default features)
+        run: cargo build --workspace --all-targets
+
+      - name: Build with full features
+        run: |
+          cargo build --workspace \
+            --features romraider-cli/kernel-upload,romraider-gui/ecu-tools \
+            --all-targets
+
+      - name: Run tests
+        run: cargo test --workspace
+
+      - name: CLI smoke-test (--help)
+        run: |
+          cargo run -p romraider-cli --quiet -- --help > /dev/null
+          cargo run -p romraider-cli --quiet --features kernel-upload -- --help > /dev/null
+
   # Lint gate — required. Кодовая база вычищена под `-D warnings` с
   # workspace-уровневой allow-list для pedantic-нюансов нерелевантных
   # к нашему embedded/byte-manipulation domain (см. workspace.lints в
@@ -89,8 +134,12 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Install libusb + libudev
-        run: sudo apt-get update && sudo apt-get install -y libusb-1.0-0-dev libudev-dev pkg-config
+      - name: Install system libs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libusb-1.0-0-dev libudev-dev pkg-config \
+            libxkbcommon-dev libwayland-dev libxcb1-dev libgl1-mesa-dev
 
       # Проверяем обе feature-конфигурации (default + full) — kernel-upload
       # и ecu-tools имеют свой unique-код который иначе пройдёт мимо linter-а.
