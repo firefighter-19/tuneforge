@@ -316,41 +316,56 @@ impl LoggerPanel {
 
     #[cfg(feature = "ecu-tools")]
     fn render_ssm_can_params(&mut self, ui: &mut egui::Ui) {
-        ui.label(format!(
-            "Subaru SSM3-CAN parameters ({} raw + {} derived):",
+        let selected_count = self.selected_params.len();
+        let total = SUBARU_SSM_PARAMS.len() + SUBARU_DERIVED_PARAMS.len();
+        let header = format!(
+            "▾ Parameters: {selected_count} selected of {total} ({} raw + {} derived)",
             SUBARU_SSM_PARAMS.len(),
             SUBARU_DERIVED_PARAMS.len()
-        ));
-        egui::ScrollArea::vertical()
-            .id_salt("ssm_can_params")
-            .max_height(280.0)
-            .auto_shrink([false, false])
+        );
+        egui::CollapsingHeader::new(header)
+            .id_salt("ssm_can_params_header")
+            .default_open(false)
             .show(ui, |ui| {
-                ui.label("RAW (читаются с ECU):");
-                for p in SUBARU_SSM_PARAMS {
-                    let mut on = self.selected_params.contains(p.name);
-                    let label = format!("{} ({}) [{}]", p.name, p.units, p.id);
-                    if ui.checkbox(&mut on, label).changed() {
-                        if on {
-                            self.selected_params.insert(p.name.into());
-                        } else {
-                            self.selected_params.remove(p.name);
+                egui::ScrollArea::vertical()
+                    .id_salt("ssm_can_params")
+                    .max_height(260.0)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new("RAW (читаются с ECU):").strong());
+                        for p in SUBARU_SSM_PARAMS {
+                            let mut on = self.selected_params.contains(p.name);
+                            let label = format!("{} ({}) [{}]", p.name, p.units, p.id);
+                            if ui.checkbox(&mut on, label).changed() {
+                                if on {
+                                    self.selected_params.insert(p.name.into());
+                                } else {
+                                    self.selected_params.remove(p.name);
+                                }
+                            }
                         }
-                    }
-                }
-                ui.add_space(6.0);
-                ui.label("DERIVED (вычисляются из raw, авто-добавят deps):");
-                for d in SUBARU_DERIVED_PARAMS {
-                    let mut on = self.selected_params.contains(d.name);
-                    let label = format!("{} ({}) = f({})", d.name, d.units, d.depends_on.join("+"));
-                    if ui.checkbox(&mut on, label).changed() {
-                        if on {
-                            self.selected_params.insert(d.name.into());
-                        } else {
-                            self.selected_params.remove(d.name);
+                        ui.add_space(6.0);
+                        ui.label(
+                            egui::RichText::new("DERIVED (computed from raw, auto-include deps):")
+                                .strong(),
+                        );
+                        for d in SUBARU_DERIVED_PARAMS {
+                            let mut on = self.selected_params.contains(d.name);
+                            let label = format!(
+                                "{} ({}) = f({})",
+                                d.name,
+                                d.units,
+                                d.depends_on.join("+")
+                            );
+                            if ui.checkbox(&mut on, label).changed() {
+                                if on {
+                                    self.selected_params.insert(d.name.into());
+                                } else {
+                                    self.selected_params.remove(d.name);
+                                }
+                            }
                         }
-                    }
-                }
+                    });
             });
     }
 
@@ -493,22 +508,33 @@ impl LoggerPanel {
         });
 
         if let Some(resolved) = &self.resolved {
-            ui.label("Parameters to log (toggle):");
-            egui::ScrollArea::vertical()
-                .max_height(220.0)
-                .auto_shrink([false, false])
+            let header = format!(
+                "▾ Parameters: {} selected of {}",
+                self.selected_params.len(),
+                resolved.parameters.len()
+            );
+            egui::CollapsingHeader::new(header)
+                .id_salt("kline_params_header")
+                .default_open(false)
                 .show(ui, |ui| {
-                    for p in &resolved.parameters {
-                        let mut on = self.selected_params.contains(&p.id);
-                        let label = format!("{}  ({})", p.id, p.metric.as_deref().unwrap_or("-"));
-                        if ui.checkbox(&mut on, label).changed() {
-                            if on {
-                                self.selected_params.insert(p.id.clone());
-                            } else {
-                                self.selected_params.remove(&p.id);
+                    egui::ScrollArea::vertical()
+                        .id_salt("kline_params")
+                        .max_height(260.0)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            for p in &resolved.parameters {
+                                let mut on = self.selected_params.contains(&p.id);
+                                let label =
+                                    format!("{}  ({})", p.id, p.metric.as_deref().unwrap_or("-"));
+                                if ui.checkbox(&mut on, label).changed() {
+                                    if on {
+                                        self.selected_params.insert(p.id.clone());
+                                    } else {
+                                        self.selected_params.remove(&p.id);
+                                    }
+                                }
                             }
-                        }
-                    }
+                        });
                 });
         } else if !self.ecu_id.is_empty() {
             ui.colored_label(
@@ -560,13 +586,61 @@ impl LoggerPanel {
     }
 
     fn render_plot(&mut self, ui: &mut egui::Ui) {
-        Plot::new("logger_plot")
-            .height(360.0)
-            .legend(Legend::default())
-            .show(ui, |plot_ui| {
-                for (id, history) in &self.history {
-                    let points: PlotPoints = history.iter().copied().collect::<Vec<_>>().into();
-                    plot_ui.line(Line::new(points).name(id));
+        if self.history.is_empty() {
+            ui.label("(no data yet)");
+            return;
+        }
+        ui.label("Plots (linked X-axis):");
+        // Shared X-axis group: pan/zoom одной — синхронизуются все. Y per-plot
+        // (каждый param сам auto-scale-ится в свой диапазон, RPM не давит AVCS).
+        let x_link = egui::Id::new("logger_plots_x_link");
+        // Render order = same as live readout (selected_params order).
+        // Каждый plot ~140px, ScrollArea если много params.
+        egui::ScrollArea::vertical()
+            .id_salt("plots_scroll")
+            .max_height(640.0)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for name in &self.selected_params {
+                    let Some(history) = self.history.get(name) else {
+                        continue;
+                    };
+                    if history.is_empty() {
+                        continue;
+                    }
+                    let points: PlotPoints =
+                        history.iter().copied().collect::<Vec<_>>().into();
+                    let units = self
+                        .units_lookup
+                        .get(name)
+                        .map(String::as_str)
+                        .unwrap_or("");
+                    let title = if units.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{name}  [{units}]")
+                    };
+                    ui.label(egui::RichText::new(&title).monospace().strong());
+                    Plot::new(format!("plot_{name}"))
+                        .height(120.0)
+                        .show_axes([true, true])
+                        .legend(Legend::default().position(egui_plot::Corner::RightTop))
+                        .link_axis(x_link, egui::Vec2b::new(true, false))
+                        // Strip-chart UX: Y auto-fits в свой диапазон (отдельно
+                        // на каждый plot — RPM 0-7000 не давит AVCS ±2°).
+                        // X drag-pan только для скролла по времени.
+                        // Zoom (scroll wheel + pinch) **полностью отключён** —
+                        // от него все plots начинали жить странной жизнью.
+                        // Double-click на plot — reset auto-bounds (built-in egui).
+                        .allow_drag(egui::Vec2b::new(true, false))
+                        .allow_zoom(false)
+                        .allow_scroll(false)
+                        .allow_boxed_zoom(false)
+                        .auto_bounds(egui::Vec2b::new(true, true))
+                        .show(ui, |plot_ui| {
+                            plot_ui.line(Line::new(points).name(name));
+                        });
+                    ui.add_space(4.0);
                 }
             });
     }
