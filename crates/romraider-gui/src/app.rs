@@ -116,6 +116,10 @@ impl eframe::App for App {
                         ui.close_menu();
                         self.ecu_tools.open_dtc();
                     }
+                    if ui.button("Read Freeze Frame…").clicked() {
+                        ui.close_menu();
+                        self.ecu_tools.open_freeze();
+                    }
                     ui.separator();
                     // Placeholder-пункты для flash-операций, disabled
                     // намеренно (нет donor-ECU = нет safe тестов).

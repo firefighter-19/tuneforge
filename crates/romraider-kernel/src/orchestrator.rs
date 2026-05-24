@@ -368,6 +368,129 @@ pub fn clear_dtcs(
     Ok(())
 }
 
+/// Freeze Frame snapshot — состояние всех важных параметров **в момент
+/// когда был зафиксирован triggering DTC**. ECU хранит как минимум один
+/// FF (frame 0) для самого недавнего confirmed-кода. Если нет stored
+/// DTCs → нет FF, поле `triggering_dtc` = None.
+#[derive(Debug, Clone, Default)]
+pub struct FreezeFrame {
+    /// DTC код который триггернул этот snapshot (`P0301` и т.п.). `None`
+    /// если ECU не имеет stored FF (нет недавних confirmed-кодов).
+    pub triggering_dtc: Option<String>,
+    /// Параметры snapshot-а — каждый Mode 0x01 PID с scaled value.
+    pub values:         Vec<FreezePidValue>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FreezePidValue {
+    pub name:  &'static str,
+    pub units: &'static str,
+    pub value: f64,
+}
+
+/// Прочитать Freeze Frame snapshot через OBD-II Mode 0x02.
+///
+/// Flow:
+/// 1. Mode 0x02 PID 0x02 frame 0 → возвращает 2-byte DTC что триггернул FF.
+///    Если DTC == 0x0000 → ECU без stored FF → возвращаем пустой объект.
+/// 2. Для каждого PID из [`STANDARD_PIDS`] (кроме chain-bitmap-ов) шлём
+///    Mode 0x02 → получаем `42 <PID> 00 <data>` → scaled value → push в values.
+/// 3. ECU может silent-skip-нуть unsupported PID — пропускаем без ошибки.
+pub fn read_freeze_frame(
+    tr:      &mut dyn Transport,
+    timeout: Duration,
+) -> Result<FreezeFrame, KernelError> {
+    use romraider_protocol::obd2::STANDARD_PIDS;
+
+    let mut ff = FreezeFrame::default();
+
+    // Step 1: Triggering DTC (Mode 02 PID 02 frame 0)
+    match read_freeze_pid_raw(tr, 0x02, 0x00, timeout) {
+        Ok(bytes) if bytes.len() >= 2 && (bytes[0] != 0 || bytes[1] != 0) => {
+            ff.triggering_dtc = Some(encode_dtc(bytes[0], bytes[1]));
+        }
+        Ok(_) => {
+            // 00 00 → no freeze frame stored. Не ошибка — возвращаем пустой FF.
+            return Ok(ff);
+        }
+        Err(_) => {
+            // ECU не поддерживает Mode 02, или PID 02 specifically. Probabl-но
+            // OBD-II стек живой если read_dtcs работал — игнорируем и пробуем
+            // дальше params.
+        }
+    }
+
+    // Step 2: Per-PID snapshot
+    for p in STANDARD_PIDS {
+        // Skip chain-PIDs (`0x20`, `0x40` etc.) и monitor-bitmap-ы (0x01, 0x41)
+        // — они на freeze frame не имеют смысла.
+        if matches!(p.pid, 0x00 | 0x01 | 0x20 | 0x40 | 0x41 | 0x60 | 0x80) {
+            continue;
+        }
+        match read_freeze_pid_raw(tr, p.pid, 0x00, timeout) {
+            Ok(bytes) if bytes.len() >= p.bytes => {
+                let raw = &bytes[..p.bytes];
+                let value = (p.scale)(raw);
+                ff.values.push(FreezePidValue {
+                    name:  p.name,
+                    units: p.units,
+                    value,
+                });
+            }
+            _ => {
+                // PID не support-ан в FF, или короткий response, или NRC — skip.
+            }
+        }
+    }
+
+    Ok(ff)
+}
+
+/// Послать Mode 0x02 запрос (`02 <PID> <frame>`) и распарсить response
+/// (`42 <PID> <frame> <data...>`). Возвращает только data-байты.
+fn read_freeze_pid_raw(
+    tr:      &mut dyn Transport,
+    pid:     u8,
+    frame:   u8,
+    timeout: Duration,
+) -> Result<Vec<u8>, KernelError> {
+    let mut tx = Vec::with_capacity(4 + 3);
+    tx.extend_from_slice(&OBD_REQUEST_ID.to_be_bytes());
+    tx.push(0x02);
+    tx.push(pid);
+    tx.push(frame);
+    tr.write_all(&tx, timeout)?;
+
+    let mut buf = [0u8; 256];
+    let n = tr.read_frame(&mut buf, timeout)?;
+    if n < 4 + 3 {
+        return Err(KernelError::UploadAborted(format!(
+            "Mode 0x02 PID 0x{pid:02X} RX too short: {n}"
+        )));
+    }
+    let resp_id = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]);
+    if resp_id != OBD_RESPONSE_ID {
+        return Err(KernelError::UploadAborted(format!(
+            "Mode 0x02 wrong CAN ID: 0x{resp_id:08X}"
+        )));
+    }
+    let uds = &buf[4..n];
+    // Negative response: `7F 02 <NRC>`.
+    if uds.len() >= 3 && uds[0] == 0x7F {
+        return Err(KernelError::UploadAborted(format!(
+            "Mode 0x02 PID 0x{pid:02X} NRC 0x{:02X}",
+            uds[2]
+        )));
+    }
+    // Expected: `42 <pid> <frame> <data>`.
+    if uds.len() < 4 || uds[0] != 0x42 || uds[1] != pid || uds[2] != frame {
+        return Err(KernelError::UploadAborted(format!(
+            "Mode 0x02 PID 0x{pid:02X} bad response: {uds:02X?}"
+        )));
+    }
+    Ok(uds[3..].to_vec())
+}
+
 /// Read-only «опознавательный» опрос ECU: Mode 01 PID 00 (supported PIDs
 /// bitmap), Mode 09 PID 02 (VIN), Mode 09 PID 06 (CVN). Используется для
 /// GUI «View ECU Info» панели — никакой SecurityAccess не требуется.

@@ -18,7 +18,7 @@ workspace = true
 romraider-core     = { workspace = true }
 romraider-io       = { workspace = true }
 # Нужен `ssm::ecu_init` чтобы «разбудить» Subaru ECU из idle перед KWP2000-flow.
-romraider-protocol = { workspace = true, features = ["ssm"] }
+romraider-protocol = { workspace = true, features = ["ssm", "obd2"] }
 
 thiserror = { workspace = true }
 tracing   = { workspace = true }

@@ -27,7 +27,8 @@ use std::time::Duration;
 use romraider_io::tactrix::{find_tactrix, TactrixDeviceInfo};
 use romraider_kernel::dtc_db::dtc_lookup;
 use romraider_kernel::orchestrator::{
-    clear_dtcs, dump_rom_via_can, peek_ecu_info, read_dtcs, DtcReport, DumpProgress, EcuInfo,
+    clear_dtcs, dump_rom_via_can, peek_ecu_info, read_dtcs, read_freeze_frame, DtcReport,
+    DumpProgress, EcuInfo, FreezeFrame,
 };
 
 /// Pre-flight check для Tactrix: enumerate USB через `find_tactrix()`
@@ -176,6 +177,7 @@ enum WorkerEvent {
     /// показать что коды реально ушли (или вернулись если underlying fault
     /// persists).
     DtcCleared,
+    FreezeResult(FreezeFrame),
     Failed(String),
 }
 
@@ -239,6 +241,15 @@ enum DtcState {
     Error(String),
 }
 
+#[derive(Default)]
+enum FreezeState {
+    #[default]
+    Prep,
+    Running,
+    Done(FreezeFrame),
+    Error(String),
+}
+
 /// Отложенные UI-actions — устанавливаются button-handler-ами **внутри**
 /// render-closure, applied **после** match-а (чтобы не было двойного borrow
 /// `self` при переходе между state-ами).
@@ -254,9 +265,11 @@ pub struct EcuToolsPanel {
     pub show_read_rom:  bool,
     pub show_view_info: bool,
     pub show_dtc:       bool,
+    pub show_freeze:    bool,
     read_rom_state:     ReadRomState,
     view_info_state:    ViewInfoState,
     dtc_state:          DtcState,
+    freeze_state:       FreezeState,
     pending_action:     Option<PendingAction>,
     worker:             Option<Worker>,
     preflight:          Option<Preflight>,
@@ -268,9 +281,11 @@ impl Default for EcuToolsPanel {
             show_read_rom:   false,
             show_view_info:  false,
             show_dtc:        false,
+            show_freeze:     false,
             read_rom_state:  ReadRomState::Prep,
             view_info_state: ViewInfoState::Prep,
             dtc_state:       DtcState::Prep,
+            freeze_state:    FreezeState::Prep,
             pending_action:  None,
             worker:          None,
             preflight:       None,
@@ -297,6 +312,13 @@ impl EcuToolsPanel {
     pub fn open_dtc(&mut self) {
         self.show_dtc = true;
         self.dtc_state = DtcState::Prep;
+        self.refresh_preflight();
+    }
+
+    /// Открыть окно «Read Freeze Frame» (reset state + preflight scan).
+    pub fn open_freeze(&mut self) {
+        self.show_freeze = true;
+        self.freeze_state = FreezeState::Prep;
         self.refresh_preflight();
     }
 
@@ -382,6 +404,7 @@ impl EcuToolsPanel {
         self.render_view_info_window(ctx);
         self.render_read_rom_window(ctx);
         self.render_dtc_window(ctx);
+        self.render_freeze_window(ctx);
     }
 
     fn apply_worker_event(&mut self, ev: WorkerEvent) {
@@ -421,6 +444,10 @@ impl EcuToolsPanel {
                 self.worker = None;
                 self.start_dtc_worker();
             }
+            WorkerEvent::FreezeResult(ff) => {
+                self.freeze_state = FreezeState::Done(ff);
+                self.worker = None;
+            }
             WorkerEvent::Failed(msg) => {
                 // Кладём ошибку в активное окно
                 if matches!(self.read_rom_state, ReadRomState::Running(_)) {
@@ -429,6 +456,8 @@ impl EcuToolsPanel {
                     self.view_info_state = ViewInfoState::Error(msg);
                 } else if matches!(self.dtc_state, DtcState::Running | DtcState::Clearing) {
                     self.dtc_state = DtcState::Error(msg);
+                } else if matches!(self.freeze_state, FreezeState::Running) {
+                    self.freeze_state = FreezeState::Error(msg);
                 }
                 self.worker = None;
             }
@@ -874,6 +903,143 @@ impl EcuToolsPanel {
         self.dtc_state = DtcState::Running;
     }
 
+    fn render_freeze_window(&mut self, ctx: &egui::Context) {
+        if !self.show_freeze {
+            return;
+        }
+        let mut open = self.show_freeze;
+        egui::Window::new("Read Freeze Frame (OBD-II Mode 0x02)")
+            .open(&mut open)
+            .resizable(true)
+            .default_width(500.0)
+            .collapsible(false)
+            .show(ctx, |ui| {
+                let detected = self.render_preflight_strip(ui);
+                ui.separator();
+                let state = std::mem::take(&mut self.freeze_state);
+                let next = match state {
+                    FreezeState::Prep => {
+                        ui.label("Прочитать **Freeze Frame** — snapshot всех ECU-параметров");
+                        ui.label("**в момент** когда был зафиксирован triggering DTC.");
+                        ui.add_space(6.0);
+                        ui.label("Что включает:");
+                        ui.label("  • DTC код который вызвал snapshot");
+                        ui.label("  • RPM, MAP, Coolant, IAT, MAF, TPS на момент fault");
+                        ui.label("  • Все Mode 01 PIDs которые ECU поддерживает в FF");
+                        ui.add_space(6.0);
+                        ui.label("Read-only — никаких изменений в ECU.");
+                        ui.add_space(8.0);
+                        let btn = ui.add_enabled(detected, egui::Button::new("▶ Read Freeze Frame"));
+                        if btn.clicked() {
+                            self.start_freeze_worker();
+                            FreezeState::Running
+                        } else {
+                            FreezeState::Prep
+                        }
+                    }
+                    FreezeState::Running => {
+                        ui.spinner();
+                        ui.label("Reading freeze frame… (~3-5 секунд, опрос ~10 PIDs)");
+                        FreezeState::Running
+                    }
+                    FreezeState::Done(ff) => {
+                        let has_dtc = ff.triggering_dtc.is_some();
+                        if let Some(dtc) = &ff.triggering_dtc {
+                            ui.label(egui::RichText::new("Triggering DTC:").strong());
+                            ui.horizontal(|ui| {
+                                ui.colored_label(
+                                    egui::Color32::from_rgb(220, 60, 60),
+                                    egui::RichText::new(format!("  {dtc}")).monospace(),
+                                );
+                                match dtc_lookup(dtc) {
+                                    Some(d) => ui.label(format!("— {d}")),
+                                    None => ui.weak("— (unknown code)"),
+                                };
+                            });
+                        } else {
+                            ui.colored_label(
+                                egui::Color32::GRAY,
+                                "ECU не имеет stored Freeze Frame — нет stored DTC.",
+                            );
+                        }
+                        if has_dtc {
+                            ui.add_space(10.0);
+                            ui.label(
+                                egui::RichText::new("Parameter snapshot at fault moment:")
+                                    .strong(),
+                            );
+                            ui.add_space(4.0);
+                            if ff.values.is_empty() {
+                                ui.weak(
+                                    "  (ECU не вернул параметров — Mode 02 ограничен на этой firmware)",
+                                );
+                            } else {
+                                egui::Grid::new("freeze_grid")
+                                    .num_columns(3)
+                                    .spacing([12.0, 4.0])
+                                    .show(ui, |ui| {
+                                        for v in &ff.values {
+                                            ui.monospace(format!("{}:", v.name));
+                                            let txt = if v.value.abs() >= 100.0
+                                                || v.value.fract().abs() < 0.005
+                                            {
+                                                format!("{:>8.0}", v.value)
+                                            } else {
+                                                format!("{:>8.2}", v.value)
+                                            };
+                                            ui.monospace(txt);
+                                            ui.label(v.units);
+                                            ui.end_row();
+                                        }
+                                    });
+                            }
+                        }
+                        ui.add_space(10.0);
+                        if ui.button("🔄 Re-read").clicked() {
+                            self.start_freeze_worker();
+                            FreezeState::Running
+                        } else {
+                            FreezeState::Done(ff)
+                        }
+                    }
+                    FreezeState::Error(msg) => {
+                        ui.colored_label(egui::Color32::RED, "Ошибка:");
+                        ui.label(&msg);
+                        ui.add_space(6.0);
+                        if ui.button("Retry").clicked() {
+                            FreezeState::Prep
+                        } else {
+                            FreezeState::Error(msg)
+                        }
+                    }
+                };
+                self.freeze_state = next;
+            });
+        self.show_freeze = open;
+        if !self.show_freeze {
+            if let Some(w) = self.worker.as_mut() {
+                w.shutdown();
+            }
+            self.worker = None;
+        }
+    }
+
+    fn start_freeze_worker(&mut self) {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_clone = Arc::clone(&cancel);
+        let (tx, rx) = mpsc::channel::<WorkerEvent>();
+        let handle = std::thread::Builder::new()
+            .name("ecu-freeze-worker".into())
+            .spawn(move || freeze_worker(tx, cancel_clone))
+            .expect("spawn freeze worker");
+        self.worker = Some(Worker {
+            rx,
+            handle: Some(handle),
+            cancel,
+        });
+        self.freeze_state = FreezeState::Running;
+    }
+
     fn start_clear_dtcs_worker(&mut self) {
         let cancel = Arc::new(AtomicBool::new(false));
         let cancel_clone = Arc::clone(&cancel);
@@ -963,6 +1129,27 @@ fn dtc_worker(tx: mpsc::Sender<WorkerEvent>, _cancel: Arc<AtomicBool>) {
         }
         Err(e) => {
             let _ = tx.send(WorkerEvent::Failed(format!("read_dtcs: {e}")));
+        }
+    }
+}
+
+fn freeze_worker(tx: mpsc::Sender<WorkerEvent>, _cancel: Arc<AtomicBool>) {
+    // FF-чтение делает Mode 02 запросов ~12-15 → даём 3s timeout/запрос +
+    // overall 30s headroom.
+    let timeout = Duration::from_millis(2000);
+    let mut tr = match open_tactrix_can() {
+        Ok(t) => t,
+        Err(e) => {
+            let _ = tx.send(WorkerEvent::Failed(format!("Tactrix open: {e}")));
+            return;
+        }
+    };
+    match read_freeze_frame(&mut tr, timeout) {
+        Ok(ff) => {
+            let _ = tx.send(WorkerEvent::FreezeResult(ff));
+        }
+        Err(e) => {
+            let _ = tx.send(WorkerEvent::Failed(format!("read_freeze_frame: {e}")));
         }
     }
 }

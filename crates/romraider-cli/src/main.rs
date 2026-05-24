@@ -145,6 +145,18 @@ enum Cmd {
         timeout_ms: u64,
     },
 
+    /// Прочитать **Freeze Frame** через OBD-II Mode 0x02 — snapshot
+    /// всех параметров **в момент когда ECU зафиксировал triggering DTC**.
+    /// Очень полезно для диагностики: видим что было «непосредственно
+    /// перед» fault-event (RPM, нагрузка, AFR, temp и т.п.).
+    ///
+    /// Если в ECU нет stored DTC → Freeze Frame пустой.
+    #[cfg(feature = "kernel-upload")]
+    FreezeFrameCan {
+        #[arg(long, default_value_t = 2000)]
+        timeout_ms: u64,
+    },
+
     /// Прочитать **DTC коды** (Diagnostic Trouble Codes) через OBD-II
     /// Mode 0x03 (confirmed/stored) + Mode 0x07 (pending) + Mode 0x0A
     /// (permanent) поверх CAN.
@@ -554,6 +566,10 @@ fn main() -> Result<()> {
         } => peek_ram_can_cmd(&addr, len, Duration::from_millis(timeout_ms), extended_session),
         #[cfg(feature = "kernel-upload")]
         Cmd::DtcCan { timeout_ms } => dtc_can_cmd(Duration::from_millis(timeout_ms)),
+        #[cfg(feature = "kernel-upload")]
+        Cmd::FreezeFrameCan { timeout_ms } => {
+            freeze_frame_can_cmd(Duration::from_millis(timeout_ms))
+        }
         #[cfg(feature = "kernel-upload")]
         Cmd::PeekSeed {
             send_key,
@@ -1226,6 +1242,40 @@ fn logger_ssm_can_cmd(
     }
     datalog.flush()?;
     eprintln!("Done. {count} samples written to {}", out_path.display());
+    Ok(())
+}
+
+#[cfg(feature = "kernel-upload")]
+fn freeze_frame_can_cmd(timeout: Duration) -> Result<()> {
+    use romraider_kernel::dtc_db::dtc_lookup;
+    use romraider_kernel::orchestrator::read_freeze_frame;
+    let mut tr = open_tactrix_can()?;
+    eprintln!("Reading Freeze Frame (OBD-II Mode 0x02)…");
+    let ff = read_freeze_frame(&mut tr, timeout).context("read_freeze_frame failed")?;
+
+    match &ff.triggering_dtc {
+        Some(dtc) => {
+            let desc = dtc_lookup(dtc).unwrap_or("(unknown code)");
+            eprintln!("\n=== Triggering DTC ===");
+            eprintln!("  {dtc}  —  {desc}");
+        }
+        None => {
+            eprintln!("\n=== No Freeze Frame stored ===");
+            eprintln!("  ECU не имеет stored DTC → нет snapshot.");
+            return Ok(());
+        }
+    }
+
+    eprintln!("\n=== Parameter snapshot at fault moment ===");
+    if ff.values.is_empty() {
+        eprintln!("  (ECU не вернул ни одного параметра — Mode 0x02 ограничен на этой firmware)");
+    } else {
+        eprintln!("  {:<30} {:>12}  {}", "Parameter", "Value", "Units");
+        eprintln!("  {}", "-".repeat(56));
+        for v in &ff.values {
+            eprintln!("  {:<30} {:>12.2}  {}", v.name, v.value, v.units);
+        }
+    }
     Ok(())
 }
 
