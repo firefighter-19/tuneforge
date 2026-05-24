@@ -265,6 +265,19 @@ pub const SUBARU_SSM_PARAMS: &[SsmParam] = &[
         id: "P49", name: "Intake AVCS Left", address: 0x00003D, bytes: 1,
         scale: |b| b[0] as f64 - 50.0, units: "deg",
     },
+    // ── Fuel delivery diagnostics ────────────────────────────────────
+    // Injector Pulse Width = «как долго инжектор открыт за один цикл».
+    // Subaru ECU держит инжекторы открытыми тем дольше, чем больше ему
+    // нужно топлива. Если duty cycle (производится из PW+RPM) гонит к
+    // 90%+ — инжекторы сатурированы, fuel pump потенциально at limit.
+    // На больной EJ255 (как у тебя) это ключевой indicator weak-fuel-pump:
+    // под WOT inj duty доходит до >100% «фантомных» — реальный fuel
+    // pressure при этом падает, AFR leans → knock retard → cycle.
+    SsmParam {
+        id: "P21", name: "Fuel Injector #1 PW", address: 0x000020, bytes: 1,
+        scale: |b| b[0] as f64 * 256.0 / 1000.0,
+        units: "ms",
+    },
 ];
 
 /// Найти SSM-параметр по ID (`"P8"`) или имени (case-insensitive).
@@ -315,6 +328,24 @@ pub const SUBARU_DERIVED_PARAMS: &[SsmDerivedParam] = &[
         depends_on: &["MAP"],
         compute:    |v| v[0] - 14.5,
         units:      "PSI",
+    },
+    // Injector Duty Cycle = PW_ms × RPM / 1200 (4-cyl 4-stroke math:
+    // каждый инжектор открывается 1 раз на 2 оборота = 60000/RPM/2 ms
+    // available per cycle = 120000/RPM ms; duty% = PW_ms / (120000/RPM)
+    // * 100 = PW × RPM / 1200). RPM=0 даёт NaN→clamp 0.
+    //
+    // **Главный indicator** weak-fuel-pump / клогнутых injectors:
+    // - Healthy: idle 1-3%, cruise 10-25%, WOT 60-80%
+    // - **Borderline**: WOT >85% — injectors почти saturated
+    // - **DANGER**: WOT >100% — phantom math says inj. always open,
+    //   реально pump не успевает, AFR leans, knock starts
+    SsmDerivedParam {
+        name:       "Injector Duty Cycle",
+        depends_on: &["Fuel Injector #1 PW", "RPM"],
+        compute:    |v| {
+            if v[1] <= 0.0 { 0.0 } else { v[0] * v[1] / 1200.0 }
+        },
+        units:      "%",
     },
 ];
 

@@ -89,7 +89,8 @@ pub struct LoggerPanel {
 }
 
 /// Sensible defaults для SSM3-CAN mode — diagnostic kit покрывающий
-/// engine health + AVCS (для проверки твоего ремня/OCV).
+/// engine health + AVCS (для проверки ремня/OCV) + fuel delivery
+/// (для weak-pump / saturated-injectors диагностики).
 const SSM_CAN_DEFAULTS: &[&str] = &[
     "RPM",
     "Coolant Temp",
@@ -100,6 +101,8 @@ const SSM_CAN_DEFAULTS: &[&str] = &[
     "Intake AVCS Right",
     "Intake AVCS Left",
     "AVCS Diff (R-L)",
+    "Fuel Injector #1 PW",
+    "Injector Duty Cycle",
 ];
 
 /// Defaults для K-Line SSM2 mode — самые востребованные стандартные
