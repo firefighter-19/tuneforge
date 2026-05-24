@@ -25,6 +25,11 @@ pub mod can_wire;
 #[cfg(feature = "sh7058")]
 pub mod orchestrator;
 
+/// Static SAE J2012 + Subaru-specific DTC-code → description database
+/// (~340 entries). Extracted from upstream `ecu_defs.xml`; rebuild via
+/// `tools/extract_dtc_db.py`. Not feature-gated — pure data table.
+pub mod dtc_db;
+
 pub use dump::{dump_rom_via_kernel, KernelDumpConfig};
 pub use error::{KernelError, KernelResult};
 pub use kernels::{KernelBinary, McuFamily};

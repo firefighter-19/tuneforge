@@ -1231,6 +1231,7 @@ fn logger_ssm_can_cmd(
 
 #[cfg(feature = "kernel-upload")]
 fn dtc_can_cmd(timeout: Duration) -> Result<()> {
+    use romraider_kernel::dtc_db::dtc_lookup;
     use romraider_kernel::orchestrator::read_dtcs;
     let mut tr = open_tactrix_can()?;
     let report = read_dtcs(&mut tr, timeout).context("read_dtcs failed")?;
@@ -1247,7 +1248,10 @@ fn dtc_can_cmd(timeout: Duration) -> Result<()> {
         } else {
             eprintln!("  ECU reported {} DTC(s):", codes.len());
             for c in codes {
-                eprintln!("    {c}");
+                match dtc_lookup(c) {
+                    Some(desc) => eprintln!("    {c}  —  {desc}"),
+                    None => eprintln!("    {c}  —  (unknown code)"),
+                }
             }
         }
     }

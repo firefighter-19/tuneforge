@@ -25,6 +25,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use romraider_io::tactrix::{find_tactrix, TactrixDeviceInfo};
+use romraider_kernel::dtc_db::dtc_lookup;
 use romraider_kernel::orchestrator::{
     dump_rom_via_can, peek_ecu_info, read_dtcs, DtcReport, DumpProgress, EcuInfo,
 };
@@ -814,7 +815,15 @@ fn render_dtc_section(ui: &mut egui::Ui, label: &str, codes: &[String], red: boo
         ui.weak("  (none)");
     } else {
         for c in codes {
-            ui.monospace(format!("  {c}"));
+            ui.horizontal(|ui| {
+                // Код моно-шрифтом + цвет — глаз сразу цепляется
+                ui.monospace(egui::RichText::new(format!("  {c}")).color(color));
+                // Описание обычным шрифтом справа
+                match dtc_lookup(c) {
+                    Some(desc) => ui.label(format!("— {desc}")),
+                    None => ui.weak("— (unknown code; google or check OEM service manual)"),
+                };
+            });
         }
     }
 }
