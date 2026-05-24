@@ -146,12 +146,13 @@ enum Cmd {
     },
 
     /// Прочитать **DTC коды** (Diagnostic Trouble Codes) через OBD-II
-    /// Mode 0x03 (confirmed/stored) + Mode 0x07 (pending) поверх CAN.
-    /// Это **бесплатная** диагностика — никакой security, default session.
+    /// Mode 0x03 (confirmed/stored) + Mode 0x07 (pending) + Mode 0x0A
+    /// (permanent) поверх CAN.
     ///
     /// Возвращает 5-символьные DTC коды в стандартном формате
     /// (`P0301` = misfire cyl 1, `P0420` = catalyst efficiency, и т.п.).
     /// Расшифровка кодов — Google или официальный список SAE J2012.
+    #[cfg(feature = "kernel-upload")]
     DtcCan {
         #[arg(long, default_value_t = 1500)]
         timeout_ms: u64,
@@ -551,6 +552,7 @@ fn main() -> Result<()> {
             timeout_ms,
             extended_session,
         } => peek_ram_can_cmd(&addr, len, Duration::from_millis(timeout_ms), extended_session),
+        #[cfg(feature = "kernel-upload")]
         Cmd::DtcCan { timeout_ms } => dtc_can_cmd(Duration::from_millis(timeout_ms)),
         #[cfg(feature = "kernel-upload")]
         Cmd::PeekSeed {
@@ -1227,63 +1229,26 @@ fn logger_ssm_can_cmd(
     Ok(())
 }
 
+#[cfg(feature = "kernel-upload")]
 fn dtc_can_cmd(timeout: Duration) -> Result<()> {
+    use romraider_kernel::orchestrator::read_dtcs;
     let mut tr = open_tactrix_can()?;
-
-    for (mode, label) in [(0x03u8, "Stored DTCs (Mode 0x03)"),
-                          (0x07u8, "Pending DTCs (Mode 0x07)"),
-                          (0x0Au8, "Permanent DTCs (Mode 0x0A)")] {
+    let report = read_dtcs(&mut tr, timeout).context("read_dtcs failed")?;
+    let sections = [
+        ("Stored DTCs (Mode 0x03)", &report.stored),
+        ("Pending DTCs (Mode 0x07)", &report.pending),
+        ("Permanent DTCs (Mode 0x0A)", &report.permanent),
+    ];
+    for (label, codes) in sections {
         eprintln!("\n=== {label} ===");
-        let mut tx = Vec::with_capacity(5);
-        tx.extend_from_slice(&0x7E0u32.to_be_bytes());
-        tx.push(mode);
-        if let Err(e) = tr.write_all(&tx, timeout) {
-            eprintln!("  TX error: {e}");
-            continue;
-        }
-        let mut buf = [0u8; 512];
-        let n = match tr.read_frame(&mut buf, timeout) {
-            Ok(n) => n,
-            Err(e) => { eprintln!("  RX error: {e}"); continue; }
-        };
-        if n < 5 {
-            eprintln!("  RX too short ({n} bytes)");
-            continue;
-        }
-        let uds = &buf[4..n];
-        if uds[0] == 0x7F {
-            eprintln!("  NRC: {:02X}", uds[2]);
-            continue;
-        }
-        let expected_resp = mode | 0x40;
-        if uds[0] != expected_resp {
-            eprintln!("  unexpected response: {:02X?}", uds);
-            continue;
-        }
-        // Mode 03/07/0A response: <SID+0x40> <count> <DTC pairs ...>
-        // Each DTC is 2 bytes encoded SAE J2012 (5-char string like P0420).
-        let count = uds.get(1).copied().unwrap_or(0);
-        eprintln!("  ECU reported {count} DTC(s):");
-        if count == 0 {
+        if codes.is_empty() {
+            eprintln!("  ECU reported 0 DTC(s):");
             eprintln!("    (нет кодов)");
-            continue;
-        }
-        let dtc_bytes = &uds[2..];
-        for chunk in dtc_bytes.chunks_exact(2) {
-            let hi = chunk[0];
-            let lo = chunk[1];
-            // First nibble of hi → letter
-            let letter = match (hi >> 6) & 0x3 {
-                0 => 'P', 1 => 'C', 2 => 'B', 3 => 'U', _ => '?',
-            };
-            // Bits 5-4 of hi → second digit (0-3)
-            let d1 = (hi >> 4) & 0x3;
-            // Bits 3-0 of hi → third digit
-            let d2 = hi & 0x0F;
-            // lo high/low nibbles → fourth/fifth digit
-            let d3 = (lo >> 4) & 0x0F;
-            let d4 = lo & 0x0F;
-            eprintln!("    {letter}{d1}{d2:X}{d3:X}{d4:X}");
+        } else {
+            eprintln!("  ECU reported {} DTC(s):", codes.len());
+            for c in codes {
+                eprintln!("    {c}");
+            }
         }
     }
     Ok(())

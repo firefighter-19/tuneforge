@@ -228,6 +228,146 @@ pub struct EcuInfo {
     pub cvn: Option<[u8; 4]>,
 }
 
+/// Diagnostic Trouble Codes по трём категориям OBD-II (J1979 modes 03/07/0A).
+#[derive(Debug, Clone, Default)]
+pub struct DtcReport {
+    /// Confirmed/stored DTCs (Mode 0x03) — те что зажигают MIL.
+    pub stored:    Vec<String>,
+    /// Pending DTCs (Mode 0x07) — fault detected once but not confirmed yet.
+    pub pending:   Vec<String>,
+    /// Permanent DTCs (Mode 0x0A) — ECU помнит даже после Mode 0x04 ClearDTC
+    /// до прохождения drive-cycle тестов.
+    pub permanent: Vec<String>,
+}
+
+/// SAE J2012 кодирование DTC: 2 байта → 5-char string `P0301`, `C1234`, и т.п.
+///
+/// Byte A bits 7-6: первая буква (`P`/`C`/`B`/`U`).
+/// Byte A bits 5-4: вторая цифра (0-3).
+/// Byte A bits 3-0: третья цифра (hex).
+/// Byte B bits 7-4: четвёртая (hex).
+/// Byte B bits 3-0: пятая (hex).
+#[must_use]
+pub fn encode_dtc(hi: u8, lo: u8) -> String {
+    let letter = match (hi >> 6) & 0x3 {
+        0 => 'P', // Powertrain
+        1 => 'C', // Chassis
+        2 => 'B', // Body
+        3 => 'U', // Network/communication
+        _ => '?',
+    };
+    let d1 = (hi >> 4) & 0x3;
+    let d2 = hi & 0x0F;
+    let d3 = (lo >> 4) & 0x0F;
+    let d4 = lo & 0x0F;
+    format!("{letter}{d1}{d2:X}{d3:X}{d4:X}")
+}
+
+/// Прочитать DTC коды всех трёх категорий из ECU через стандартные OBD-II
+/// modes 0x03/0x07/0x0A поверх CAN. Безопасно — read-only, никакой
+/// SecurityAccess не требуется, ECU остаётся в default session.
+///
+/// Каждый mode даёт ответ `<SID|0x40> <count> <pair1_hi> <pair1_lo> ...`.
+/// `count` = число DTC-пар; для пустого ответа возвращается empty Vec.
+pub fn read_dtcs(
+    tr:      &mut dyn Transport,
+    timeout: Duration,
+) -> Result<DtcReport, KernelError> {
+    let mut report = DtcReport::default();
+    for (mode, target) in [
+        (0x03u8, &mut report.stored),
+        (0x07u8, &mut report.pending),
+        (0x0Au8, &mut report.permanent),
+    ] {
+        let codes = read_dtc_mode(tr, mode, timeout)?;
+        *target = codes;
+    }
+    Ok(report)
+}
+
+/// Read one DTC mode (03/07/0A). Internal helper for [`read_dtcs`].
+fn read_dtc_mode(
+    tr:      &mut dyn Transport,
+    mode:    u8,
+    timeout: Duration,
+) -> Result<Vec<String>, KernelError> {
+    let mut tx = Vec::with_capacity(4 + 1);
+    tx.extend_from_slice(&OBD_REQUEST_ID.to_be_bytes());
+    tx.push(mode);
+    tr.write_all(&tx, timeout)?;
+
+    let mut buf = [0u8; 512];
+    let n = tr.read_frame(&mut buf, timeout)?;
+    if n < 4 + 1 {
+        return Err(KernelError::UploadAborted(format!(
+            "Mode 0x{mode:02X} RX too short: {n}"
+        )));
+    }
+    let uds = &buf[4..n];
+    // Negative response: `7F <mode> <NRC>`.
+    if uds.len() >= 3 && uds[0] == 0x7F {
+        return Err(KernelError::UploadAborted(format!(
+            "Mode 0x{mode:02X} NRC: 0x{:02X}",
+            uds[2]
+        )));
+    }
+    let expected_resp = mode | 0x40;
+    if uds[0] != expected_resp {
+        return Err(KernelError::UploadAborted(format!(
+            "Mode 0x{mode:02X} unexpected response: {:02X?}",
+            uds
+        )));
+    }
+    let count = uds.get(1).copied().unwrap_or(0) as usize;
+    let dtc_bytes = uds.get(2..).unwrap_or(&[]);
+    let mut codes = Vec::with_capacity(count);
+    for chunk in dtc_bytes.chunks_exact(2).take(count) {
+        codes.push(encode_dtc(chunk[0], chunk[1]));
+    }
+    Ok(codes)
+}
+
+/// Clear all DTCs + emissions-related data via Mode 0x04 ClearDTC.
+///
+/// **Внимание**: это write-операция — стирает confirmed/pending коды,
+/// сбрасывает Freeze Frame, обнуляет O2-sensor monitoring history, etc.
+/// Не стирает permanent DTCs (Mode 0x0A) — те уходят только после
+/// прохождения drive-cycle тестов.
+///
+/// Должен вызываться **только с подтверждения пользователя** (UI confirm
+/// dialog или CLI flag).
+pub fn clear_dtcs(
+    tr:      &mut dyn Transport,
+    timeout: Duration,
+) -> Result<(), KernelError> {
+    let mut tx = Vec::with_capacity(4 + 1);
+    tx.extend_from_slice(&OBD_REQUEST_ID.to_be_bytes());
+    tx.push(0x04);
+    tr.write_all(&tx, timeout)?;
+
+    let mut buf = [0u8; 32];
+    let n = tr.read_frame(&mut buf, timeout)?;
+    if n < 4 + 1 {
+        return Err(KernelError::UploadAborted(format!(
+            "Mode 0x04 RX too short: {n}"
+        )));
+    }
+    let uds = &buf[4..n];
+    if uds.len() >= 3 && uds[0] == 0x7F {
+        return Err(KernelError::UploadAborted(format!(
+            "Mode 0x04 NRC: 0x{:02X}",
+            uds[2]
+        )));
+    }
+    if uds[0] != 0x44 {
+        return Err(KernelError::UploadAborted(format!(
+            "Mode 0x04 unexpected response: {:02X?}",
+            uds
+        )));
+    }
+    Ok(())
+}
+
 /// Read-only «опознавательный» опрос ECU: Mode 01 PID 00 (supported PIDs
 /// bitmap), Mode 09 PID 02 (VIN), Mode 09 PID 06 (CVN). Используется для
 /// GUI «View ECU Info» панели — никакой SecurityAccess не требуется.

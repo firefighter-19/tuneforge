@@ -26,7 +26,7 @@ use std::time::Duration;
 
 use romraider_io::tactrix::{find_tactrix, TactrixDeviceInfo};
 use romraider_kernel::orchestrator::{
-    dump_rom_via_can, peek_ecu_info, DumpProgress, EcuInfo,
+    dump_rom_via_can, peek_ecu_info, read_dtcs, DtcReport, DumpProgress, EcuInfo,
 };
 
 /// Pre-flight check для Tactrix: enumerate USB через `find_tactrix()`
@@ -170,6 +170,7 @@ enum WorkerEvent {
     Info(EcuInfo, [u8; 5]),
     Progress(DumpProgress),
     Dumped(Vec<u8>),
+    DtcResult(DtcReport),
     Failed(String),
 }
 
@@ -220,11 +221,22 @@ enum ViewInfoState {
     Error(String),
 }
 
+#[derive(Default)]
+enum DtcState {
+    #[default]
+    Prep,
+    Running,
+    Done(DtcReport),
+    Error(String),
+}
+
 pub struct EcuToolsPanel {
     pub show_read_rom:  bool,
     pub show_view_info: bool,
+    pub show_dtc:       bool,
     read_rom_state:     ReadRomState,
     view_info_state:    ViewInfoState,
+    dtc_state:          DtcState,
     worker:             Option<Worker>,
     preflight:          Option<Preflight>,
 }
@@ -234,8 +246,10 @@ impl Default for EcuToolsPanel {
         Self {
             show_read_rom:   false,
             show_view_info:  false,
+            show_dtc:        false,
             read_rom_state:  ReadRomState::Prep,
             view_info_state: ViewInfoState::Prep,
+            dtc_state:       DtcState::Prep,
             worker:          None,
             preflight:       None,
         }
@@ -254,6 +268,13 @@ impl EcuToolsPanel {
     pub fn open_view_info(&mut self) {
         self.show_view_info = true;
         self.view_info_state = ViewInfoState::Prep;
+        self.refresh_preflight();
+    }
+
+    /// Открыть окно «Read DTCs» (reset state + preflight scan).
+    pub fn open_dtc(&mut self) {
+        self.show_dtc = true;
+        self.dtc_state = DtcState::Prep;
         self.refresh_preflight();
     }
 
@@ -338,6 +359,7 @@ impl EcuToolsPanel {
 
         self.render_view_info_window(ctx);
         self.render_read_rom_window(ctx);
+        self.render_dtc_window(ctx);
     }
 
     fn apply_worker_event(&mut self, ev: WorkerEvent) {
@@ -368,12 +390,18 @@ impl EcuToolsPanel {
                 };
                 self.worker = None;
             }
+            WorkerEvent::DtcResult(report) => {
+                self.dtc_state = DtcState::Done(report);
+                self.worker = None;
+            }
             WorkerEvent::Failed(msg) => {
                 // Кладём ошибку в активное окно
                 if matches!(self.read_rom_state, ReadRomState::Running(_)) {
                     self.read_rom_state = ReadRomState::Error(msg);
                 } else if matches!(self.view_info_state, ViewInfoState::Running) {
                     self.view_info_state = ViewInfoState::Error(msg);
+                } else if matches!(self.dtc_state, DtcState::Running) {
+                    self.dtc_state = DtcState::Error(msg);
                 }
                 self.worker = None;
             }
@@ -643,6 +671,104 @@ impl EcuToolsPanel {
         ReadRomState::Error(msg)
     }
 
+    fn render_dtc_window(&mut self, ctx: &egui::Context) {
+        if !self.show_dtc {
+            return;
+        }
+        let mut open = self.show_dtc;
+        egui::Window::new("Read DTCs (OBD-II Mode 03/07/0A)")
+            .open(&mut open)
+            .resizable(true)
+            .default_width(420.0)
+            .collapsible(false)
+            .show(ctx, |ui| {
+                let detected = self.render_preflight_strip(ui);
+                ui.separator();
+                let state = std::mem::take(&mut self.dtc_state);
+                let next = match state {
+                    DtcState::Prep => {
+                        ui.label("Прочитать DTC коды (Diagnostic Trouble Codes):");
+                        ui.label("  • Mode 0x03 — Stored (confirmed) codes, эти зажигают MIL");
+                        ui.label("  • Mode 0x07 — Pending codes (одиночные fault events)");
+                        ui.label("  • Mode 0x0A — Permanent (ECU помнит после очистки)");
+                        ui.add_space(8.0);
+                        ui.label("Read-only — никаких изменений в ECU.");
+                        ui.add_space(6.0);
+                        let btn = ui.add_enabled(detected, egui::Button::new("▶ Read DTCs"));
+                        if btn.clicked() {
+                            self.start_dtc_worker();
+                            DtcState::Running
+                        } else {
+                            DtcState::Prep
+                        }
+                    }
+                    DtcState::Running => {
+                        ui.spinner();
+                        ui.label("Reading codes…");
+                        DtcState::Running
+                    }
+                    DtcState::Done(report) => {
+                        render_dtc_section(ui, "Stored (MIL)", &report.stored, true);
+                        ui.add_space(6.0);
+                        render_dtc_section(ui, "Pending", &report.pending, false);
+                        ui.add_space(6.0);
+                        render_dtc_section(ui, "Permanent", &report.permanent, true);
+                        ui.add_space(10.0);
+                        let total = report.stored.len()
+                            + report.pending.len()
+                            + report.permanent.len();
+                        if total == 0 {
+                            ui.colored_label(
+                                egui::Color32::from_rgb(0, 180, 0),
+                                "✅ No DTCs reported by ECU.",
+                            );
+                        }
+                        ui.add_space(6.0);
+                        if ui.button("🔄 Re-read").clicked() {
+                            self.start_dtc_worker();
+                            DtcState::Running
+                        } else {
+                            DtcState::Done(report)
+                        }
+                    }
+                    DtcState::Error(msg) => {
+                        ui.colored_label(egui::Color32::RED, "Ошибка:");
+                        ui.label(&msg);
+                        ui.add_space(6.0);
+                        if ui.button("Retry").clicked() {
+                            DtcState::Prep
+                        } else {
+                            DtcState::Error(msg)
+                        }
+                    }
+                };
+                self.dtc_state = next;
+            });
+        self.show_dtc = open;
+        if !self.show_dtc {
+            if let Some(w) = self.worker.as_mut() {
+                w.shutdown();
+            }
+            self.worker = None;
+        }
+    }
+
+    fn start_dtc_worker(&mut self) {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_clone = Arc::clone(&cancel);
+        let (tx, rx) = mpsc::channel::<WorkerEvent>();
+        let handle = std::thread::Builder::new()
+            .name("ecu-dtc-worker".into())
+            .spawn(move || dtc_worker(tx, cancel_clone))
+            .expect("spawn dtc worker");
+        self.worker = Some(Worker {
+            rx,
+            handle: Some(handle),
+            cancel,
+        });
+        self.dtc_state = DtcState::Running;
+    }
+
     fn start_view_info_worker(&mut self) {
         let cancel = Arc::new(AtomicBool::new(false));
         let cancel_clone = Arc::clone(&cancel);
@@ -672,6 +798,43 @@ impl EcuToolsPanel {
             handle: Some(handle),
             cancel,
         });
+    }
+}
+
+fn render_dtc_section(ui: &mut egui::Ui, label: &str, codes: &[String], red: bool) {
+    let color = if codes.is_empty() {
+        egui::Color32::GRAY
+    } else if red {
+        egui::Color32::from_rgb(220, 60, 60)
+    } else {
+        egui::Color32::from_rgb(220, 160, 0)
+    };
+    ui.colored_label(color, format!("{label}: {} DTC(s)", codes.len()));
+    if codes.is_empty() {
+        ui.weak("  (none)");
+    } else {
+        for c in codes {
+            ui.monospace(format!("  {c}"));
+        }
+    }
+}
+
+fn dtc_worker(tx: mpsc::Sender<WorkerEvent>, _cancel: Arc<AtomicBool>) {
+    let timeout = Duration::from_millis(1500);
+    let mut tr = match open_tactrix_can() {
+        Ok(t) => t,
+        Err(e) => {
+            let _ = tx.send(WorkerEvent::Failed(format!("Tactrix open: {e}")));
+            return;
+        }
+    };
+    match read_dtcs(&mut tr, timeout) {
+        Ok(report) => {
+            let _ = tx.send(WorkerEvent::DtcResult(report));
+        }
+        Err(e) => {
+            let _ = tx.send(WorkerEvent::Failed(format!("read_dtcs: {e}")));
+        }
     }
 }
 

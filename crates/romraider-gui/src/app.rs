@@ -112,6 +112,10 @@ impl eframe::App for App {
                         ui.close_menu();
                         self.ecu_tools.open_view_info();
                     }
+                    if ui.button("Read DTCs…").clicked() {
+                        ui.close_menu();
+                        self.ecu_tools.open_dtc();
+                    }
                     ui.separator();
                     // Placeholder-пункты для flash-операций, disabled
                     // намеренно (нет donor-ECU = нет safe тестов).
