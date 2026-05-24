@@ -27,7 +27,7 @@ use std::time::Duration;
 use romraider_io::tactrix::{find_tactrix, TactrixDeviceInfo};
 use romraider_kernel::dtc_db::dtc_lookup;
 use romraider_kernel::orchestrator::{
-    dump_rom_via_can, peek_ecu_info, read_dtcs, DtcReport, DumpProgress, EcuInfo,
+    clear_dtcs, dump_rom_via_can, peek_ecu_info, read_dtcs, DtcReport, DumpProgress, EcuInfo,
 };
 
 /// Pre-flight check для Tactrix: enumerate USB через `find_tactrix()`
@@ -172,6 +172,10 @@ enum WorkerEvent {
     Progress(DumpProgress),
     Dumped(Vec<u8>),
     DtcResult(DtcReport),
+    /// Mode 0x04 ClearDTC completed успешно. UI должен авто-re-read чтобы
+    /// показать что коды реально ушли (или вернулись если underlying fault
+    /// persists).
+    DtcCleared,
     Failed(String),
 }
 
@@ -228,7 +232,22 @@ enum DtcState {
     Prep,
     Running,
     Done(DtcReport),
+    /// User clicked «Clear DTCs» в Done-state. Inline confirmation: показываем
+    /// предупреждение и Yes/Cancel. Yes → переход в `Clearing`, Cancel → назад в `Done`.
+    ConfirmClear(DtcReport),
+    Clearing,
     Error(String),
+}
+
+/// Отложенные UI-actions — устанавливаются button-handler-ами **внутри**
+/// render-closure, applied **после** match-а (чтобы не было двойного borrow
+/// `self` при переходе между state-ами).
+#[derive(Debug, Clone, Copy)]
+enum PendingAction {
+    ReReadDtcs,
+    ConfirmClear,
+    DoClear,
+    CancelClear,
 }
 
 pub struct EcuToolsPanel {
@@ -238,6 +257,7 @@ pub struct EcuToolsPanel {
     read_rom_state:     ReadRomState,
     view_info_state:    ViewInfoState,
     dtc_state:          DtcState,
+    pending_action:     Option<PendingAction>,
     worker:             Option<Worker>,
     preflight:          Option<Preflight>,
 }
@@ -251,6 +271,7 @@ impl Default for EcuToolsPanel {
             read_rom_state:  ReadRomState::Prep,
             view_info_state: ViewInfoState::Prep,
             dtc_state:       DtcState::Prep,
+            pending_action:  None,
             worker:          None,
             preflight:       None,
         }
@@ -395,13 +416,18 @@ impl EcuToolsPanel {
                 self.dtc_state = DtcState::Done(report);
                 self.worker = None;
             }
+            WorkerEvent::DtcCleared => {
+                // Очищено — автоматически re-read чтобы показать актуальное состояние.
+                self.worker = None;
+                self.start_dtc_worker();
+            }
             WorkerEvent::Failed(msg) => {
                 // Кладём ошибку в активное окно
                 if matches!(self.read_rom_state, ReadRomState::Running(_)) {
                     self.read_rom_state = ReadRomState::Error(msg);
                 } else if matches!(self.view_info_state, ViewInfoState::Running) {
                     self.view_info_state = ViewInfoState::Error(msg);
-                } else if matches!(self.dtc_state, DtcState::Running) {
+                } else if matches!(self.dtc_state, DtcState::Running | DtcState::Clearing) {
                     self.dtc_state = DtcState::Error(msg);
                 }
                 self.worker = None;
@@ -725,12 +751,90 @@ impl EcuToolsPanel {
                             );
                         }
                         ui.add_space(6.0);
-                        if ui.button("🔄 Re-read").clicked() {
-                            self.start_dtc_worker();
-                            DtcState::Running
-                        } else {
-                            DtcState::Done(report)
+                        ui.horizontal(|ui| {
+                            if ui.button("🔄 Re-read").clicked() {
+                                self.pending_action = Some(PendingAction::ReReadDtcs);
+                            }
+                            // Clear-кнопка enabled только если есть что чистить
+                            // (хотя clear_dtcs работает и на 0 кодов, но UX-смысла нет).
+                            let any_codes = total > 0;
+                            if ui
+                                .add_enabled(any_codes, egui::Button::new("🗑 Clear DTCs"))
+                                .on_hover_text(
+                                    "Mode 0x04: чистит Stored + Pending + Freeze Frame.\n\
+                                     Permanent DTCs (Mode 0x0A) не стираются — те уходят\n\
+                                     только после прохождения drive-cycle тестов.",
+                                )
+                                .clicked()
+                            {
+                                self.pending_action = Some(PendingAction::ConfirmClear);
+                            }
+                        });
+                        // Apply pending action (читаем после render-а чтобы не двойным borrow).
+                        match self.pending_action.take() {
+                            Some(PendingAction::ReReadDtcs) => {
+                                self.start_dtc_worker();
+                                DtcState::Running
+                            }
+                            Some(PendingAction::ConfirmClear) => DtcState::ConfirmClear(report),
+                            _ => DtcState::Done(report),
                         }
+                    }
+                    DtcState::ConfirmClear(report) => {
+                        render_dtc_section(ui, "Stored (MIL)", &report.stored, true);
+                        ui.add_space(6.0);
+                        render_dtc_section(ui, "Pending", &report.pending, false);
+                        ui.add_space(6.0);
+                        render_dtc_section(ui, "Permanent", &report.permanent, true);
+                        ui.add_space(10.0);
+                        egui::Frame::group(ui.style())
+                            .fill(egui::Color32::from_rgb(60, 50, 0))
+                            .show(ui, |ui| {
+                                ui.colored_label(
+                                    egui::Color32::YELLOW,
+                                    "⚠️  Clear DTCs (Mode 0x04) сделает следующее:",
+                                );
+                                ui.label("  • Удалит Stored + Pending DTCs из памяти ECU");
+                                ui.label("  • Сбросит Freeze Frame snapshot");
+                                ui.label("  • Обнулит O2-monitor / readiness flags");
+                                ui.label("  • НЕ удалит Permanent DTCs (Mode 0x0A) —");
+                                ui.label("    те уходят только после нескольких drive-cycle");
+                                ui.add_space(4.0);
+                                ui.colored_label(
+                                    egui::Color32::LIGHT_GRAY,
+                                    "Полезно после физических фиксов чтобы ECU начал \
+                                     заново учить trim/timing, а не использовал старые \
+                                     learned corrections.",
+                                );
+                            });
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add(
+                                    egui::Button::new("✅ Yes, clear DTCs")
+                                        .fill(egui::Color32::from_rgb(140, 80, 0)),
+                                )
+                                .clicked()
+                            {
+                                self.pending_action = Some(PendingAction::DoClear);
+                            }
+                            if ui.button("❌ Cancel").clicked() {
+                                self.pending_action = Some(PendingAction::CancelClear);
+                            }
+                        });
+                        match self.pending_action.take() {
+                            Some(PendingAction::DoClear) => {
+                                self.start_clear_dtcs_worker();
+                                DtcState::Clearing
+                            }
+                            Some(PendingAction::CancelClear) => DtcState::Done(report),
+                            _ => DtcState::ConfirmClear(report),
+                        }
+                    }
+                    DtcState::Clearing => {
+                        ui.spinner();
+                        ui.label("Clearing DTCs (Mode 0x04)… (auto re-read after).");
+                        DtcState::Clearing
                     }
                     DtcState::Error(msg) => {
                         ui.colored_label(egui::Color32::RED, "Ошибка:");
@@ -768,6 +872,22 @@ impl EcuToolsPanel {
             cancel,
         });
         self.dtc_state = DtcState::Running;
+    }
+
+    fn start_clear_dtcs_worker(&mut self) {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_clone = Arc::clone(&cancel);
+        let (tx, rx) = mpsc::channel::<WorkerEvent>();
+        let handle = std::thread::Builder::new()
+            .name("ecu-clear-dtcs-worker".into())
+            .spawn(move || clear_dtcs_worker(tx, cancel_clone))
+            .expect("spawn clear-dtcs worker");
+        self.worker = Some(Worker {
+            rx,
+            handle: Some(handle),
+            cancel,
+        });
+        self.dtc_state = DtcState::Clearing;
     }
 
     fn start_view_info_worker(&mut self) {
@@ -843,6 +963,25 @@ fn dtc_worker(tx: mpsc::Sender<WorkerEvent>, _cancel: Arc<AtomicBool>) {
         }
         Err(e) => {
             let _ = tx.send(WorkerEvent::Failed(format!("read_dtcs: {e}")));
+        }
+    }
+}
+
+fn clear_dtcs_worker(tx: mpsc::Sender<WorkerEvent>, _cancel: Arc<AtomicBool>) {
+    let timeout = Duration::from_millis(1500);
+    let mut tr = match open_tactrix_can() {
+        Ok(t) => t,
+        Err(e) => {
+            let _ = tx.send(WorkerEvent::Failed(format!("Tactrix open: {e}")));
+            return;
+        }
+    };
+    match clear_dtcs(&mut tr, timeout) {
+        Ok(()) => {
+            let _ = tx.send(WorkerEvent::DtcCleared);
+        }
+        Err(e) => {
+            let _ = tx.send(WorkerEvent::Failed(format!("clear_dtcs: {e}")));
         }
     }
 }
