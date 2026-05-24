@@ -1,0 +1,100 @@
+name: CI
+
+# Triggers:
+#   - push на main/master (любые ветки в этих именах, на случай rename)
+#   - PR в эти ветки
+#   - manual run через "Run workflow" в Actions tab
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  # Coloured cargo output — лучше читается в GitHub Actions logs.
+  CARGO_TERM_COLOR: always
+  # Fail-fast: первая ошибка в любом step-е останавливает job.
+  CARGO_INCREMENTAL: 0
+
+# Permissions block: explicit read-only — следуем principle-of-least-privilege.
+# Если позже добавим release jobs (cargo-dist и т.п.) — там будут более широкие.
+permissions:
+  contents: read
+
+jobs:
+  # Главный job: build + test всех крейтов в двух feature-конфигурациях.
+  # Ubuntu — самый быстрый GitHub runner на free tier (~2x быстрее macOS).
+  build-and-test:
+    name: Build & test (Ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target/
+        uses: Swatinem/rust-cache@v2
+
+      # rusb (Tactrix transport) линкуется с системным libusb-1.0.
+      # На macOS он есть из коробки; на Ubuntu runner нужно поставить вручную.
+      - name: Install libusb (rusb dependency)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libusb-1.0-0-dev pkg-config
+
+      # Билд с default-features — проверка что без opt-in feature-флагов
+      # всё компилируется (важно для license-isolation: GPL-3 kernel-crate
+      # не должен быть required).
+      - name: Build workspace (default features)
+        run: cargo build --workspace --all-targets
+
+      # Билд со всеми feature-флагами — kernel-upload (GPL-3 path) +
+      # ecu-tools (GUI dump-rom / DTC / freeze frame modals).
+      - name: Build with full features
+        run: |
+          cargo build --workspace \
+            --features romraider-cli/kernel-upload,romraider-gui/ecu-tools \
+            --all-targets
+
+      - name: Run tests
+        run: cargo test --workspace
+
+      # Smoke-tests: бинарники должны хотя бы вывести `--help` без падения.
+      # Не проверяет hardware-доступ (Tactrix не в CI), только что CLI
+      # вообще запускается.
+      - name: CLI smoke-test (--help)
+        run: |
+          cargo run -p romraider-cli --quiet -- --help > /dev/null
+          cargo run -p romraider-cli --quiet --features kernel-upload -- --help > /dev/null
+
+  # Отдельный job для clippy + fmt — изолирован чтобы не блокировать
+  # основной build/test pipeline пока кодовая база чистится.
+  # `continue-on-error: true` пока — переключим в required когда warnings == 0.
+  lint:
+    name: Clippy & fmt (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust + clippy/rustfmt
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install libusb
+        run: sudo apt-get update && sudo apt-get install -y libusb-1.0-0-dev pkg-config
+
+      # Без `-D warnings` пока — кодовая база имеет накопившиеся
+      # «unused import» и т.п. Включим как required gate когда почистим.
+      - name: Clippy (advisory)
+        run: cargo clippy --workspace --all-targets
+
+      - name: rustfmt check (advisory)
+        run: cargo fmt --all --check

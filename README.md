@@ -1,5 +1,9 @@
 # romraider-rs
 
+[![CI](https://github.com/firefighter-19/romraider-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/firefighter-19/romraider-rs/actions/workflows/ci.yml)
+[![License: GPL-2.0+](https://img.shields.io/badge/License-GPL--2.0%2B-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org/)
+
 **Languages:** **English** · [Русский](README.ru.md)
 
 **Mac-native Rust toolkit for Subaru ECU tuning: ROM editor + datalogger +
