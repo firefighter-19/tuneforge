@@ -275,6 +275,57 @@ pub fn find_ssm_param(key: &str) -> Option<&'static SsmParam> {
     })
 }
 
+/// Производный (computed) параметр — не читается с ECU напрямую, а
+/// вычисляется из других [`SsmParam`] значений через `compute()`.
+///
+/// Используется для diagnostic-ratios которые ECU сам не выставляет, но
+/// полезны при разборе симптомов (например `AVCS Diff = R - L` для
+/// детекции стуканного AVCS oil-control valve).
+#[derive(Debug, Clone, Copy)]
+pub struct SsmDerivedParam {
+    /// Человеческое имя для CSV/preview.
+    pub name: &'static str,
+    /// Список имён [`SsmParam`] от которых зависит. Caller должен
+    /// гарантировать что все эти params в подписке (raw values посчитаны).
+    pub depends_on: &'static [&'static str],
+    /// Вычисление: принимает scaled values тех же имён в том же порядке
+    /// что `depends_on`. Возвращает derived value.
+    pub compute: fn(&[f64]) -> f64,
+    pub units: &'static str,
+}
+
+/// Производные параметры для tuning-диагностики. Все они **дешёвые**
+/// (просто арифметика по уже-полученным byte values), не добавляют
+/// никаких extra ECU-запросов.
+pub const SUBARU_DERIVED_PARAMS: &[SsmDerivedParam] = &[
+    // AVCS R - L: если ≥3° в transients → залипший OCV на правом банке
+    // (типичная failure после 10+ лет). На stable steady-state должно
+    // быть ≤1° (оба банка в одной позиции).
+    SsmDerivedParam {
+        name:       "AVCS Diff (R-L)",
+        depends_on: &["Intake AVCS Right", "Intake AVCS Left"],
+        compute:    |v| v[0] - v[1],
+        units:      "deg",
+    },
+    // Boost gauge = MAP абсолютное минус atmospheric (~14.5 psi на
+    // уровне моря). Полезно для quick «сколько буста сейчас» без
+    // вычитания в голове.
+    SsmDerivedParam {
+        name:       "Boost (gauge)",
+        depends_on: &["MAP"],
+        compute:    |v| v[0] - 14.5,
+        units:      "PSI",
+    },
+];
+
+/// Найти derived-параметр по имени (case-insensitive).
+#[must_use]
+pub fn find_derived_param(name: &str) -> Option<&'static SsmDerivedParam> {
+    SUBARU_DERIVED_PARAMS
+        .iter()
+        .find(|d| d.name.eq_ignore_ascii_case(name))
+}
+
 /// Опросить N SSM-параметров за **один** Mode 0xA8 запрос (батчинг).
 /// Возвращает по `Vec<u8>` на параметр (длиной `param.bytes` каждый),
 /// в том же порядке что и `params`.

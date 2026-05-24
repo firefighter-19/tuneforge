@@ -1057,11 +1057,12 @@ fn logger_ssm_can_cmd(
     list:          bool,
 ) -> Result<()> {
     use romraider_protocol::subaru::{
-        self, find_ssm_param, read_ssm_params_can, SsmParam, SUBARU_SSM_PARAMS,
+        self, find_derived_param, find_ssm_param, read_ssm_params_can, SsmDerivedParam,
+        SsmParam, SUBARU_DERIVED_PARAMS, SUBARU_SSM_PARAMS,
     };
 
     if list {
-        println!("Available Subaru SSM3 parameters (via CAN Mode 0xA8):");
+        println!("Available Subaru SSM3 RAW parameters (via CAN Mode 0xA8):");
         println!("  {:<5}  {:<32}  {:<10}  {:<5}  {}", "ID", "Name", "Addr", "Bytes", "Units");
         for p in SUBARU_SSM_PARAMS {
             println!(
@@ -1069,31 +1070,69 @@ fn logger_ssm_can_cmd(
                 p.id, p.name, p.address, p.bytes, p.units,
             );
         }
+        println!("\nDERIVED parameters (computed from raw values, no extra ECU read):");
+        println!("  {:<5}  {:<32}  {:<10}  {}", "", "Name", "Depends-on", "Units");
+        for d in SUBARU_DERIVED_PARAMS {
+            println!(
+                "  {:<5}  {:<32}  {:<40}  {}",
+                "—", d.name,
+                d.depends_on.join(" + "),
+                d.units,
+            );
+        }
         return Ok(());
     }
 
     let out_path = out_path.expect("clap required_unless_present validates this");
 
-    // 1. Резолв параметров.
-    let chosen: Vec<&'static SsmParam> = if all {
-        SUBARU_SSM_PARAMS.iter().collect()
+    // 1. Резолв подписок: разделяем на raw и derived.
+    let mut chosen_raw: Vec<&'static SsmParam> = Vec::new();
+    let mut chosen_derived: Vec<&'static SsmDerivedParam> = Vec::new();
+    if all {
+        chosen_raw.extend(SUBARU_SSM_PARAMS.iter());
+        chosen_derived.extend(SUBARU_DERIVED_PARAMS.iter());
     } else {
         if param_keys.is_empty() {
             anyhow::bail!("at least one --params is required (or --all / --list)");
         }
-        let mut v = Vec::new();
         for key in param_keys {
-            let p = find_ssm_param(key).ok_or_else(|| {
-                anyhow::anyhow!("unknown SSM param '{key}' — use `--list`")
-            })?;
-            v.push(p);
+            if let Some(p) = find_ssm_param(key) {
+                chosen_raw.push(p);
+            } else if let Some(d) = find_derived_param(key) {
+                chosen_derived.push(d);
+            } else {
+                anyhow::bail!("unknown SSM param '{key}' — use `--list`");
+            }
         }
-        v
-    };
-    eprintln!("Subscribing to {} SSM param(s):", chosen.len());
-    for p in &chosen {
+    }
+
+    // 2. Авто-добавить raw-параметры от которых зависят derived.
+    for d in &chosen_derived {
+        for dep_name in d.depends_on {
+            if !chosen_raw.iter().any(|p| p.name == *dep_name) {
+                if let Some(p) = find_ssm_param(dep_name) {
+                    chosen_raw.push(p);
+                    eprintln!(
+                        "  (auto-added '{dep_name}' as dependency of '{}')",
+                        d.name
+                    );
+                }
+            }
+        }
+    }
+
+    eprintln!(
+        "Subscribing to {} raw + {} derived param(s):",
+        chosen_raw.len(),
+        chosen_derived.len()
+    );
+    for p in &chosen_raw {
         eprintln!("  + {:<4} {:<32} addr=0x{:06X} ({}B, {})",
             p.id, p.name, p.address, p.bytes, p.units);
+    }
+    for d in &chosen_derived {
+        eprintln!("  Δ      {:<32} = f({}) ({})",
+            d.name, d.depends_on.join(", "), d.units);
     }
 
     // 2. Открыть CAN + SSM-CAN ECU init.
@@ -1123,20 +1162,41 @@ fn logger_ssm_can_cmd(
     };
     let mut count = 0u64;
     eprintln!(
-        "Starting SSM-CAN log to {} (interval {} ms, {} params batched)…",
-        out_path.display(), interval_ms, chosen.len(),
+        "Starting SSM-CAN log to {} (interval {} ms, {} raw + {} derived)…",
+        out_path.display(),
+        interval_ms,
+        chosen_raw.len(),
+        chosen_derived.len(),
     );
     loop {
         let started = std::time::Instant::now();
-        match read_ssm_params_can(&mut tr, &chosen, timeout) {
+        match read_ssm_params_can(&mut tr, &chosen_raw, timeout) {
             Ok(per_param) => {
-                let mut values = Vec::with_capacity(chosen.len());
-                for (p, raw) in chosen.iter().zip(&per_param) {
+                // 1. Сначала raw values + name→value lookup для derived-вычислений.
+                let mut values = Vec::with_capacity(chosen_raw.len() + chosen_derived.len());
+                let mut by_name: std::collections::HashMap<&str, f64> =
+                    std::collections::HashMap::new();
+                for (p, raw) in chosen_raw.iter().zip(&per_param) {
                     let v = (p.scale)(raw);
+                    by_name.insert(p.name, v);
                     values.push(SampleValue {
                         parameter_id: p.name.into(),
                         raw: raw.clone(),
                         value: v,
+                    });
+                }
+                // 2. Compute derived params from raw values.
+                for d in &chosen_derived {
+                    let inputs: Vec<f64> = d
+                        .depends_on
+                        .iter()
+                        .map(|n| by_name.get(n).copied().unwrap_or(0.0))
+                        .collect();
+                    let value = (d.compute)(&inputs);
+                    values.push(SampleValue {
+                        parameter_id: d.name.into(),
+                        raw: Vec::new(), // derived не имеет raw байтов
+                        value,
                     });
                 }
                 let sample = Sample {
