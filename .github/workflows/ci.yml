@@ -38,11 +38,12 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       # rusb (Tactrix transport) линкуется с системным libusb-1.0.
-      # На macOS он есть из коробки; на Ubuntu runner нужно поставить вручную.
-      - name: Install libusb (rusb dependency)
+      # serialport на Linux тянет libudev-sys → нужен libudev-dev.
+      # На macOS обе библиотеки есть из коробки; на Ubuntu runner — вручную.
+      - name: Install libusb + libudev
         run: |
           sudo apt-get update
-          sudo apt-get install -y libusb-1.0-0-dev pkg-config
+          sudo apt-get install -y libusb-1.0-0-dev libudev-dev pkg-config
 
       # Билд с default-features — проверка что без opt-in feature-флагов
       # всё компилируется (важно для license-isolation: GPL-3 kernel-crate
@@ -88,8 +89,8 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Install libusb
-        run: sudo apt-get update && sudo apt-get install -y libusb-1.0-0-dev pkg-config
+      - name: Install libusb + libudev
+        run: sudo apt-get update && sudo apt-get install -y libusb-1.0-0-dev libudev-dev pkg-config
 
       # Проверяем обе feature-конфигурации (default + full) — kernel-upload
       # и ecu-tools имеют свой unique-код который иначе пройдёт мимо linter-а.
