@@ -177,7 +177,10 @@ pub const DTC_DATABASE: &[(&str, &str)] = &[
     ("P0703", "Brake Switch Input Malfunction"),
     ("P0704", "Clutch Switch Input Circuit Malfunction"),
     ("P0705", "Transmission Range Sensor Malfunction"),
-    ("P0706", "Transmission Range Sensor Circuit Range/performance"),
+    (
+        "P0706",
+        "Transmission Range Sensor Circuit Range/performance",
+    ),
     ("P0710", "Atf Temp Sensor Malfunction"),
     ("P0715", "Torque Converter Turbine Speed Malfunction"),
     ("P0716", "Torque Converter Turbine Speed Range/perf"),
@@ -367,7 +370,12 @@ mod tests {
     #[test]
     fn database_is_sorted() {
         for w in DTC_DATABASE.windows(2) {
-            assert!(w[0].0 < w[1].0, "DTC_DATABASE must be sorted: {} >= {}", w[0].0, w[1].0);
+            assert!(
+                w[0].0 < w[1].0,
+                "DTC_DATABASE must be sorted: {} >= {}",
+                w[0].0,
+                w[1].0
+            );
         }
     }
 
@@ -387,6 +395,10 @@ mod tests {
     #[test]
     fn database_size_is_reasonable() {
         // Sanity: a few hundred entries expected (Subaru + generic).
-        assert!(DTC_DATABASE.len() >= 100, "DTC_DATABASE too small: {}", DTC_DATABASE.len());
+        assert!(
+            DTC_DATABASE.len() >= 100,
+            "DTC_DATABASE too small: {}",
+            DTC_DATABASE.len()
+        );
     }
 }

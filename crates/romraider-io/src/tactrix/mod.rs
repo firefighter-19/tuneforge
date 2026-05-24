@@ -51,18 +51,18 @@ use std::time::Duration;
 #[derive(Debug, Clone)]
 pub struct TactrixDeviceInfo {
     /// USB bus number (информативно, для отладки multi-bus случаев).
-    pub bus_number:     u8,
+    pub bus_number: u8,
     /// USB device address на шине.
-    pub address:        u8,
-    pub vid:            u16,
-    pub pid:            u16,
+    pub address: u8,
+    pub vid: u16,
+    pub pid: u16,
     /// Из string descriptor-а — `"Tactrix"` если успел прочитать,
     /// `None` если открыть устройство для чтения strings не удалось
     /// (на macOS иногда требует «allow accessory» prompt).
-    pub manufacturer:   Option<String>,
-    pub product:        Option<String>,
-    pub serial:         Option<String>,
-    pub usb_version:    String,
+    pub manufacturer: Option<String>,
+    pub product: Option<String>,
+    pub serial: Option<String>,
+    pub usb_version: String,
     pub device_version: String,
     pub num_interfaces: u8,
 }
@@ -99,11 +99,9 @@ pub fn find_tactrix() -> rusb::Result<Vec<TactrixDeviceInfo>> {
                     .read_languages(timeout)
                     .ok()
                     .and_then(|l| l.first().copied());
-                let m = lang
-                    .and_then(|l| handle.read_manufacturer_string(l, &desc, timeout).ok());
+                let m = lang.and_then(|l| handle.read_manufacturer_string(l, &desc, timeout).ok());
                 let p = lang.and_then(|l| handle.read_product_string(l, &desc, timeout).ok());
-                let s = lang
-                    .and_then(|l| handle.read_serial_number_string(l, &desc, timeout).ok());
+                let s = lang.and_then(|l| handle.read_serial_number_string(l, &desc, timeout).ok());
                 (m, p, s)
             }
             Err(_) => (None, None, None),
@@ -118,9 +116,9 @@ pub fn find_tactrix() -> rusb::Result<Vec<TactrixDeviceInfo>> {
         };
         out.push(TactrixDeviceInfo {
             bus_number: device.bus_number(),
-            address:    device.address(),
-            vid:        desc.vendor_id(),
-            pid:        desc.product_id(),
+            address: device.address(),
+            vid: desc.vendor_id(),
+            pid: desc.product_id(),
             manufacturer,
             product,
             serial,

@@ -194,12 +194,14 @@ pub fn dump_blocks(
 /// - BRR =  9 → 62 500 baud (**рекомендуется для быстрого dump-а**)
 /// - BRR = 39 → 15 625 baud (рекомендуется для programming session upload)
 /// - BRR = 259 → 2 403 baud (~~стандартный 2400~~)
+#[must_use]
 pub const fn kspeed_from_brr(brr_div: u8) -> u32 {
     20_000_000 / (32 * (brr_div as u32 + 1))
 }
 
 /// Обратное: BRR divisor для целевого baud-rate. Из `nisprog/npk_backend.c:573`.
 /// Возвращает `None` если требуемый baud вне диапазона (т.е. BRR > 255).
+#[must_use]
 pub const fn brr_from_kspeed(target_baud: u32) -> Option<u8> {
     if target_baud == 0 {
         return None;

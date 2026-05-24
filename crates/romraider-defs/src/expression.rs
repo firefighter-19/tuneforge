@@ -85,7 +85,7 @@ fn normalize_decimal(s: &str) -> String {
     let chars: Vec<char> = s.chars().collect();
     for (i, &c) in chars.iter().enumerate() {
         if c == '.' {
-            let next_is_digit = chars.get(i + 1).is_some_and(|c| c.is_ascii_digit());
+            let next_is_digit = chars.get(i + 1).is_some_and(char::is_ascii_digit);
             let prev_is_digit = prev.is_some_and(|c: char| c.is_ascii_digit());
             if next_is_digit && !prev_is_digit {
                 out.push('0');

@@ -33,7 +33,7 @@ use crate::seed_key::subaru_genkey_can;
 
 /// CAN OBD-II 11-bit ECU request ID (тот же что у `obd2`/`uds` модулей,
 /// дублируется тут чтобы не было cross-crate-зависимостей).
-pub const OBD_REQUEST_ID:  u32 = 0x7E0;
+pub const OBD_REQUEST_ID: u32 = 0x7E0;
 /// CAN OBD-II 11-bit ECU response ID.
 pub const OBD_RESPONSE_ID: u32 = 0x7E8;
 
@@ -45,33 +45,44 @@ pub const OBD_RESPONSE_ID: u32 = 0x7E8;
 #[derive(Debug, Clone)]
 pub enum DumpProgress {
     /// Phase A done — Mode 01 PID 00 returned (supported-PIDs bitmap).
-    PhaseAObdiiWake     { mode01_response: Vec<u8> },
+    PhaseAObdiiWake { mode01_response: Vec<u8> },
     /// Phase A — VIN (Mode 09 PID 02) raw response.
-    PhaseAVin           { vin_raw: Vec<u8> },
+    PhaseAVin { vin_raw: Vec<u8> },
     /// Phase A — CVN (Mode 09 PID 06) raw response.
-    PhaseACvn           { cvn_raw: Vec<u8> },
+    PhaseACvn { cvn_raw: Vec<u8> },
     /// Phase B — `10 03` ExtendedDiagnosticSession accepted.
     PhaseBExtSession,
     /// Phase B — security access seed received (4 bytes).
-    PhaseBSeed          { seed: [u8; 4] },
+    PhaseBSeed { seed: [u8; 4] },
     /// Phase B — key computed via [`subaru_genkey_can`].
-    PhaseBKey           { key:  [u8; 4] },
+    PhaseBKey { key: [u8; 4] },
     /// Phase B — `27 02` SecurityAccess granted.
     PhaseBGranted,
     /// Phase B — `10 02` ProgrammingSession active.
     PhaseBProgSession,
     /// Phase C — kernel upload starting (`total_bytes` бесед к ECU).
-    PhaseCUploadStart   { total_bytes: usize },
+    PhaseCUploadStart { total_bytes: usize },
     /// Phase C — kernel uploaded + StartRoutine executed (jump в RAM).
-    PhaseCUploadDone    { elapsed_secs: f64 },
+    PhaseCUploadDone { elapsed_secs: f64 },
     /// Phase D — kernel handshake response, ASCII banner.
-    PhaseDBanner        { banner: String },
+    PhaseDBanner { banner: String },
     /// Phase E — read loop start.
-    PhaseEReadStart     { start_addr: u32, total: usize, chunk_size: u16 },
+    PhaseEReadStart {
+        start_addr: u32,
+        total: usize,
+        chunk_size: u16,
+    },
     /// Phase E — после каждого chunk-а.
-    PhaseEReadProgress  { done: usize, total: usize, rate_bps: f64 },
+    PhaseEReadProgress {
+        done: usize,
+        total: usize,
+        rate_bps: f64,
+    },
     /// Phase E — read loop done.
-    PhaseEDone          { bytes_dumped: usize, elapsed_secs: f64 },
+    PhaseEDone {
+        bytes_dumped: usize,
+        elapsed_secs: f64,
+    },
 }
 
 /// Послать UDS-команду по CAN и получить response (без 4-байтового
@@ -80,8 +91,8 @@ pub enum DumpProgress {
 /// На фронте теста ([`dump_rom_via_can`]) этот же helper использует
 /// CLI и GUI — extracted из `cli/main.rs`.
 pub fn uds_request(
-    tr:      &mut dyn Transport,
-    uds_tx:  &[u8],
+    tr: &mut dyn Transport,
+    uds_tx: &[u8],
     timeout: Duration,
 ) -> Result<Vec<u8>, KernelError> {
     let mut tx = Vec::with_capacity(4 + uds_tx.len());
@@ -111,11 +122,11 @@ pub fn uds_request(
 ///
 /// Возвращает полный dump (`Vec<u8>` длиной `length`).
 pub fn dump_rom_via_can<F>(
-    tr:           &mut dyn Transport,
-    start_addr:   u32,
-    length:       usize,
-    chunk_size:   u16,
-    timeout:      Duration,
+    tr: &mut dyn Transport,
+    start_addr: u32,
+    length: usize,
+    chunk_size: u16,
+    timeout: Duration,
     mut progress: F,
 ) -> Result<Vec<u8>, KernelError>
 where
@@ -232,9 +243,9 @@ pub struct EcuInfo {
 #[derive(Debug, Clone, Default)]
 pub struct DtcReport {
     /// Confirmed/stored DTCs (Mode 0x03) — те что зажигают MIL.
-    pub stored:    Vec<String>,
+    pub stored: Vec<String>,
     /// Pending DTCs (Mode 0x07) — fault detected once but not confirmed yet.
-    pub pending:   Vec<String>,
+    pub pending: Vec<String>,
     /// Permanent DTCs (Mode 0x0A) — ECU помнит даже после Mode 0x04 ClearDTC
     /// до прохождения drive-cycle тестов.
     pub permanent: Vec<String>,
@@ -269,10 +280,7 @@ pub fn encode_dtc(hi: u8, lo: u8) -> String {
 ///
 /// Каждый mode даёт ответ `<SID|0x40> <count> <pair1_hi> <pair1_lo> ...`.
 /// `count` = число DTC-пар; для пустого ответа возвращается empty Vec.
-pub fn read_dtcs(
-    tr:      &mut dyn Transport,
-    timeout: Duration,
-) -> Result<DtcReport, KernelError> {
+pub fn read_dtcs(tr: &mut dyn Transport, timeout: Duration) -> Result<DtcReport, KernelError> {
     let mut report = DtcReport::default();
     for (mode, target) in [
         (0x03u8, &mut report.stored),
@@ -287,8 +295,8 @@ pub fn read_dtcs(
 
 /// Read one DTC mode (03/07/0A). Internal helper for [`read_dtcs`].
 fn read_dtc_mode(
-    tr:      &mut dyn Transport,
-    mode:    u8,
+    tr: &mut dyn Transport,
+    mode: u8,
     timeout: Duration,
 ) -> Result<Vec<String>, KernelError> {
     let mut tx = Vec::with_capacity(4 + 1);
@@ -336,10 +344,7 @@ fn read_dtc_mode(
 ///
 /// Должен вызываться **только с подтверждения пользователя** (UI confirm
 /// dialog или CLI flag).
-pub fn clear_dtcs(
-    tr:      &mut dyn Transport,
-    timeout: Duration,
-) -> Result<(), KernelError> {
+pub fn clear_dtcs(tr: &mut dyn Transport, timeout: Duration) -> Result<(), KernelError> {
     let mut tx = Vec::with_capacity(4 + 1);
     tx.extend_from_slice(&OBD_REQUEST_ID.to_be_bytes());
     tx.push(0x04);
@@ -378,12 +383,12 @@ pub struct FreezeFrame {
     /// если ECU не имеет stored FF (нет недавних confirmed-кодов).
     pub triggering_dtc: Option<String>,
     /// Параметры snapshot-а — каждый Mode 0x01 PID с scaled value.
-    pub values:         Vec<FreezePidValue>,
+    pub values: Vec<FreezePidValue>,
 }
 
 #[derive(Debug, Clone)]
 pub struct FreezePidValue {
-    pub name:  &'static str,
+    pub name: &'static str,
     pub units: &'static str,
     pub value: f64,
 }
@@ -397,7 +402,7 @@ pub struct FreezePidValue {
 ///    Mode 0x02 → получаем `42 <PID> 00 <data>` → scaled value → push в values.
 /// 3. ECU может silent-skip-нуть unsupported PID — пропускаем без ошибки.
 pub fn read_freeze_frame(
-    tr:      &mut dyn Transport,
+    tr: &mut dyn Transport,
     timeout: Duration,
 ) -> Result<FreezeFrame, KernelError> {
     use romraider_protocol::obd2::STANDARD_PIDS;
@@ -432,7 +437,7 @@ pub fn read_freeze_frame(
                 let raw = &bytes[..p.bytes];
                 let value = (p.scale)(raw);
                 ff.values.push(FreezePidValue {
-                    name:  p.name,
+                    name: p.name,
                     units: p.units,
                     value,
                 });
@@ -449,9 +454,9 @@ pub fn read_freeze_frame(
 /// Послать Mode 0x02 запрос (`02 <PID> <frame>`) и распарсить response
 /// (`42 <PID> <frame> <data...>`). Возвращает только data-байты.
 fn read_freeze_pid_raw(
-    tr:      &mut dyn Transport,
-    pid:     u8,
-    frame:   u8,
+    tr: &mut dyn Transport,
+    pid: u8,
+    frame: u8,
     timeout: Duration,
 ) -> Result<Vec<u8>, KernelError> {
     let mut tx = Vec::with_capacity(4 + 3);
@@ -494,18 +499,14 @@ fn read_freeze_pid_raw(
 /// Read-only «опознавательный» опрос ECU: Mode 01 PID 00 (supported PIDs
 /// bitmap), Mode 09 PID 02 (VIN), Mode 09 PID 06 (CVN). Используется для
 /// GUI «View ECU Info» панели — никакой SecurityAccess не требуется.
-pub fn peek_ecu_info(
-    tr:      &mut dyn Transport,
-    timeout: Duration,
-) -> Result<EcuInfo, KernelError> {
+pub fn peek_ecu_info(tr: &mut dyn Transport, timeout: Duration) -> Result<EcuInfo, KernelError> {
     let mut info = EcuInfo::default();
 
     // Mode 01 PID 00 → bitmap
     if let Ok(resp) = uds_request(tr, &[0x01, 0x00], timeout) {
         // Tactrix strip уже снял CAN-ID, мы получаем `41 00 <4B bitmap>`.
         if resp.len() >= 6 && resp[0] == 0x41 && resp[1] == 0x00 {
-            info.mode01_supported_bitmap =
-                u32::from_be_bytes([resp[2], resp[3], resp[4], resp[5]]);
+            info.mode01_supported_bitmap = u32::from_be_bytes([resp[2], resp[3], resp[4], resp[5]]);
         }
     }
 

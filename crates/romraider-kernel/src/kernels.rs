@@ -17,6 +17,7 @@ pub enum McuFamily {
 
 impl McuFamily {
     /// RAM-адрес, по которому ECU ждёт kernel-binary.
+    #[must_use]
     pub const fn load_address(self) -> u32 {
         match self {
             Self::Sh7055 => 0xFFFF_6000,
@@ -25,11 +26,13 @@ impl McuFamily {
     }
 
     /// Адрес trampoline для SID 0x31 handover (load_address + 4).
+    #[must_use]
     pub const fn entry_address(self) -> u32 {
         self.load_address() + 4
     }
 
     /// Полный размер ROM (для default `length` в [`crate::KernelDumpConfig`]).
+    #[must_use]
     pub const fn rom_size(self) -> usize {
         match self {
             Self::Sh7055 => 512 * 1024,

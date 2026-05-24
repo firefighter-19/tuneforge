@@ -30,6 +30,11 @@ use romraider_io::transport::Transport;
 
 use crate::error::{KernelError, KernelResult};
 use crate::kernels::KernelBinary;
+// `self` (т.е. module `kwp2000`) импортируется для use в `#[cfg(test)] mod tests`
+// ниже, где `kwp2000::POSITIVE_RESPONSE_MASK` / `kwp2000::HEADER` нужны для
+// сборки synthetic response-фреймов. Production-код использует только
+// `request_response` и `sid`.
+#[allow(unused_imports, clippy::single_component_path_imports)]
 use crate::kwp2000::{self, request_response, sid};
 use crate::seed_key::{subaru_encrypt_buffer, subaru_genkey};
 

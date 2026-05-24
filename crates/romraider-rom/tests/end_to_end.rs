@@ -5,7 +5,7 @@ use romraider_defs::{parse_str, resolve};
 use romraider_rom::RomImage;
 
 /// XML с одним 2D-таблицей на адресе 0x10, 4 ячейки uint16 BE, scaling x*0.5.
-const DEF: &str = r##"
+const DEF: &str = r#"
 <roms>
   <rom>
     <romid><xmlid>TEST</xmlid></romid>
@@ -14,7 +14,7 @@ const DEF: &str = r##"
     </table>
   </rom>
 </roms>
-"##;
+"#;
 
 fn build_rom() -> RomImage {
     // 16 байт нулей, затем 4 × uint16 BE: 100, 200, 300, 400 → real (через *0.5): 50, 100, 150, 200
@@ -46,14 +46,14 @@ fn full_pipeline_xml_to_real_values() {
 
 #[test]
 fn missing_table_address_reports_typed_error() {
-    let xml = r##"
+    let xml = r#"
         <roms>
           <rom>
             <romid><xmlid>T</xmlid></romid>
             <table type="2D" name="x" storagetype="uint8" endian="big" sizex="2"/>
           </rom>
         </roms>
-    "##;
+    "#;
     let doc = parse_str(xml).unwrap();
     let resolved = resolve(&doc).unwrap();
     let table = &resolved[0].tables[0];
@@ -114,7 +114,7 @@ fn edit_then_save_round_trip_via_scaling() {
 #[test]
 fn three_d_with_axes_via_explicit_count() {
     // 3D-таблица 3x2 uint8 + X axis (3 float LE) + Y axis (2 float LE).
-    let xml = r##"
+    let xml = r#"
         <roms>
           <rom>
             <romid><xmlid>T</xmlid></romid>
@@ -125,7 +125,7 @@ fn three_d_with_axes_via_explicit_count() {
             </table>
           </rom>
         </roms>
-    "##;
+    "#;
     let doc = parse_str(xml).unwrap();
     let resolved = resolve(&doc).unwrap();
     let table = &resolved[0].tables[0];

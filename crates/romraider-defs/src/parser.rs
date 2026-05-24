@@ -30,7 +30,7 @@ mod tests {
     /// Минимальный валидный документ — один пустой ROM с одним полем romid.
     #[test]
     fn parses_minimal_document() {
-        let xml = r#"
+        let xml = r"
             <roms>
               <rom>
                 <romid>
@@ -38,7 +38,7 @@ mod tests {
                 </romid>
               </rom>
             </roms>
-        "#;
+        ";
         let doc = parse_str(xml).unwrap();
         assert_eq!(doc.roms.len(), 1);
         let rom = &doc.roms[0];
@@ -164,7 +164,7 @@ mod tests {
 
     #[test]
     fn parses_switch_table_with_states() {
-        let xml = r##"
+        let xml = r#"
             <roms>
               <rom>
                 <romid><xmlid>R</xmlid></romid>
@@ -175,7 +175,7 @@ mod tests {
                 </table>
               </rom>
             </roms>
-        "##;
+        "#;
         let doc = parse_str(xml).unwrap();
         let t = &doc.roms[0].tables[0];
         assert_eq!(t.kind.as_deref(), Some("Switch"));
@@ -188,7 +188,7 @@ mod tests {
 
     #[test]
     fn parses_bitwise_switch_with_bits() {
-        let xml = r##"
+        let xml = r#"
             <roms>
               <rom>
                 <romid><xmlid>R</xmlid></romid>
@@ -199,7 +199,7 @@ mod tests {
                 </table>
               </rom>
             </roms>
-        "##;
+        "#;
         let doc = parse_str(xml).unwrap();
         let t = &doc.roms[0].tables[0];
         assert_eq!(t.kind.as_deref(), Some("BitwiseSwitch"));

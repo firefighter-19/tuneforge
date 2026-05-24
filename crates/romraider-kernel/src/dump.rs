@@ -175,7 +175,7 @@ fn stream_rom(
 
     while out.len() < cfg.length {
         let remaining = cfg.length - out.len();
-        let remaining_blocks = (remaining + 31) / 32;
+        let remaining_blocks = remaining.div_ceil(32);
         let blocks_this = (remaining_blocks.min(usize::from(BLOCKS_PER_BATCH))) as u16;
 
         let chunk =
@@ -220,7 +220,7 @@ mod tests {
             fn purge(&mut self) -> romraider_io::error::IoResult<()> {
                 Ok(())
             }
-            fn description(&self) -> &str {
+            fn description(&self) -> &'static str {
                 "dummy"
             }
         }

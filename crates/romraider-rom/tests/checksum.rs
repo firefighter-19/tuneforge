@@ -8,7 +8,7 @@ use romraider_rom::{subaru_classic, RomImage};
 /// - `0x00..0x10` (16 байт) — «карта», данные которой защищены checksum-ом.
 /// - `0x10..0x1C` (12 байт) — одна checksum-fix-запись: start=0x00, end=0x10, diff.
 /// - `0x1C..0x30` — паддинг, не важно.
-const DEF: &str = r##"
+const DEF: &str = r#"
 <roms>
   <rom>
     <romid><xmlid>TEST</xmlid></romid>
@@ -19,7 +19,7 @@ const DEF: &str = r##"
            sizey="12" storageaddress="0x10"/>
   </rom>
 </roms>
-"##;
+"#;
 
 fn build_rom_with_correct_checksum() -> RomImage {
     // Карта: 8 × uint16 BE = 16 байт. Заполняем последовательно 1..8.
@@ -124,7 +124,7 @@ fn disabled_slots_are_left_alone() {
 #[test]
 fn multiple_entries_in_one_fix_table() {
     // 24 байта = 2 записи в одной checksum-fix таблице.
-    let def = r##"
+    let def = r#"
     <roms>
       <rom>
         <romid><xmlid>T</xmlid></romid>
@@ -134,7 +134,7 @@ fn multiple_entries_in_one_fix_table() {
                sizey="24" storageaddress="0x10"/>
       </rom>
     </roms>
-    "##;
+    "#;
     let doc = parse_str(def).unwrap();
     let resolved = resolve(&doc).unwrap();
 

@@ -27,17 +27,17 @@ use romraider_io::transport::Transport;
 use crate::error::{ProtocolError, ProtocolResult};
 
 /// CAN OBD-II 11-bit request/response IDs (те же что у UDS/OBD-II).
-pub const CAN_REQUEST_ID:  u32 = 0x7E0;
+pub const CAN_REQUEST_ID: u32 = 0x7E0;
 pub const CAN_RESPONSE_ID: u32 = 0x7E8;
 
 /// Subaru proprietary SSM commands (CAN-вариант). Внимание: некоторые
 /// отличаются от K-Line SSM2! Особенно `ECU_INIT`: K-Line = `0xBF`, CAN = `0xAA`.
-pub const CMD_ECU_INIT_CAN:        u8 = 0xAA;
-pub const RESP_ECU_INIT_CAN:       u8 = 0xEA;
-pub const CMD_READ_ADDRESSES:      u8 = 0xA8;
-pub const RESP_READ_ADDRESSES:     u8 = 0xE8;
-pub const CMD_READ_BLOCK:          u8 = 0xA0;
-pub const RESP_READ_BLOCK:         u8 = 0xE0;
+pub const CMD_ECU_INIT_CAN: u8 = 0xAA;
+pub const RESP_ECU_INIT_CAN: u8 = 0xEA;
+pub const CMD_READ_ADDRESSES: u8 = 0xA8;
+pub const RESP_READ_ADDRESSES: u8 = 0xE8;
+pub const CMD_READ_BLOCK: u8 = 0xA0;
+pub const RESP_READ_BLOCK: u8 = 0xE0;
 
 /// SSM-CAN ECU init: `AA` → `EA <ECU info bytes>`. **Должен** быть выполнен
 /// **первым** в SSM-сессии — без него ECU режет любые другие `0xAx`-команды
@@ -46,7 +46,7 @@ pub const RESP_READ_BLOCK:         u8 = 0xE0;
 /// Возвращает `ECU info` bytes (без `EA` echo) — это ROM/SSM ID + capability
 /// bitmap, как у K-Line ECU init (`BF`/`FF`).
 pub fn ecu_init_can<T: Transport + ?Sized>(
-    tr:      &mut T,
+    tr: &mut T,
     timeout: Duration,
 ) -> ProtocolResult<Vec<u8>> {
     let mut tx = Vec::with_capacity(4 + 1);
@@ -58,7 +58,7 @@ pub fn ecu_init_can<T: Transport + ?Sized>(
     let n = tr.read_frame(&mut buf, timeout)?;
     if n < 4 + 1 {
         return Err(ProtocolError::ResponseTooShort {
-            got:      n,
+            got: n,
             expected: 4 + 1,
         });
     }
@@ -85,12 +85,15 @@ pub fn ecu_init_can<T: Transport + ?Sized>(
 /// Pad byte = `0x00` (SSM2 default; единственный вариант что мы видели
 /// в captured Wireshark-traffic для нашего ECU).
 pub fn read_addresses_can<T: Transport + ?Sized>(
-    tr:        &mut T,
+    tr: &mut T,
     addresses: &[u32],
-    timeout:   Duration,
+    timeout: Duration,
 ) -> ProtocolResult<Vec<u8>> {
     if addresses.is_empty() {
-        return Err(ProtocolError::ResponseTooShort { got: 0, expected: 1 });
+        return Err(ProtocolError::ResponseTooShort {
+            got: 0,
+            expected: 1,
+        });
     }
     let mut tx = Vec::with_capacity(4 + 2 + 3 * addresses.len());
     tx.extend_from_slice(&CAN_REQUEST_ID.to_be_bytes());
@@ -98,8 +101,8 @@ pub fn read_addresses_can<T: Transport + ?Sized>(
     tx.push(0x00); // pad
     for addr in addresses {
         tx.push(((*addr >> 16) & 0xFF) as u8);
-        tx.push(((*addr >> 8)  & 0xFF) as u8);
-        tx.push((*addr         & 0xFF) as u8);
+        tx.push(((*addr >> 8) & 0xFF) as u8);
+        tx.push((*addr & 0xFF) as u8);
     }
     tracing::debug!(tx = ?tx, "SSM-CAN ReadAddresses TX");
     tr.write_all(&tx, timeout)?;
@@ -110,7 +113,7 @@ pub fn read_addresses_can<T: Transport + ?Sized>(
     if n < 4 + 1 + addresses.len() {
         eprintln!("  RX raw ({} bytes): {:02X?}", n, &buf[..n]);
         return Err(ProtocolError::ResponseTooShort {
-            got:      n,
+            got: n,
             expected: 4 + 1 + addresses.len(),
         });
     }
@@ -134,19 +137,19 @@ pub fn read_addresses_can<T: Transport + ?Sized>(
     }
     if uds.len() < 1 + addresses.len() {
         return Err(ProtocolError::ResponseTooShort {
-            got:      uds.len(),
+            got: uds.len(),
             expected: 1 + addresses.len(),
         });
     }
-    Ok(uds[1..1 + addresses.len()].to_vec())
+    Ok(uds[1..=addresses.len()].to_vec())
 }
 
 /// Helper: прочитать **N последовательных байтов** начиная с 24-bit адреса.
 /// Удобно для float-параметров (N=4) или uint16 (N=2).
 pub fn read_block_can<T: Transport + ?Sized>(
-    tr:      &mut T,
-    base:    u32,
-    len:     usize,
+    tr: &mut T,
+    base: u32,
+    len: usize,
     timeout: Duration,
 ) -> ProtocolResult<Vec<u8>> {
     let addresses: Vec<u32> = (0..len as u32).map(|i| base + i).collect();
@@ -160,18 +163,18 @@ pub fn read_block_can<T: Transport + ?Sized>(
 #[derive(Debug, Clone, Copy)]
 pub struct SsmParam {
     /// RomRaider ID (`"P8"`, `"P23"`).
-    pub id:      &'static str,
+    pub id: &'static str,
     /// Человеческое имя.
-    pub name:    &'static str,
+    pub name: &'static str,
     /// 24-bit базовый адрес. Многобайтные параметры (uint16) занимают
     /// `address`..`address+bytes-1`.
     pub address: u32,
     /// Сколько байт (обычно 1, для uint16 = 2).
-    pub bytes:   usize,
+    pub bytes: usize,
     /// Scaling: raw → real value.
-    pub scale:   fn(&[u8]) -> f64,
+    pub scale: fn(&[u8]) -> f64,
     /// Единицы измерения.
-    pub units:   &'static str,
+    pub units: &'static str,
 }
 
 /// Тщательно подобранный набор стандартных SSM-параметров (subset из 156).
@@ -180,90 +183,160 @@ pub struct SsmParam {
 pub const SUBARU_SSM_PARAMS: &[SsmParam] = &[
     // ── Engine state ─────────────────────────────────────────────────
     SsmParam {
-        id: "P2", name: "Coolant Temp", address: 0x000008, bytes: 1,
-        scale: |b| b[0] as f64 - 40.0, units: "C",
+        id: "P2",
+        name: "Coolant Temp",
+        address: 0x000008,
+        bytes: 1,
+        scale: |b| b[0] as f64 - 40.0,
+        units: "C",
     },
     SsmParam {
-        id: "P8", name: "RPM", address: 0x00000E, bytes: 2,
+        id: "P8",
+        name: "RPM",
+        address: 0x00000E,
+        bytes: 2,
         scale: |b| (b[0] as u16 as f64 * 256.0 + b[1] as f64) / 4.0,
         units: "RPM",
     },
     SsmParam {
-        id: "P11", name: "IAT", address: 0x000012, bytes: 1,
-        scale: |b| b[0] as f64 - 40.0, units: "C",
+        id: "P11",
+        name: "IAT",
+        address: 0x000012,
+        bytes: 1,
+        scale: |b| b[0] as f64 - 40.0,
+        units: "C",
     },
     SsmParam {
-        id: "P12", name: "MAF", address: 0x000013, bytes: 2,
+        id: "P12",
+        name: "MAF",
+        address: 0x000013,
+        bytes: 2,
         scale: |b| (b[0] as u16 as f64 * 256.0 + b[1] as f64) / 100.0,
         units: "g/s",
     },
     SsmParam {
-        id: "P9", name: "Vehicle Speed", address: 0x000010, bytes: 1,
-        scale: |b| b[0] as f64, units: "km/h",
+        id: "P9",
+        name: "Vehicle Speed",
+        address: 0x000010,
+        bytes: 1,
+        scale: |b| b[0] as f64,
+        units: "km/h",
     },
     SsmParam {
-        id: "P13", name: "TPS", address: 0x000015, bytes: 1,
-        scale: |b| b[0] as f64 * 100.0 / 255.0, units: "%",
+        id: "P13",
+        name: "TPS",
+        address: 0x000015,
+        bytes: 1,
+        scale: |b| b[0] as f64 * 100.0 / 255.0,
+        units: "%",
     },
     SsmParam {
-        id: "P17", name: "Battery Voltage", address: 0x00001C, bytes: 1,
-        scale: |b| b[0] as f64 * 8.0 / 100.0, units: "V",
+        id: "P17",
+        name: "Battery Voltage",
+        address: 0x00001C,
+        bytes: 1,
+        scale: |b| b[0] as f64 * 8.0 / 100.0,
+        units: "V",
     },
     SsmParam {
-        id: "P1", name: "Engine Load Relative", address: 0x000007, bytes: 1,
-        scale: |b| b[0] as f64 * 100.0 / 255.0, units: "%",
+        id: "P1",
+        name: "Engine Load Relative",
+        address: 0x000007,
+        bytes: 1,
+        scale: |b| b[0] as f64 * 100.0 / 255.0,
+        units: "%",
     },
     // ── Boost ────────────────────────────────────────────────────────
     SsmParam {
-        id: "P7", name: "MAP", address: 0x00000D, bytes: 1,
+        id: "P7",
+        name: "MAP",
+        address: 0x00000D,
+        bytes: 1,
         // Subaru: `x*37/255` PSI абсолютного (вычитай ~14.5 для буста).
-        scale: |b| b[0] as f64 * 37.0 / 255.0, units: "PSI abs",
+        scale: |b| b[0] as f64 * 37.0 / 255.0,
+        units: "PSI abs",
     },
     SsmParam {
-        id: "P36", name: "Primary WGDC", address: 0x000030, bytes: 1,
-        scale: |b| b[0] as f64 * 100.0 / 255.0, units: "%",
+        id: "P36",
+        name: "Primary WGDC",
+        address: 0x000030,
+        bytes: 1,
+        scale: |b| b[0] as f64 * 100.0 / 255.0,
+        units: "%",
     },
     // ── Fuel mix (lean/rich) — для перегрева критично ────────────────
     SsmParam {
-        id: "P3", name: "A/F Correction #1 (STFT)", address: 0x000009, bytes: 1,
-        scale: |b| (b[0] as f64 - 128.0) * 100.0 / 128.0, units: "%",
+        id: "P3",
+        name: "A/F Correction #1 (STFT)",
+        address: 0x000009,
+        bytes: 1,
+        scale: |b| (b[0] as f64 - 128.0) * 100.0 / 128.0,
+        units: "%",
     },
     SsmParam {
-        id: "P4", name: "A/F Learning #1 (LTFT)", address: 0x00000A, bytes: 1,
-        scale: |b| (b[0] as f64 - 128.0) * 100.0 / 128.0, units: "%",
+        id: "P4",
+        name: "A/F Learning #1 (LTFT)",
+        address: 0x00000A,
+        bytes: 1,
+        scale: |b| (b[0] as f64 - 128.0) * 100.0 / 128.0,
+        units: "%",
     },
     SsmParam {
-        id: "P58", name: "A/F Sensor #1", address: 0x000046, bytes: 1,
+        id: "P58",
+        name: "A/F Sensor #1",
+        address: 0x000046,
+        bytes: 1,
         // Subaru wide-range frontend: `x * 14.7 / 128` = AFR.
         // (Stoich = 14.7 при raw=128.)
-        scale: |b| b[0] as f64 * 14.7 / 128.0, units: "AFR",
+        scale: |b| b[0] as f64 * 14.7 / 128.0,
+        units: "AFR",
     },
     // ── Knock — главное для провала и перегрева ──────────────────────
     SsmParam {
-        id: "P10", name: "Ignition Total Timing", address: 0x000011, bytes: 1,
-        scale: |b| (b[0] as f64 - 128.0) / 2.0, units: "deg BTDC",
+        id: "P10",
+        name: "Ignition Total Timing",
+        address: 0x000011,
+        bytes: 1,
+        scale: |b| (b[0] as f64 - 128.0) / 2.0,
+        units: "deg BTDC",
     },
     SsmParam {
-        id: "P23", name: "Knock Correction", address: 0x000022, bytes: 1,
+        id: "P23",
+        name: "Knock Correction",
+        address: 0x000022,
+        bytes: 1,
         // (x-128)/2 — отрицательные значения = retard, главный indicator
         // того, что ECU тянет тайминг.
-        scale: |b| (b[0] as f64 - 128.0) / 2.0, units: "deg",
+        scale: |b| (b[0] as f64 - 128.0) / 2.0,
+        units: "deg",
     },
     SsmParam {
-        id: "P91", name: "Fine Learning Knock Correction", address: 0x000199, bytes: 1,
-        scale: |b| (b[0] as f64 - 128.0) / 2.0, units: "deg",
+        id: "P91",
+        name: "Fine Learning Knock Correction",
+        address: 0x000199,
+        bytes: 1,
+        scale: |b| (b[0] as f64 - 128.0) / 2.0,
+        units: "deg",
     },
     // ── AVCS (intake cam timing — для проверки ремня ГРМ / AVCS-актуатора) ──
     // Idle прогретый: оба около 0° (commanded). Если actual постоянно
     // off-set-нут на N° от commanded — либо ремень смещён, либо AVCS
     // плохо реагирует (масло/oil-control valve), либо CMP-датчик врёт.
     SsmParam {
-        id: "P48", name: "Intake AVCS Right", address: 0x00003C, bytes: 1,
-        scale: |b| b[0] as f64 - 50.0, units: "deg",
+        id: "P48",
+        name: "Intake AVCS Right",
+        address: 0x00003C,
+        bytes: 1,
+        scale: |b| b[0] as f64 - 50.0,
+        units: "deg",
     },
     SsmParam {
-        id: "P49", name: "Intake AVCS Left", address: 0x00003D, bytes: 1,
-        scale: |b| b[0] as f64 - 50.0, units: "deg",
+        id: "P49",
+        name: "Intake AVCS Left",
+        address: 0x00003D,
+        bytes: 1,
+        scale: |b| b[0] as f64 - 50.0,
+        units: "deg",
     },
     // ── Fuel delivery diagnostics ────────────────────────────────────
     // Injector Pulse Width = «как долго инжектор открыт за один цикл».
@@ -274,7 +347,10 @@ pub const SUBARU_SSM_PARAMS: &[SsmParam] = &[
     // под WOT inj duty доходит до >100% «фантомных» — реальный fuel
     // pressure при этом падает, AFR leans → knock retard → cycle.
     SsmParam {
-        id: "P21", name: "Fuel Injector #1 PW", address: 0x000020, bytes: 1,
+        id: "P21",
+        name: "Fuel Injector #1 PW",
+        address: 0x000020,
+        bytes: 1,
         scale: |b| b[0] as f64 * 256.0 / 1000.0,
         units: "ms",
     },
@@ -283,9 +359,9 @@ pub const SUBARU_SSM_PARAMS: &[SsmParam] = &[
 /// Найти SSM-параметр по ID (`"P8"`) или имени (case-insensitive).
 #[must_use]
 pub fn find_ssm_param(key: &str) -> Option<&'static SsmParam> {
-    SUBARU_SSM_PARAMS.iter().find(|p| {
-        p.id.eq_ignore_ascii_case(key) || p.name.eq_ignore_ascii_case(key)
-    })
+    SUBARU_SSM_PARAMS
+        .iter()
+        .find(|p| p.id.eq_ignore_ascii_case(key) || p.name.eq_ignore_ascii_case(key))
 }
 
 /// Производный (computed) параметр — не читается с ECU напрямую, а
@@ -315,19 +391,19 @@ pub const SUBARU_DERIVED_PARAMS: &[SsmDerivedParam] = &[
     // (типичная failure после 10+ лет). На stable steady-state должно
     // быть ≤1° (оба банка в одной позиции).
     SsmDerivedParam {
-        name:       "AVCS Diff (R-L)",
+        name: "AVCS Diff (R-L)",
         depends_on: &["Intake AVCS Right", "Intake AVCS Left"],
-        compute:    |v| v[0] - v[1],
-        units:      "deg",
+        compute: |v| v[0] - v[1],
+        units: "deg",
     },
     // Boost gauge = MAP абсолютное минус atmospheric (~14.5 psi на
     // уровне моря). Полезно для quick «сколько буста сейчас» без
     // вычитания в голове.
     SsmDerivedParam {
-        name:       "Boost (gauge)",
+        name: "Boost (gauge)",
         depends_on: &["MAP"],
-        compute:    |v| v[0] - 14.5,
-        units:      "PSI",
+        compute: |v| v[0] - 14.5,
+        units: "PSI",
     },
     // Injector Duty Cycle = PW_ms × RPM / 1200 (4-cyl 4-stroke math:
     // каждый инжектор открывается 1 раз на 2 оборота = 60000/RPM/2 ms
@@ -340,12 +416,16 @@ pub const SUBARU_DERIVED_PARAMS: &[SsmDerivedParam] = &[
     // - **DANGER**: WOT >100% — phantom math says inj. always open,
     //   реально pump не успевает, AFR leans, knock starts
     SsmDerivedParam {
-        name:       "Injector Duty Cycle",
+        name: "Injector Duty Cycle",
         depends_on: &["Fuel Injector #1 PW", "RPM"],
-        compute:    |v| {
-            if v[1] <= 0.0 { 0.0 } else { v[0] * v[1] / 1200.0 }
+        compute: |v| {
+            if v[1] <= 0.0 {
+                0.0
+            } else {
+                v[0] * v[1] / 1200.0
+            }
         },
-        units:      "%",
+        units: "%",
     },
 ];
 
@@ -361,12 +441,12 @@ pub fn find_derived_param(name: &str) -> Option<&'static SsmDerivedParam> {
 /// Возвращает по `Vec<u8>` на параметр (длиной `param.bytes` каждый),
 /// в том же порядке что и `params`.
 pub fn read_ssm_params_can<T: Transport + ?Sized>(
-    tr:      &mut T,
-    params:  &[&'static SsmParam],
+    tr: &mut T,
+    params: &[&'static SsmParam],
     timeout: Duration,
 ) -> ProtocolResult<Vec<Vec<u8>>> {
     let mut all_addrs: Vec<u32> = Vec::new();
-    let mut starts:    Vec<usize> = Vec::with_capacity(params.len());
+    let mut starts: Vec<usize> = Vec::with_capacity(params.len());
     for p in params {
         starts.push(all_addrs.len());
         for i in 0..p.bytes {

@@ -29,8 +29,7 @@ impl DatalogWriter {
         let ts = sample
             .timestamp
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_millis());
         write!(self.out, "{ts}")?;
         for v in &sample.values {
             write!(self.out, ",{}", v.value)?;

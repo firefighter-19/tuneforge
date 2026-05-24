@@ -80,12 +80,14 @@ fn checksum(bytes: &[u8]) -> u8 {
 /// Собрать KWP2000-запрос: `80 <target> <source> <length> <sid> [data..] <chksm>`.
 ///
 /// Использует стандартные адреса `ECU_ADDR`=0x10 (target) и `TOOL_ADDR`=0xF0 (source).
+#[must_use]
 pub fn build_request(sid: u8, data: &[u8]) -> Vec<u8> {
     build_request_to(ECU_ADDR, TOOL_ADDR, sid, data)
 }
 
 /// Тот же [`build_request`], но с настраиваемыми target/source — нужно для
 /// общения с не-engine-модулями (TCU, ABS и т.п.) и для тестов.
+#[must_use]
 pub fn build_request_to(target: u8, source: u8, sid: u8, data: &[u8]) -> Vec<u8> {
     // length = SID(1) + data.len()
     let length = 1 + data.len();
@@ -208,6 +210,7 @@ pub fn request_response(
 }
 
 /// Текстовое описание NRC-кода для error-message.
+#[must_use]
 pub const fn nrc_meaning(nrc: u8) -> &'static str {
     match nrc {
         nrc::GENERAL_REJECT => "general reject",

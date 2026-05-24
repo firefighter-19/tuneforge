@@ -2,7 +2,7 @@
 
 use std::time::{Duration, Instant};
 
-use rusb::{Device, DeviceHandle, GlobalContext, UsbContext};
+use rusb::{Device, DeviceHandle, GlobalContext};
 use tracing::{debug, warn};
 
 use crate::error::{IoError, IoResult};
@@ -90,7 +90,7 @@ impl TactrixTransport {
     /// На macOS дополнительной настройки не требуется (libusb через IOKit).
     /// На Linux может понадобиться udev-rule для прав, либо запуск из-под root.
     pub fn open(cfg: &TactrixConfig) -> IoResult<Self> {
-        let mut handle =
+        let handle =
             rusb::open_device_with_vid_pid(cfg.vid, cfg.pid).ok_or(IoError::TactrixNotFound {
                 vid: cfg.vid,
                 pid: cfg.pid,

@@ -1,6 +1,6 @@
 use crate::error::{CoreError, CoreResult};
 
-pub fn slice<'a>(buf: &'a [u8], offset: usize, len: usize) -> CoreResult<&'a [u8]> {
+pub fn slice(buf: &[u8], offset: usize, len: usize) -> CoreResult<&[u8]> {
     let end = offset.checked_add(len).ok_or(CoreError::OutOfBounds {
         offset,
         len,
@@ -13,7 +13,7 @@ pub fn slice<'a>(buf: &'a [u8], offset: usize, len: usize) -> CoreResult<&'a [u8
     })
 }
 
-pub fn slice_mut<'a>(buf: &'a mut [u8], offset: usize, len: usize) -> CoreResult<&'a mut [u8]> {
+pub fn slice_mut(buf: &mut [u8], offset: usize, len: usize) -> CoreResult<&mut [u8]> {
     let buf_len = buf.len();
     let end = offset.checked_add(len).ok_or(CoreError::OutOfBounds {
         offset,

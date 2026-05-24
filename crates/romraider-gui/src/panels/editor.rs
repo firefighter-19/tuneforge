@@ -167,6 +167,9 @@ impl RomState {
     }
 
     /// Изменён ли байтовый диапазон `[addr, addr+len)` относительно baseline.
+    /// Используется для diff-highlight в Compare-ROM-режиме; clippy предлагает
+    /// удалить как «dead», но это часть public API и могут понадобиться плагины.
+    #[allow(dead_code)]
     fn is_range_modified(&self, addr: u32, len: usize) -> bool {
         let a = addr as usize;
         let Some(end) = a.checked_add(len) else {
@@ -494,8 +497,7 @@ impl EditorPanel {
             ui.label(
                 self.def
                     .as_ref()
-                    .map(|d| d.path.display().to_string())
-                    .unwrap_or_else(|| "(not loaded)".into()),
+                    .map_or_else(|| "(not loaded)".into(), |d| d.path.display().to_string()),
             );
             if let Some(s) = summary {
                 ui.separator();
@@ -644,20 +646,19 @@ impl EditorPanel {
                     mode,
                     heatmap,
                 ),
-                Some(TableKind::TwoD)
-                | Some(TableKind::OneD)
-                | Some(TableKind::XAxis)
-                | Some(TableKind::YAxis) => render_flat(
-                    ui,
-                    &mut rom_state.rom,
-                    undo_log,
-                    compare_rom,
-                    baseline_bytes,
-                    table,
-                    mode,
-                    heatmap,
-                ),
-                Some(TableKind::StaticXAxis) | Some(TableKind::StaticYAxis) => {
+                Some(TableKind::TwoD | TableKind::OneD | TableKind::XAxis | TableKind::YAxis) => {
+                    render_flat(
+                        ui,
+                        &mut rom_state.rom,
+                        undo_log,
+                        compare_rom,
+                        baseline_bytes,
+                        table,
+                        mode,
+                        heatmap,
+                    );
+                }
+                Some(TableKind::StaticXAxis | TableKind::StaticYAxis) => {
                     render_static_axis(ui, table);
                 }
                 Some(TableKind::Switch) => {
@@ -839,8 +840,12 @@ fn render_3d(
             } else {
                 None
             };
-            let stride = table.storage_type.map(|s| s.byte_size()).unwrap_or(1);
-            let base_addr_raw = table.storage_address.map_or(0, |a| a.raw());
+            let stride = table
+                .storage_type
+                .map_or(1, romraider_defs::StorageType::byte_size);
+            let base_addr_raw = table
+                .storage_address
+                .map_or(0, romraider_core::Address::raw);
             let units = table.scalings.first().and_then(|s| s.units.as_deref());
             let expression = scaling
                 .as_ref()
@@ -939,8 +944,12 @@ fn render_flat(
     } else {
         None
     };
-    let stride = table.storage_type.map(|s| s.byte_size()).unwrap_or(1);
-    let base_addr_raw = table.storage_address.map_or(0, |a| a.raw());
+    let stride = table
+        .storage_type
+        .map_or(1, romraider_defs::StorageType::byte_size);
+    let base_addr_raw = table
+        .storage_address
+        .map_or(0, romraider_core::Address::raw);
     let units = table.scalings.first().and_then(|s| s.units.as_deref());
     let expression = scaling
         .as_ref()
@@ -1002,7 +1011,7 @@ fn is_cell_modified(rom: &RomImage, baseline: Option<&[u8]>, addr: u32, len: usi
         return false;
     }
     rom.read(Address::new(addr), len)
-        .map_or(false, |cur| cur != &orig[a..end])
+        .is_ok_and(|cur| cur != &orig[a..end])
 }
 
 fn cell_bg(
@@ -1369,10 +1378,8 @@ fn render_bitwise_switch(
         }
     });
 
-    if new_value != current {
-        if rom.write(addr, &[new_value]).is_ok() {
-            undo_log.record(addr, vec![current], vec![new_value]);
-        }
+    if new_value != current && rom.write(addr, &[new_value]).is_ok() {
+        undo_log.record(addr, vec![current], vec![new_value]);
     }
 }
 
@@ -1498,7 +1505,7 @@ fn collect_changes(rom_state: &RomState, rom_def: &ResolvedRom) -> ChangesSummar
             }
             // Сырые байтовые значения → f64-ячейки → scaling в real units.
             let cur_raw = decode_one_at(
-                &rom_state.rom.raw(),
+                rom_state.rom.raw(),
                 cell_addr as usize,
                 stride,
                 stype,

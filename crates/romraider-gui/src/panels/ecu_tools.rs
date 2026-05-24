@@ -18,7 +18,6 @@
 //! USB-доступ требует **`sudo`** на macOS — Tactrix через libusb hard-claim.
 //! Если запуск без root → `Error` с prominent инструкцией.
 
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread::JoinHandle;
@@ -55,23 +54,23 @@ impl Preflight {
 /// Маркеры progress для UI (производное от [`DumpProgress`]).
 #[derive(Default, Debug, Clone)]
 struct DumpUiState {
-    obdii_done:        bool,
-    sec_access_done:   bool,
+    obdii_done: bool,
+    sec_access_done: bool,
     kernel_upload_pct: f32,
-    dump_done:         usize,
-    dump_total:        usize,
-    dump_rate_bps:     f64,
-    vin:               Option<String>,
-    cvn:               Option<String>,
-    rom_id_hex:        Option<String>,
-    log_lines:         Vec<String>,
+    dump_done: usize,
+    dump_total: usize,
+    dump_rate_bps: f64,
+    vin: Option<String>,
+    cvn: Option<String>,
+    log_lines: Vec<String>,
 }
 
 impl DumpUiState {
     fn apply(&mut self, ev: &DumpProgress) {
         match ev {
             DumpProgress::PhaseAObdiiWake { .. } => {
-                self.log_lines.push("Phase A: OBD-II Mode 01 PID 00 ok".into());
+                self.log_lines
+                    .push("Phase A: OBD-II Mode 01 PID 00 ok".into());
             }
             DumpProgress::PhaseAVin { vin_raw } => {
                 // Reply: `49 02 <01> <17 ASCII>` — strip 3-байт префикс.
@@ -79,7 +78,13 @@ impl DumpUiState {
                     self.vin = Some(
                         vin_raw[3..20]
                             .iter()
-                            .map(|&b| if (0x20..0x7F).contains(&b) { b as char } else { '.' })
+                            .map(|&b| {
+                                if (0x20..0x7F).contains(&b) {
+                                    b as char
+                                } else {
+                                    '.'
+                                }
+                            })
                             .collect(),
                     );
                 }
@@ -117,7 +122,8 @@ impl DumpUiState {
                 ));
             }
             DumpProgress::PhaseBGranted => {
-                self.log_lines.push("Phase B: SecurityAccess granted ✓".into());
+                self.log_lines
+                    .push("Phase B: SecurityAccess granted ✓".into());
                 self.sec_access_done = true;
             }
             DumpProgress::PhaseBProgSession => {
@@ -133,11 +139,13 @@ impl DumpUiState {
                     .push(format!("Phase C: kernel uploaded in {elapsed_secs:.2}s"));
             }
             DumpProgress::PhaseDBanner { banner } => {
-                self.log_lines.push(format!("Phase D: kernel banner = {banner:?}"));
+                self.log_lines
+                    .push(format!("Phase D: kernel banner = {banner:?}"));
             }
             DumpProgress::PhaseEReadStart { total, .. } => {
                 self.dump_total = *total;
-                self.log_lines.push(format!("Phase E: reading {total} bytes…"));
+                self.log_lines
+                    .push(format!("Phase E: reading {total} bytes…"));
             }
             DumpProgress::PhaseEReadProgress {
                 done,
@@ -182,7 +190,7 @@ enum WorkerEvent {
 }
 
 struct Worker {
-    rx:     mpsc::Receiver<WorkerEvent>,
+    rx: mpsc::Receiver<WorkerEvent>,
     handle: Option<JoinHandle<()>>,
     cancel: Arc<AtomicBool>,
 }
@@ -210,7 +218,7 @@ enum ReadRomState {
     Prep,
     Running(DumpUiState),
     Done {
-        bytes:    Vec<u8>,
+        bytes: Vec<u8>,
         ui_state: DumpUiState,
     },
     Error(String),
@@ -222,7 +230,7 @@ enum ViewInfoState {
     Prep,
     Running,
     Done {
-        info:       EcuInfo,
+        info: EcuInfo,
         rom_id_hex: String,
     },
     Error(String),
@@ -262,33 +270,33 @@ enum PendingAction {
 }
 
 pub struct EcuToolsPanel {
-    pub show_read_rom:  bool,
+    pub show_read_rom: bool,
     pub show_view_info: bool,
-    pub show_dtc:       bool,
-    pub show_freeze:    bool,
-    read_rom_state:     ReadRomState,
-    view_info_state:    ViewInfoState,
-    dtc_state:          DtcState,
-    freeze_state:       FreezeState,
-    pending_action:     Option<PendingAction>,
-    worker:             Option<Worker>,
-    preflight:          Option<Preflight>,
+    pub show_dtc: bool,
+    pub show_freeze: bool,
+    read_rom_state: ReadRomState,
+    view_info_state: ViewInfoState,
+    dtc_state: DtcState,
+    freeze_state: FreezeState,
+    pending_action: Option<PendingAction>,
+    worker: Option<Worker>,
+    preflight: Option<Preflight>,
 }
 
 impl Default for EcuToolsPanel {
     fn default() -> Self {
         Self {
-            show_read_rom:   false,
-            show_view_info:  false,
-            show_dtc:        false,
-            show_freeze:     false,
-            read_rom_state:  ReadRomState::Prep,
+            show_read_rom: false,
+            show_view_info: false,
+            show_dtc: false,
+            show_freeze: false,
+            read_rom_state: ReadRomState::Prep,
             view_info_state: ViewInfoState::Prep,
-            dtc_state:       DtcState::Prep,
-            freeze_state:    FreezeState::Prep,
-            pending_action:  None,
-            worker:          None,
-            preflight:       None,
+            dtc_state: DtcState::Prep,
+            freeze_state: FreezeState::Prep,
+            pending_action: None,
+            worker: None,
+            preflight: None,
         }
     }
 }
@@ -339,17 +347,14 @@ impl EcuToolsPanel {
     /// Отрисовать status-strip про Tactrix (+ кнопка Refresh).
     /// Возвращает `true` если устройство обнаружено (Start можно разрешить).
     fn render_preflight_strip(&mut self, ui: &mut egui::Ui) -> bool {
-        let detected = self.preflight.as_ref().map_or(false, Preflight::detected);
+        let detected = self.preflight.as_ref().is_some_and(Preflight::detected);
         ui.horizontal(|ui| match &self.preflight {
             None => {
                 ui.spinner();
                 ui.label("Checking USB…");
             }
             Some(Preflight::NotFound) => {
-                ui.colored_label(
-                    egui::Color32::RED,
-                    "❌ Tactrix не обнаружен на USB",
-                );
+                ui.colored_label(egui::Color32::RED, "❌ Tactrix не обнаружен на USB");
                 ui.label("→ воткни кабель и нажми 🔄");
             }
             Some(Preflight::Found(d)) => {
@@ -478,52 +483,56 @@ impl EcuToolsPanel {
                 let detected = self.render_preflight_strip(ui);
                 ui.separator();
                 match &self.view_info_state {
-                ViewInfoState::Prep => {
-                    ui.label("Опросить ECU через OBD-II (Mode 01/09).");
-                    ui.label("• Tactrix Openport 2.0 подключён к OBD-II");
-                    ui.label("• Зажигание ON (мотор не обязательно)");
-                    ui.add_space(8.0);
-                    let btn = ui.add_enabled(detected, egui::Button::new("▶ Start"));
-                    if btn.clicked() {
-                        self.start_view_info_worker();
+                    ViewInfoState::Prep => {
+                        ui.label("Опросить ECU через OBD-II (Mode 01/09).");
+                        ui.label("• Tactrix Openport 2.0 подключён к OBD-II");
+                        ui.label("• Зажигание ON (мотор не обязательно)");
+                        ui.add_space(8.0);
+                        let btn = ui.add_enabled(detected, egui::Button::new("▶ Start"));
+                        if btn.clicked() {
+                            self.start_view_info_worker();
+                        }
                     }
-                }
-                ViewInfoState::Running => {
-                    ui.spinner();
-                    ui.label("Опрос ECU…");
-                }
-                ViewInfoState::Done { info, rom_id_hex } => {
-                    ui.heading("ECU Info");
-                    ui.separator();
-                    ui.label(format!(
-                        "VIN:    {}",
-                        info.vin.as_deref().unwrap_or("(не отдан)")
-                    ));
-                    ui.label(format!(
-                        "CVN:    {}",
-                        info.cvn
-                            .map(|c| format!("{:02X} {:02X} {:02X} {:02X}", c[0], c[1], c[2], c[3]))
-                            .unwrap_or_else(|| "(не отдан)".into())
-                    ));
-                    ui.label(format!("ROM ID: {rom_id_hex}"));
-                    ui.label(format!(
-                        "Supported PIDs (01-20): 0x{:08X} ({} PIDs)",
-                        info.mode01_supported_bitmap,
-                        info.mode01_supported_bitmap.count_ones()
-                    ));
-                }
-                ViewInfoState::Error(msg) => {
-                    ui.colored_label(egui::Color32::RED, "Ошибка:");
-                    ui.label(msg);
-                    if msg.contains("Access") || msg.contains("denied") || msg.contains("permission") {
-                        ui.add_space(6.0);
-                        ui.colored_label(
-                            egui::Color32::YELLOW,
-                            "Tactrix требует root для USB-bulk. Запусти GUI с sudo:",
-                        );
-                        ui.code("sudo cargo run -p romraider-gui --features ecu-tools");
+                    ViewInfoState::Running => {
+                        ui.spinner();
+                        ui.label("Опрос ECU…");
                     }
-                }
+                    ViewInfoState::Done { info, rom_id_hex } => {
+                        ui.heading("ECU Info");
+                        ui.separator();
+                        ui.label(format!(
+                            "VIN:    {}",
+                            info.vin.as_deref().unwrap_or("(не отдан)")
+                        ));
+                        ui.label(format!(
+                            "CVN:    {}",
+                            info.cvn.map_or_else(
+                                || "(не отдан)".into(),
+                                |c| format!("{:02X} {:02X} {:02X} {:02X}", c[0], c[1], c[2], c[3])
+                            )
+                        ));
+                        ui.label(format!("ROM ID: {rom_id_hex}"));
+                        ui.label(format!(
+                            "Supported PIDs (01-20): 0x{:08X} ({} PIDs)",
+                            info.mode01_supported_bitmap,
+                            info.mode01_supported_bitmap.count_ones()
+                        ));
+                    }
+                    ViewInfoState::Error(msg) => {
+                        ui.colored_label(egui::Color32::RED, "Ошибка:");
+                        ui.label(msg);
+                        if msg.contains("Access")
+                            || msg.contains("denied")
+                            || msg.contains("permission")
+                        {
+                            ui.add_space(6.0);
+                            ui.colored_label(
+                                egui::Color32::YELLOW,
+                                "Tactrix требует root для USB-bulk. Запусти GUI с sudo:",
+                            );
+                            ui.code("sudo cargo run -p romraider-gui --features ecu-tools");
+                        }
+                    }
                 }
             });
         self.show_view_info = open;
@@ -597,7 +606,11 @@ impl EcuToolsPanel {
         // Phase indicators
         ui.label(format!(
             "Phase A (OBD-II identify): {}",
-            if state.obdii_done { "✓" } else { "running…" }
+            if state.obdii_done {
+                "✓"
+            } else {
+                "running…"
+            }
         ));
         ui.label(format!(
             "Phase B (SecurityAccess): {}",
@@ -770,9 +783,8 @@ impl EcuToolsPanel {
                         ui.add_space(6.0);
                         render_dtc_section(ui, "Permanent", &report.permanent, true);
                         ui.add_space(10.0);
-                        let total = report.stored.len()
-                            + report.pending.len()
-                            + report.permanent.len();
+                        let total =
+                            report.stored.len() + report.pending.len() + report.permanent.len();
                         if total == 0 {
                             ui.colored_label(
                                 egui::Color32::from_rgb(0, 180, 0),
@@ -1136,7 +1148,7 @@ fn dtc_worker(tx: mpsc::Sender<WorkerEvent>, _cancel: Arc<AtomicBool>) {
 fn freeze_worker(tx: mpsc::Sender<WorkerEvent>, _cancel: Arc<AtomicBool>) {
     // FF-чтение делает Mode 02 запросов ~12-15 → даём 3s timeout/запрос +
     // overall 30s headroom.
-    let timeout = Duration::from_millis(2000);
+    let timeout = Duration::from_secs(2);
     let mut tr = match open_tactrix_can() {
         Ok(t) => t,
         Err(e) => {
@@ -1174,7 +1186,7 @@ fn clear_dtcs_worker(tx: mpsc::Sender<WorkerEvent>, _cancel: Arc<AtomicBool>) {
 }
 
 fn view_info_worker(tx: mpsc::Sender<WorkerEvent>, _cancel: Arc<AtomicBool>) {
-    let timeout = Duration::from_millis(3000);
+    let timeout = Duration::from_secs(3);
     let mut tr = match open_tactrix_can() {
         Ok(t) => t,
         Err(e) => {
@@ -1194,7 +1206,7 @@ fn view_info_worker(tx: mpsc::Sender<WorkerEvent>, _cancel: Arc<AtomicBool>) {
 }
 
 fn read_rom_worker(tx: mpsc::Sender<WorkerEvent>, _cancel: Arc<AtomicBool>) {
-    let timeout = Duration::from_millis(5000);
+    let timeout = Duration::from_secs(5);
     let mut tr = match open_tactrix_can() {
         Ok(t) => t,
         Err(e) => {

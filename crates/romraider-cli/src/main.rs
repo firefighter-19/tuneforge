@@ -563,7 +563,12 @@ fn main() -> Result<()> {
             len,
             timeout_ms,
             extended_session,
-        } => peek_ram_can_cmd(&addr, len, Duration::from_millis(timeout_ms), extended_session),
+        } => peek_ram_can_cmd(
+            &addr,
+            len,
+            Duration::from_millis(timeout_ms),
+            extended_session,
+        ),
         #[cfg(feature = "kernel-upload")]
         Cmd::DtcCan { timeout_ms } => dtc_can_cmd(Duration::from_millis(timeout_ms)),
         #[cfg(feature = "kernel-upload")]
@@ -1066,22 +1071,25 @@ fn logger_cmd(
 }
 
 fn logger_ssm_can_cmd(
-    param_keys:    &[String],
-    all:           bool,
-    out_path:      Option<&PathBuf>,
-    interval_ms:   u64,
+    param_keys: &[String],
+    all: bool,
+    out_path: Option<&PathBuf>,
+    interval_ms: u64,
     duration_secs: u64,
-    timeout:       Duration,
-    list:          bool,
+    timeout: Duration,
+    list: bool,
 ) -> Result<()> {
     use romraider_protocol::subaru::{
-        self, find_derived_param, find_ssm_param, read_ssm_params_can, SsmDerivedParam,
-        SsmParam, SUBARU_DERIVED_PARAMS, SUBARU_SSM_PARAMS,
+        self, find_derived_param, find_ssm_param, read_ssm_params_can, SsmDerivedParam, SsmParam,
+        SUBARU_DERIVED_PARAMS, SUBARU_SSM_PARAMS,
     };
 
     if list {
         println!("Available Subaru SSM3 RAW parameters (via CAN Mode 0xA8):");
-        println!("  {:<5}  {:<32}  {:<10}  {:<5}  {}", "ID", "Name", "Addr", "Bytes", "Units");
+        println!(
+            "  {:<5}  {:<32}  {:<10}  {:<5}  Units",
+            "ID", "Name", "Addr", "Bytes"
+        );
         for p in SUBARU_SSM_PARAMS {
             println!(
                 "  {:<5}  {:<32}  0x{:06X}    {:<5}  {}",
@@ -1089,11 +1097,12 @@ fn logger_ssm_can_cmd(
             );
         }
         println!("\nDERIVED parameters (computed from raw values, no extra ECU read):");
-        println!("  {:<5}  {:<32}  {:<10}  {}", "", "Name", "Depends-on", "Units");
+        println!("  {:<5}  {:<32}  {:<10}  Units", "", "Name", "Depends-on");
         for d in SUBARU_DERIVED_PARAMS {
             println!(
                 "  {:<5}  {:<32}  {:<40}  {}",
-                "—", d.name,
+                "—",
+                d.name,
                 d.depends_on.join(" + "),
                 d.units,
             );
@@ -1130,10 +1139,7 @@ fn logger_ssm_can_cmd(
             if !chosen_raw.iter().any(|p| p.name == *dep_name) {
                 if let Some(p) = find_ssm_param(dep_name) {
                     chosen_raw.push(p);
-                    eprintln!(
-                        "  (auto-added '{dep_name}' as dependency of '{}')",
-                        d.name
-                    );
+                    eprintln!("  (auto-added '{dep_name}' as dependency of '{}')", d.name);
                 }
             }
         }
@@ -1145,23 +1151,30 @@ fn logger_ssm_can_cmd(
         chosen_derived.len()
     );
     for p in &chosen_raw {
-        eprintln!("  + {:<4} {:<32} addr=0x{:06X} ({}B, {})",
-            p.id, p.name, p.address, p.bytes, p.units);
+        eprintln!(
+            "  + {:<4} {:<32} addr=0x{:06X} ({}B, {})",
+            p.id, p.name, p.address, p.bytes, p.units
+        );
     }
     for d in &chosen_derived {
-        eprintln!("  Δ      {:<32} = f({}) ({})",
-            d.name, d.depends_on.join(", "), d.units);
+        eprintln!(
+            "  Δ      {:<32} = f({}) ({})",
+            d.name,
+            d.depends_on.join(", "),
+            d.units
+        );
     }
 
     // 2. Открыть CAN + SSM-CAN ECU init.
     let mut tr = open_tactrix_can()?;
     eprintln!("SSM-CAN ECU init (cmd 0xAA)…");
-    let info = subaru::ecu_init_can(&mut tr, timeout)
-        .context("SSM-CAN ECU init failed")?;
+    let info = subaru::ecu_init_can(&mut tr, timeout).context("SSM-CAN ECU init failed")?;
     if info.len() >= 8 {
         eprintln!(
             "  ECU online: SSM-ID {:02X} {:02X} {:02X}, ROM-ID {} ({} cap-bytes)",
-            info[0], info[1], info[2],
+            info[0],
+            info[1],
+            info[2],
             bytes::hex_dump(&info[3..8]),
             info.len() - 8,
         );
@@ -1224,7 +1237,9 @@ fn logger_ssm_can_cmd(
                 datalog.write_sample(&sample)?;
                 count += 1;
                 if count == 1 || count % 10 == 0 {
-                    let preview = sample.values.iter()
+                    let preview = sample
+                        .values
+                        .iter()
                         .map(|v| format!("{}={:.2}", v.parameter_id, v.value))
                         .collect::<Vec<_>>()
                         .join("  ");
@@ -1234,7 +1249,9 @@ fn logger_ssm_can_cmd(
             Err(e) => eprintln!("  poll error: {e}"),
         }
         if let Some(d) = deadline {
-            if std::time::Instant::now() >= d { break; }
+            if std::time::Instant::now() >= d {
+                break;
+            }
         }
         if let Some(rem) = interval.checked_sub(started.elapsed()) {
             std::thread::sleep(rem);
@@ -1270,7 +1287,7 @@ fn freeze_frame_can_cmd(timeout: Duration) -> Result<()> {
     if ff.values.is_empty() {
         eprintln!("  (ECU не вернул ни одного параметра — Mode 0x02 ограничен на этой firmware)");
     } else {
-        eprintln!("  {:<30} {:>12}  {}", "Parameter", "Value", "Units");
+        eprintln!("  {:<30} {:>12}  Units", "Parameter", "Value");
         eprintln!("  {}", "-".repeat(56));
         for v in &ff.values {
             eprintln!("  {:<30} {:>12.2}  {}", v.name, v.value, v.units);
@@ -1309,14 +1326,15 @@ fn dtc_can_cmd(timeout: Duration) -> Result<()> {
 }
 
 fn peek_ram_can_cmd(
-    addr_str:         &str,
-    len:              u8,
-    timeout:          Duration,
+    addr_str: &str,
+    len: u8,
+    timeout: Duration,
     extended_session: bool,
 ) -> Result<()> {
     use romraider_protocol::subaru;
 
-    let raw_addr = parse_int_or_hex_u32(addr_str).with_context(|| format!("--addr `{addr_str}`"))?;
+    let raw_addr =
+        parse_int_or_hex_u32(addr_str).with_context(|| format!("--addr `{addr_str}`"))?;
     // SSM-over-CAN использует 24-bit адреса (`0xFF7664`). ECU сам подставляет
     // верхний `0xFF` для RAM-доступа. Принимаем и 32-bit форму (`0xFFFF7664`) —
     // просто маскируем младшие 24 бита.
@@ -1390,9 +1408,7 @@ fn peek_ram_can_cmd(
             } else if data.len() == 1 {
                 println!("As uint8:       {}", data[0]);
             }
-            println!(
-                "\n✅ Mode 0xA8 SSM-over-CAN работает — можно строить ecuparams-логгер."
-            );
+            println!("\n✅ Mode 0xA8 SSM-over-CAN работает — можно строить ecuparams-логгер.");
         }
         Err(e) => {
             eprintln!("\n❌ Mode 0xA8 SSM-over-CAN failed: {e}");
@@ -1420,8 +1436,8 @@ fn logger_can_cmd(
     probe: bool,
 ) -> Result<()> {
     use romraider_protocol::obd2::{
-        discover_supported_pids, find_pid, read_pid, read_pids_batched, ObdiiPid,
-        MAX_BATCH_PIDS, STANDARD_PIDS,
+        discover_supported_pids, find_pid, read_pid, read_pids_batched, ObdiiPid, MAX_BATCH_PIDS,
+        STANDARD_PIDS,
     };
 
     // --list режим: распечатать таблицу. Если есть --probe — заодно спросить ECU.
@@ -1438,15 +1454,9 @@ fn logger_can_cmd(
         };
         println!("Available OBD-II Mode 01 PIDs:");
         if supported.is_some() {
-            println!(
-                "  ✓/✗  {:<22}  {:<5}  {:<5}  {}",
-                "Name", "PID", "Bytes", "Units"
-            );
+            println!("  ✓/✗  {:<22}  {:<5}  {:<5}  Units", "Name", "PID", "Bytes");
         } else {
-            println!(
-                "       {:<22}  {:<5}  {:<5}  {}",
-                "Name", "PID", "Bytes", "Units"
-            );
+            println!("       {:<22}  {:<5}  {:<5}  Units", "Name", "PID", "Bytes");
         }
         for p in STANDARD_PIDS {
             let mark = match &supported {
@@ -1574,10 +1584,7 @@ fn logger_can_cmd(
                                 });
                             }
                             _ => {
-                                eprintln!(
-                                    "  poll error: {} missing in batched response",
-                                    p.name
-                                );
+                                eprintln!("  poll error: {} missing in batched response", p.name);
                                 all_ok = false;
                                 break 'outer;
                             }
@@ -1680,19 +1687,21 @@ fn tactrix_info_cmd() -> Result<()> {
             "    Manufacturer:    {}",
             d.manufacturer.as_deref().unwrap_or("(?)")
         );
-        println!("    Product:         {}", d.product.as_deref().unwrap_or("(?)"));
-        println!("    Serial:          {}", d.serial.as_deref().unwrap_or("(?)"));
+        println!(
+            "    Product:         {}",
+            d.product.as_deref().unwrap_or("(?)")
+        );
+        println!(
+            "    Serial:          {}",
+            d.serial.as_deref().unwrap_or("(?)")
+        );
         if d.manufacturer.is_none() && d.product.is_none() && d.serial.is_none() {
             println!();
             println!(
                 "    ⚠️  Не смогли прочитать string-descriptors — устройство видно но open() не прошёл."
             );
-            println!(
-                "       На macOS возможно нужен `sudo` для bulk-операций (claim-interface),"
-            );
-            println!(
-                "       или ещё не появился dialog «Allow accessory». Re-plug если нужно."
-            );
+            println!("       На macOS возможно нужен `sudo` для bulk-операций (claim-interface),");
+            println!("       или ещё не появился dialog «Allow accessory». Re-plug если нужно.");
         }
     }
     Ok(())
@@ -1871,7 +1880,9 @@ fn print_resolved_table(t: &ResolvedTable, indent: usize, sample_byte: Option<f6
 }
 
 fn debug_kind(k: romraider_defs::TableKind) -> &'static str {
-    use romraider_defs::TableKind::*;
+    use romraider_defs::TableKind::{
+        BitwiseSwitch, OneD, StaticXAxis, StaticYAxis, Switch, ThreeD, TwoD, XAxis, YAxis,
+    };
     match k {
         OneD => "1D",
         TwoD => "2D",
@@ -1886,7 +1897,9 @@ fn debug_kind(k: romraider_defs::TableKind) -> &'static str {
 }
 
 fn debug_storage(s: romraider_defs::StorageType) -> &'static str {
-    use romraider_defs::StorageType::*;
+    use romraider_defs::StorageType::{
+        Char, Float, Hex, Int16, Int32, Int8, UInt16, UInt32, UInt8,
+    };
     match s {
         UInt8 => "uint8",
         Int8 => "int8",
@@ -1926,7 +1939,7 @@ fn read_table_cmd(
 }
 
 fn print_read_table(rom: &RomImage, table: &ResolvedTable) -> Result<()> {
-    let storage = table.storage_type.map(|s| debug_storage(s)).unwrap_or("?");
+    let storage = table.storage_type.map_or("?", debug_storage);
     let endian = match table.endian {
         Some(romraider_core::Endian::Big) => "big",
         Some(romraider_core::Endian::Little) => "little",
@@ -1952,7 +1965,11 @@ fn print_read_table(rom: &RomImage, table: &ResolvedTable) -> Result<()> {
         .first()
         .and_then(|s| s.units.as_deref())
         .unwrap_or("");
-    let scaling = table.scalings.first().map(|s| s.compile()).transpose()?;
+    let scaling = table
+        .scalings
+        .first()
+        .map(romraider_defs::ResolvedScaling::compile)
+        .transpose()?;
 
     println!();
     println!("Cells ({}):", raw.len());

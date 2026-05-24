@@ -23,7 +23,9 @@ use romraider_defs::{parse_log_file, LoggerDocument, ResolvedLogEcu};
 use romraider_io::serial::{SerialConfig, SerialTransport};
 use romraider_io::Transport;
 use romraider_logger::datalog::DatalogWriter;
-use romraider_logger::{LoggerSession, Sample, SampleValue, SessionConfig};
+#[cfg(feature = "ecu-tools")]
+use romraider_logger::SampleValue;
+use romraider_logger::{LoggerSession, Sample, SessionConfig};
 use tracing::warn;
 
 #[cfg(feature = "ecu-tools")]
@@ -91,6 +93,7 @@ pub struct LoggerPanel {
 /// Sensible defaults для SSM3-CAN mode — diagnostic kit покрывающий
 /// engine health + AVCS (для проверки ремня/OCV) + fuel delivery
 /// (для weak-pump / saturated-injectors диагностики).
+#[cfg(feature = "ecu-tools")]
 const SSM_CAN_DEFAULTS: &[&str] = &[
     "RPM",
     "Coolant Temp",
@@ -137,6 +140,7 @@ impl Default for LoggerPanel {
         #[cfg(not(feature = "ecu-tools"))]
         let default_mode = LoggerMode::KLineSSM;
 
+        #[cfg_attr(not(feature = "ecu-tools"), allow(unused_mut))]
         let mut selected = BTreeSet::new();
         #[cfg(feature = "ecu-tools")]
         if default_mode == LoggerMode::SsmCan {
@@ -182,8 +186,7 @@ fn format_ts_now() -> String {
     // (без external chrono — std достаточно для grep-friendly имени файла).
     let epoch = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0) as i64;
+        .map_or(0, |d| d.as_secs()) as i64;
     // simple Y-M-D conversion (Howard Hinnant date algo, public domain)
     let z = epoch / 86400 + 719468;
     let era = if z >= 0 { z } else { z - 146096 } / 146097;
@@ -354,12 +357,8 @@ impl LoggerPanel {
                         );
                         for d in SUBARU_DERIVED_PARAMS {
                             let mut on = self.selected_params.contains(d.name);
-                            let label = format!(
-                                "{} ({}) = f({})",
-                                d.name,
-                                d.units,
-                                d.depends_on.join("+")
-                            );
+                            let label =
+                                format!("{} ({}) = f({})", d.name, d.units, d.depends_on.join("+"));
                             if ui.checkbox(&mut on, label).changed() {
                                 if on {
                                     self.selected_params.insert(d.name.into());
@@ -464,7 +463,7 @@ impl LoggerPanel {
                 self.history.clear();
             }
             if running {
-                let elapsed = self.started_at.map(|t| t.elapsed().as_secs()).unwrap_or(0);
+                let elapsed = self.started_at.map_or(0, |t| t.elapsed().as_secs());
                 let total: usize = self.history.values().map(VecDeque::len).sum();
                 ui.colored_label(
                     egui::Color32::LIGHT_GREEN,
@@ -562,7 +561,7 @@ impl LoggerPanel {
                 let mut i = 0;
                 for name in &self.selected_params {
                     let last = self.history.get(name).and_then(|h| h.back().copied());
-                    let units = self.units_lookup.get(name).map(String::as_str).unwrap_or("");
+                    let units = self.units_lookup.get(name).map_or("", String::as_str);
                     ui.monospace(format!("{name}:"));
                     let value_text = match last {
                         Some([_, v]) => {
@@ -611,13 +610,8 @@ impl LoggerPanel {
                     if history.is_empty() {
                         continue;
                     }
-                    let points: PlotPoints =
-                        history.iter().copied().collect::<Vec<_>>().into();
-                    let units = self
-                        .units_lookup
-                        .get(name)
-                        .map(String::as_str)
-                        .unwrap_or("");
+                    let points: PlotPoints = history.iter().copied().collect::<Vec<_>>().into();
+                    let units = self.units_lookup.get(name).map_or("", String::as_str);
                     let title = if units.is_empty() {
                         name.clone()
                     } else {
@@ -865,7 +859,7 @@ impl LoggerPanel {
                     stop_clone,
                     interval,
                     timeout,
-                )
+                );
             })
             .expect("spawn ssm-can worker");
 
@@ -895,10 +889,7 @@ impl LoggerPanel {
         let Some(t0) = t0 else { return };
         let _ = t0; // for completeness
         while let Ok(sample) = worker.sample_rx.try_recv() {
-            let elapsed = self
-                .started_at
-                .map(|t| t.elapsed().as_secs_f64())
-                .unwrap_or(0.0);
+            let elapsed = self.started_at.map_or(0.0, |t| t.elapsed().as_secs_f64());
             for sv in &sample.values {
                 let entry = self.history.entry(sv.parameter_id.clone()).or_default();
                 entry.push_back([elapsed, sv.value]);

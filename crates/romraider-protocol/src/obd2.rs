@@ -67,7 +67,7 @@ pub const STANDARD_PIDS: &[ObdiiPid] = &[
         name: "Fuel System Status", // PID 0x03: byte A=bank1 state, byte B=bank2 state (enum).
         pid: 0x03,
         bytes: 2,
-        scale: |b| (b[0] as f64 * 256.0 + b[1] as f64),
+        scale: |b| b[0] as f64 * 256.0 + b[1] as f64,
         units: "raw",
     },
     // ── Fuel system & basic engine ───────────────────────────────────────
@@ -548,7 +548,7 @@ pub const MAX_BATCH_PIDS: usize = 6;
 /// Один результат batched-чтения: `pid → raw data bytes`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BatchedPidValue {
-    pub pid:  u8,
+    pub pid: u8,
     pub data: Vec<u8>,
 }
 
@@ -569,9 +569,9 @@ pub struct BatchedPidValue {
 /// ответ ECU будет multi-frame ISO-TP. Tactrix-transport уже это handles
 /// transparently — мы получаем уже-склеенный UDS payload.
 pub fn read_pids_batched<T: Transport + ?Sized>(
-    tr:       &mut T,
+    tr: &mut T,
     pid_defs: &[&ObdiiPid],
-    timeout:  Duration,
+    timeout: Duration,
 ) -> ProtocolResult<Vec<BatchedPidValue>> {
     if pid_defs.is_empty() {
         return Err(ProtocolError::ResponseTooShort {
@@ -581,7 +581,7 @@ pub fn read_pids_batched<T: Transport + ?Sized>(
     }
     if pid_defs.len() > MAX_BATCH_PIDS {
         return Err(ProtocolError::ResponseTooShort {
-            got:      pid_defs.len(),
+            got: pid_defs.len(),
             expected: MAX_BATCH_PIDS,
         });
     }
@@ -599,7 +599,7 @@ pub fn read_pids_batched<T: Transport + ?Sized>(
     let n = tr.read_frame(&mut buf, timeout)?;
     if n < 4 + 2 {
         return Err(ProtocolError::ResponseTooShort {
-            got:      n,
+            got: n,
             expected: 4 + 2,
         });
     }
@@ -615,12 +615,12 @@ pub fn read_pids_batched<T: Transport + ?Sized>(
 /// `41 <pid_a> <data_a> <pid_b> <data_b> ...`. Извлечён как pure-функция
 /// из [`read_pids_batched`] чтобы unit-тестить без hardware.
 pub fn parse_mode_01_batched(
-    uds:      &[u8],
+    uds: &[u8],
     pid_defs: &[&ObdiiPid],
 ) -> ProtocolResult<Vec<BatchedPidValue>> {
     if uds.len() < 2 {
         return Err(ProtocolError::ResponseTooShort {
-            got:      uds.len(),
+            got: uds.len(),
             expected: 2,
         });
     }
@@ -657,7 +657,7 @@ pub fn parse_mode_01_batched(
         // Извлечь bytes data-байт.
         if i + def.bytes > uds.len() {
             return Err(ProtocolError::ResponseTooShort {
-                got:      uds.len() - i,
+                got: uds.len() - i,
                 expected: def.bytes,
             });
         }

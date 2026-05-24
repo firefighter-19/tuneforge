@@ -177,6 +177,10 @@ impl<'a> Resolver<'a> {
         Ok(chain)
     }
 
+    // `self` используется только для рекурсивного вызова (`self.resolve_table_base`);
+    // clippy::self_only_used_in_recursion предлагает сделать associated function, но
+    // method-form читается лучше при цепочке inheritance-resolve вызовов.
+    #[allow(clippy::self_only_used_in_recursion)]
     fn resolve_table_base(
         &self,
         table: &TableDef,
@@ -320,20 +324,23 @@ impl<'a> Resolver<'a> {
 
 fn merge_table(parent: &TableDef, child: &TableDef) -> TableDef {
     TableDef {
-        kind: or_clone(&child.kind, &parent.kind),
-        name: or_clone(&child.name, &parent.name),
+        kind: or_clone(child.kind.as_ref(), parent.kind.as_ref()),
+        name: or_clone(child.name.as_ref(), parent.name.as_ref()),
         // base сохраняем из родителя, чтобы цепочка table→base→… не
         // обрывалась при ROM-наследовании (e.g. BASE.TBB.base="TBA", а
         // CHILD.TBB вообще без base — мы хотим всё ещё «увидеть» TBA).
-        base: or_clone(&child.base, &parent.base),
-        category: or_clone(&child.category, &parent.category),
-        storage_type: or_clone(&child.storage_type, &parent.storage_type),
-        endian: or_clone(&child.endian, &parent.endian),
-        storage_address: or_clone(&child.storage_address, &parent.storage_address),
-        size_x: or_clone(&child.size_x, &parent.size_x),
-        size_y: or_clone(&child.size_y, &parent.size_y),
-        user_level: or_clone(&child.user_level, &parent.user_level),
-        log_param: or_clone(&child.log_param, &parent.log_param),
+        base: or_clone(child.base.as_ref(), parent.base.as_ref()),
+        category: or_clone(child.category.as_ref(), parent.category.as_ref()),
+        storage_type: or_clone(child.storage_type.as_ref(), parent.storage_type.as_ref()),
+        endian: or_clone(child.endian.as_ref(), parent.endian.as_ref()),
+        storage_address: or_clone(
+            child.storage_address.as_ref(),
+            parent.storage_address.as_ref(),
+        ),
+        size_x: or_clone(child.size_x.as_ref(), parent.size_x.as_ref()),
+        size_y: or_clone(child.size_y.as_ref(), parent.size_y.as_ref()),
+        user_level: or_clone(child.user_level.as_ref(), parent.user_level.as_ref()),
+        log_param: or_clone(child.log_param.as_ref(), parent.log_param.as_ref()),
         scalings: if child.scalings.is_empty() {
             parent.scalings.clone()
         } else {
@@ -355,7 +362,7 @@ fn merge_table(parent: &TableDef, child: &TableDef) -> TableDef {
         } else {
             child.bits.clone()
         },
-        description: or_clone(&child.description, &parent.description),
+        description: or_clone(child.description.as_ref(), parent.description.as_ref()),
     }
 }
 
@@ -377,8 +384,8 @@ fn merge_nested(parent: &[TableDef], child: &[TableDef]) -> Vec<TableDef> {
     result
 }
 
-fn or_clone<T: Clone>(a: &Option<T>, b: &Option<T>) -> Option<T> {
-    a.clone().or_else(|| b.clone())
+fn or_clone<T: Clone>(a: Option<&T>, b: Option<&T>) -> Option<T> {
+    a.cloned().or_else(|| b.cloned())
 }
 
 fn parse_opt_u32(s: Option<&str>, field: &'static str) -> DefResult<Option<u32>> {
@@ -453,7 +460,7 @@ mod tests {
 
     #[test]
     fn rom_base_chain_detects_cycle() {
-        let xml = r##"
+        let xml = r#"
             <roms>
               <rom base="B">
                 <romid><xmlid>A</xmlid></romid>
@@ -462,7 +469,7 @@ mod tests {
                 <romid><xmlid>B</xmlid></romid>
               </rom>
             </roms>
-        "##;
+        "#;
         let doc = parse_str(xml).unwrap();
         let err = resolve(&doc).unwrap_err();
         assert!(matches!(err, DefError::Cycle { kind: "rom", .. }));
@@ -470,7 +477,7 @@ mod tests {
 
     #[test]
     fn missing_scaling_base_is_reported() {
-        let xml = r##"
+        let xml = r#"
             <roms>
               <rom>
                 <romid><xmlid>R</xmlid></romid>
@@ -479,7 +486,7 @@ mod tests {
                 </table>
               </rom>
             </roms>
-        "##;
+        "#;
         let doc = parse_str(xml).unwrap();
         let err = resolve(&doc).unwrap_err();
         assert!(matches!(
@@ -493,7 +500,7 @@ mod tests {
 
     #[test]
     fn table_base_inherits_within_same_rom() {
-        let xml = r##"
+        let xml = r#"
             <roms>
               <rom>
                 <romid><xmlid>R</xmlid></romid>
@@ -503,7 +510,7 @@ mod tests {
                 <table base="A" name="B" storageaddress="0x20" />
               </rom>
             </roms>
-        "##;
+        "#;
         let doc = parse_str(xml).unwrap();
         let res = resolve(&doc).unwrap();
         let rom = &res[0];
@@ -516,7 +523,7 @@ mod tests {
 
     #[test]
     fn inline_scaling_overrides_base_fields() {
-        let xml = r##"
+        let xml = r#"
             <roms>
               <scalingbase name="raw" units="default" expression="x" to_byte="x" />
               <rom>
@@ -526,7 +533,7 @@ mod tests {
                 </table>
               </rom>
             </roms>
-        "##;
+        "#;
         let doc = parse_str(xml).unwrap();
         let res = resolve(&doc).unwrap();
         let s = &res[0].tables[0].scalings[0];
@@ -536,7 +543,7 @@ mod tests {
 
     #[test]
     fn switch_table_resolves_states_and_bits() {
-        let xml = r##"
+        let xml = r#"
             <roms>
               <rom>
                 <romid><xmlid>BASE</xmlid></romid>
@@ -554,7 +561,7 @@ mod tests {
                 <table name="Iridium" storageaddress="0xDEAD"/>
               </rom>
             </roms>
-        "##;
+        "#;
         let doc = parse_str(xml).unwrap();
         let res = resolve(&doc).unwrap();
         let child = res.iter().find(|r| r.xml_id == "CHILD").unwrap();
@@ -573,7 +580,7 @@ mod tests {
 
     #[test]
     fn nested_axes_merged_by_kind_when_unnamed_in_child() {
-        let xml = r##"
+        let xml = r#"
             <roms>
               <rom>
                 <romid><xmlid>BASE</xmlid></romid>
@@ -590,7 +597,7 @@ mod tests {
                 </table>
               </rom>
             </roms>
-        "##;
+        "#;
         let doc = parse_str(xml).unwrap();
         let res = resolve(&doc).unwrap();
         let child = res.iter().find(|r| r.xml_id == "CHILD").unwrap();

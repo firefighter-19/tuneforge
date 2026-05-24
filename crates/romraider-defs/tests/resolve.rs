@@ -114,8 +114,7 @@ fn scalingbase_a2wc522s_target_boost_b_inherits_via_two_levels() {
     assert!(tb_b
         .description
         .as_deref()
-        .map(|d| d.contains("Inherited"))
-        .unwrap_or(false));
+        .is_some_and(|d| d.contains("Inherited")));
     assert_eq!(tb_b.scalings.len(), 2);
     assert_eq!(tb_b.axes.len(), 2);
 }

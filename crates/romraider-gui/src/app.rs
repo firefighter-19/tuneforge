@@ -1,8 +1,8 @@
 use eframe::CreationContext;
 
-use crate::panels::{editor::EditorPanel, logger::LoggerPanel};
 #[cfg(feature = "ecu-tools")]
 use crate::panels::ecu_tools::EcuToolsPanel;
+use crate::panels::{editor::EditorPanel, logger::LoggerPanel};
 
 pub struct App {
     active: Tab,
@@ -125,15 +125,13 @@ impl eframe::App for App {
                     // намеренно (нет donor-ECU = нет safe тестов).
                     let write_btn = egui::Button::new("Write ROM to ECU…");
                     let erase_btn = egui::Button::new("Erase ROM");
-                    ui.add_enabled(false, write_btn)
-                        .on_disabled_hover_text(
-                            "Flash-write не реализован: для безопасной разработки\n\
+                    ui.add_enabled(false, write_btn).on_disabled_hover_text(
+                        "Flash-write не реализован: для безопасной разработки\n\
                              требуется donor-ECU. Текущая стратегия проекта — read-only.",
-                        );
-                    ui.add_enabled(false, erase_btn)
-                        .on_disabled_hover_text(
-                            "Erase не реализован — см. tooltip выше про donor-ECU.",
-                        );
+                    );
+                    ui.add_enabled(false, erase_btn).on_disabled_hover_text(
+                        "Erase не реализован — см. tooltip выше про donor-ECU.",
+                    );
                 });
                 ui.separator();
                 ui.selectable_value(&mut self.active, Tab::Editor, "Editor");

@@ -411,7 +411,7 @@ mod tests {
 
     #[test]
     fn parses_concrete_ecu_reference_with_include() {
-        let xml = r##"
+        let xml = r#"
             <ecus>
               <logprotocols>
                 <logprotocol type="SSM">
@@ -419,7 +419,7 @@ mod tests {
                 </logprotocol>
               </logprotocols>
             </ecus>
-        "##;
+        "#;
         let doc = parse_log_str(xml).unwrap();
         let ecu = &doc.logprotocols.logprotocols[0].ecus[0];
         assert_eq!(ecu.id, "1644500305");
@@ -432,7 +432,7 @@ mod tests {
 
     #[test]
     fn lookups_find_convert_factor_and_ecu() {
-        let xml = r##"
+        let xml = r#"
             <ecus>
               <ecu_tools>
                 <convert_factor type="temp" name="C→F" metric="F" expr="([value]*9/5)+32"/>
@@ -444,7 +444,7 @@ mod tests {
                 </logprotocol>
               </logprotocols>
             </ecus>
-        "##;
+        "#;
         let doc = parse_log_str(xml).unwrap();
         assert!(doc.find_convert_factor("temp").is_some());
         assert!(doc.find_convert_factor("press").is_none());

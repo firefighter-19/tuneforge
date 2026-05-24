@@ -183,12 +183,12 @@ fn table_cell_count(table: &ResolvedTable) -> Option<usize> {
     let sy = table.size_y.map(|v| v as usize);
     match table.kind {
         Some(TableKind::ThreeD) => Some(sx? * sy?),
-        Some(TableKind::TwoD) | Some(TableKind::XAxis) | Some(TableKind::YAxis) => sx.or(sy),
+        Some(TableKind::TwoD | TableKind::XAxis | TableKind::YAxis) => sx.or(sy),
         Some(TableKind::OneD) => Some(1),
-        Some(TableKind::StaticXAxis) | Some(TableKind::StaticYAxis) => Some(0),
+        Some(TableKind::StaticXAxis | TableKind::StaticYAxis) => Some(0),
         // Switch/BitwiseSwitch не читаются через read_table — у них своя
         // схема, см. `editor::render_switch`/`render_bitwise_switch`.
-        Some(TableKind::Switch) | Some(TableKind::BitwiseSwitch) => None,
+        Some(TableKind::Switch | TableKind::BitwiseSwitch) => None,
         None => sx.or(sy),
     }
 }

@@ -65,6 +65,7 @@ impl LoggerSession {
         self.subscriptions.push(param);
     }
 
+    #[must_use]
     pub fn subscriptions(&self) -> &[CompiledLogParameter] {
         &self.subscriptions
     }

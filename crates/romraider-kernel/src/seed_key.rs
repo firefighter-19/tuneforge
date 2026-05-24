@@ -97,7 +97,7 @@ fn feistel_round(state: u32, round_key: u16) -> u32 {
 /// Финальный swap половин (одинаковый и в genkey, и в encrypt).
 #[inline(always)]
 fn final_word_swap(state: u32) -> u32 {
-    (state >> 16) | (state << 16)
+    state.rotate_left(16)
 }
 
 /// **Generate key from seed** для Subaru SID 0x27 securityAccess — **K-Line** version.
@@ -107,6 +107,7 @@ fn final_word_swap(state: u32) -> u32 {
 /// per-ECU keytable (см. [`subaru_genkey_can`]).
 ///
 /// Seed и key — big-endian 4-байтные значения (как они приходят/уходят по wire).
+#[must_use]
 pub fn subaru_genkey(seed: [u8; 4]) -> [u8; 4] {
     let mut state = u32::from_be_bytes(seed);
     // Раунды идут в обратном порядке: ki = 15, 14, …, 0.
@@ -122,6 +123,7 @@ pub fn subaru_genkey(seed: [u8; 4]) -> [u8; 4] {
 /// Использует [`KEYTABLE_GENKEY_CAN`] — round-keys извлечены из ROM этого ECU.
 /// James-portman's exact Feistel structure (с byte-mirroring в `transformnibbles`,
 /// в отличие от nisprog K-Line который этого не делает) — реализация ниже.
+#[must_use]
 pub fn subaru_genkey_can(seed: [u8; 4]) -> [u8; 4] {
     // james-portman algorithm:
     //   high = (seed[0]<<8) | seed[1]
@@ -148,7 +150,7 @@ pub fn subaru_genkey_can(seed: [u8; 4]) -> [u8; 4] {
             key16 = key16.wrapping_add(u16::from(INDEX_TRANSFORMATION[nibble_idx]) << (n * 4));
         }
         // ROR 3 (16-bit)
-        key16 = (key16 >> 3) | (key16 << 13);
+        key16 = key16.rotate_right(3);
 
         let new_low = key16 ^ high;
         high = low;
@@ -163,6 +165,7 @@ pub fn subaru_genkey_can(seed: [u8; 4]) -> [u8; 4] {
 /// Vorbei: payload-байты буфера группируются по 4 байта (big-endian word),
 /// каждый word проходит через `subaru_encrypt_word`, результат заменяет
 /// исходные 4 байта. Длина payload должна быть кратна 4 (padding-ом).
+#[must_use]
 pub fn subaru_encrypt_word(plain: [u8; 4]) -> [u8; 4] {
     let mut state = u32::from_be_bytes(plain);
     // В отличие от genkey, тут раунды идут вперёд: ki = 0, 1, 2, 3.
@@ -176,6 +179,7 @@ pub fn subaru_encrypt_word(plain: [u8; 4]) -> [u8; 4] {
 /// **Encrypt full buffer** для SID 0x36 payload: разбить на u32-words и
 /// зашифровать каждый отдельно. Длина `plain` должна быть кратна 4.
 /// Возвращает новый Vec того же размера; padding pad-ит вызывающая сторона.
+#[must_use]
 pub fn subaru_encrypt_buffer(plain: &[u8]) -> Vec<u8> {
     assert!(
         plain.len() % 4 == 0,

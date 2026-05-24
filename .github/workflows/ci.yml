@@ -69,13 +69,13 @@ jobs:
           cargo run -p romraider-cli --quiet -- --help > /dev/null
           cargo run -p romraider-cli --quiet --features kernel-upload -- --help > /dev/null
 
-  # Отдельный job для clippy + fmt — изолирован чтобы не блокировать
-  # основной build/test pipeline пока кодовая база чистится.
-  # `continue-on-error: true` пока — переключим в required когда warnings == 0.
+  # Lint gate — required. Кодовая база вычищена под `-D warnings` с
+  # workspace-уровневой allow-list для pedantic-нюансов нерелевантных
+  # к нашему embedded/byte-manipulation domain (см. workspace.lints в
+  # корневом Cargo.toml).
   lint:
-    name: Clippy & fmt (advisory)
+    name: Clippy & fmt
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -91,10 +91,16 @@ jobs:
       - name: Install libusb
         run: sudo apt-get update && sudo apt-get install -y libusb-1.0-0-dev pkg-config
 
-      # Без `-D warnings` пока — кодовая база имеет накопившиеся
-      # «unused import» и т.п. Включим как required gate когда почистим.
-      - name: Clippy (advisory)
-        run: cargo clippy --workspace --all-targets
+      # Проверяем обе feature-конфигурации (default + full) — kernel-upload
+      # и ecu-tools имеют свой unique-код который иначе пройдёт мимо linter-а.
+      - name: Clippy (default features)
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: rustfmt check (advisory)
+      - name: Clippy (full features)
+        run: |
+          cargo clippy --workspace --all-targets \
+            --features romraider-cli/kernel-upload,romraider-gui/ecu-tools \
+            -- -D warnings
+
+      - name: rustfmt check
         run: cargo fmt --all --check
