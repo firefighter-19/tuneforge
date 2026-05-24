@@ -29,6 +29,16 @@ enum Cmd {
     /// Перечислить доступные последовательные порты.
     Ports,
 
+    /// **Pre-flight check для Tactrix Openport 2.0** — enumerate USB шину,
+    /// показать все найденные устройства с VID `0x0403` PID `0xCC4D`. Не
+    /// требует root (passive list-only). Удобно для проверки «подключён
+    /// ли кабель» перед `ssm-init` / `dump-rom-can` / `logger-can`. Если
+    /// показывает «not found» — Tactrix не воткнут или USB-кабель
+    /// глючит (попробуй другой port). Если показывает девайс **но**
+    /// `manufacturer/product = None` — sudo нужен для дальнейших
+    /// операций (macOS «allow accessory» prompt мог не показаться).
+    TactrixInfo,
+
     /// Открыть канал, отправить SSM ECU-Init и распечатать ответ.
     ///
     /// По умолчанию использует SerialTransport (требует `--port`). С флагом
@@ -451,6 +461,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
         Cmd::Ports => list_ports(),
+        Cmd::TactrixInfo => tactrix_info_cmd(),
         Cmd::SsmInit {
             port,
             baud,
@@ -1560,6 +1571,51 @@ fn logger_can_cmd(
     }
     datalog.flush()?;
     eprintln!("Done. {count} samples written to {}", out_path.display());
+    Ok(())
+}
+
+fn tactrix_info_cmd() -> Result<()> {
+    use romraider_io::tactrix::{find_tactrix, TACTRIX_OP2_PID, TACTRIX_VID};
+    eprintln!(
+        "Scanning USB bus for Tactrix Openport (VID=0x{:04X} PID=0x{:04X})…",
+        TACTRIX_VID, TACTRIX_OP2_PID,
+    );
+    let devices = find_tactrix().context("USB enumeration failed")?;
+    if devices.is_empty() {
+        eprintln!("❌ Not found. Check:");
+        eprintln!("  • USB-cable plugged on both ends (Mac + Tactrix)");
+        eprintln!("  • LED on Tactrix is on (если совсем тёмный — power issue)");
+        eprintln!("  • Try different USB port (preferably not through hub)");
+        anyhow::bail!("no Tactrix devices found");
+    }
+    println!("✅ Found {} Tactrix device(s):", devices.len());
+    for (i, d) in devices.iter().enumerate() {
+        println!(
+            "\n[{}] bus={:03} addr={:03}  VID=0x{:04X}  PID=0x{:04X}",
+            i, d.bus_number, d.address, d.vid, d.pid
+        );
+        println!("    USB version:     {}", d.usb_version);
+        println!("    Device version:  {}", d.device_version);
+        println!("    Configurations:  {}", d.num_interfaces);
+        println!(
+            "    Manufacturer:    {}",
+            d.manufacturer.as_deref().unwrap_or("(?)")
+        );
+        println!("    Product:         {}", d.product.as_deref().unwrap_or("(?)"));
+        println!("    Serial:          {}", d.serial.as_deref().unwrap_or("(?)"));
+        if d.manufacturer.is_none() && d.product.is_none() && d.serial.is_none() {
+            println!();
+            println!(
+                "    ⚠️  Не смогли прочитать string-descriptors — устройство видно но open() не прошёл."
+            );
+            println!(
+                "       На macOS возможно нужен `sudo` для bulk-операций (claim-interface),"
+            );
+            println!(
+                "       или ещё не появился dialog «Allow accessory». Re-plug если нужно."
+            );
+        }
+    }
     Ok(())
 }
 

@@ -253,6 +253,18 @@ pub const SUBARU_SSM_PARAMS: &[SsmParam] = &[
         id: "P91", name: "Fine Learning Knock Correction", address: 0x000199, bytes: 1,
         scale: |b| (b[0] as f64 - 128.0) / 2.0, units: "deg",
     },
+    // ── AVCS (intake cam timing — для проверки ремня ГРМ / AVCS-актуатора) ──
+    // Idle прогретый: оба около 0° (commanded). Если actual постоянно
+    // off-set-нут на N° от commanded — либо ремень смещён, либо AVCS
+    // плохо реагирует (масло/oil-control valve), либо CMP-датчик врёт.
+    SsmParam {
+        id: "P48", name: "Intake AVCS Right", address: 0x00003C, bytes: 1,
+        scale: |b| b[0] as f64 - 50.0, units: "deg",
+    },
+    SsmParam {
+        id: "P49", name: "Intake AVCS Left", address: 0x00003D, bytes: 1,
+        scale: |b| b[0] as f64 - 50.0, units: "deg",
+    },
 ];
 
 /// Найти SSM-параметр по ID (`"P8"`) или имени (case-insensitive).

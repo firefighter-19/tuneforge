@@ -24,9 +24,31 @@ use std::sync::{mpsc, Arc};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+use romraider_io::tactrix::{find_tactrix, TactrixDeviceInfo};
 use romraider_kernel::orchestrator::{
     dump_rom_via_can, peek_ecu_info, DumpProgress, EcuInfo,
 };
+
+/// Pre-flight check для Tactrix: enumerate USB через `find_tactrix()`
+/// (без sudo, list-only). Кешируется при открытии модала, refresh-ится
+/// по кнопке `🔄 Refresh`. Disable-ит Start если устройство не видно.
+#[derive(Debug, Clone)]
+enum Preflight {
+    NotFound,
+    /// Найден и удалось прочитать string-descriptors → готов к работе.
+    Found(TactrixDeviceInfo),
+    /// Найден но string-descriptors не прочитались — обычно signal что
+    /// open() уже не пускает = вероятно нужен sudo для следующего шага.
+    FoundButLocked(TactrixDeviceInfo),
+    UsbError(String),
+}
+
+impl Preflight {
+    /// `true` если устройство видно (Start-button можно разрешить).
+    fn detected(&self) -> bool {
+        matches!(self, Preflight::Found(_) | Preflight::FoundButLocked(_))
+    }
+}
 
 /// Маркеры progress для UI (производное от [`DumpProgress`]).
 #[derive(Default, Debug, Clone)]
@@ -204,6 +226,7 @@ pub struct EcuToolsPanel {
     read_rom_state:     ReadRomState,
     view_info_state:    ViewInfoState,
     worker:             Option<Worker>,
+    preflight:          Option<Preflight>,
 }
 
 impl Default for EcuToolsPanel {
@@ -214,21 +237,87 @@ impl Default for EcuToolsPanel {
             read_rom_state:  ReadRomState::Prep,
             view_info_state: ViewInfoState::Prep,
             worker:          None,
+            preflight:       None,
         }
     }
 }
 
 impl EcuToolsPanel {
-    /// Открыть окно «Read ROM» (reset state).
+    /// Открыть окно «Read ROM» (reset state + preflight scan).
     pub fn open_read_rom(&mut self) {
         self.show_read_rom = true;
         self.read_rom_state = ReadRomState::Prep;
+        self.refresh_preflight();
     }
 
-    /// Открыть окно «View ECU Info» (reset state).
+    /// Открыть окно «View ECU Info» (reset state + preflight scan).
     pub fn open_view_info(&mut self) {
         self.show_view_info = true;
         self.view_info_state = ViewInfoState::Prep;
+        self.refresh_preflight();
+    }
+
+    /// Cканировать USB и обновить статус Tactrix-устройства.
+    fn refresh_preflight(&mut self) {
+        self.preflight = Some(match find_tactrix() {
+            Err(e) => Preflight::UsbError(format!("{e}")),
+            Ok(devs) => match devs.into_iter().next() {
+                None => Preflight::NotFound,
+                Some(d) if d.manufacturer.is_none() && d.product.is_none() => {
+                    Preflight::FoundButLocked(d)
+                }
+                Some(d) => Preflight::Found(d),
+            },
+        });
+    }
+
+    /// Отрисовать status-strip про Tactrix (+ кнопка Refresh).
+    /// Возвращает `true` если устройство обнаружено (Start можно разрешить).
+    fn render_preflight_strip(&mut self, ui: &mut egui::Ui) -> bool {
+        let detected = self.preflight.as_ref().map_or(false, Preflight::detected);
+        ui.horizontal(|ui| match &self.preflight {
+            None => {
+                ui.spinner();
+                ui.label("Checking USB…");
+            }
+            Some(Preflight::NotFound) => {
+                ui.colored_label(
+                    egui::Color32::RED,
+                    "❌ Tactrix не обнаружен на USB",
+                );
+                ui.label("→ воткни кабель и нажми 🔄");
+            }
+            Some(Preflight::Found(d)) => {
+                let serial = d.serial.as_deref().unwrap_or("?");
+                ui.colored_label(
+                    egui::Color32::from_rgb(0, 180, 0),
+                    format!(
+                        "✅ Tactrix bus={:03} addr={:03}  serial={}",
+                        d.bus_number, d.address, serial
+                    ),
+                );
+            }
+            Some(Preflight::FoundButLocked(d)) => {
+                ui.colored_label(
+                    egui::Color32::YELLOW,
+                    format!(
+                        "⚠️  Tactrix bus={:03} addr={:03} найден, но без strings",
+                        d.bus_number, d.address
+                    ),
+                );
+                ui.label("(скорее всего нужен sudo для USB-claim)");
+            }
+            Some(Preflight::UsbError(msg)) => {
+                ui.colored_label(egui::Color32::RED, "❌ USB error:");
+                ui.label(msg);
+            }
+        });
+        ui.horizontal(|ui| {
+            if ui.button("🔄 Refresh").clicked() {
+                self.refresh_preflight();
+            }
+        });
+        detected
     }
 
     /// Главный entry — называется из `App::update`. Рисует оба окна если
@@ -300,13 +389,18 @@ impl EcuToolsPanel {
             .open(&mut open)
             .resizable(false)
             .collapsible(false)
-            .show(ctx, |ui| match &self.view_info_state {
+            .show(ctx, |ui| {
+                // Always render Tactrix preflight strip at top.
+                let detected = self.render_preflight_strip(ui);
+                ui.separator();
+                match &self.view_info_state {
                 ViewInfoState::Prep => {
                     ui.label("Опросить ECU через OBD-II (Mode 01/09).");
                     ui.label("• Tactrix Openport 2.0 подключён к OBD-II");
                     ui.label("• Зажигание ON (мотор не обязательно)");
                     ui.add_space(8.0);
-                    if ui.button("▶ Start").clicked() {
+                    let btn = ui.add_enabled(detected, egui::Button::new("▶ Start"));
+                    if btn.clicked() {
                         self.start_view_info_worker();
                     }
                 }
@@ -345,6 +439,7 @@ impl EcuToolsPanel {
                         );
                         ui.code("sudo cargo run -p romraider-gui --features ecu-tools");
                     }
+                }
                 }
             });
         self.show_view_info = open;
@@ -391,6 +486,8 @@ impl EcuToolsPanel {
     fn render_prep(&mut self, ui: &mut egui::Ui) -> ReadRomState {
         ui.heading("Read ROM via UDS-over-CAN");
         ui.separator();
+        let detected = self.render_preflight_strip(ui);
+        ui.separator();
         ui.label("Перед стартом проверь:");
         ui.label("  1. Tactrix Openport 2.0 подключён к OBD-II");
         ui.label("  2. Зажигание в положении ON (мотор НЕ заводить)");
@@ -401,7 +498,8 @@ impl EcuToolsPanel {
         ui.label("  • ECU перейдёт в programming-mode (двигатель завести нельзя)");
         ui.label("  • После окончания — выключи зажигание, подожди 10с, снова ON");
         ui.add_space(10.0);
-        if ui.button("▶ Start").clicked() {
+        let btn = ui.add_enabled(detected, egui::Button::new("▶ Start"));
+        if btn.clicked() {
             self.start_read_rom_worker();
             return ReadRomState::Running(DumpUiState::default());
         }

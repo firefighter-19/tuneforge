@@ -43,3 +43,91 @@ pub use protocol::{
     PROTO_ISO9141,
 };
 pub use transport::{TactrixConfig, TactrixTransport, TACTRIX_OP2_PID, TACTRIX_VID};
+
+use std::time::Duration;
+
+/// Информация о найденном Tactrix-устройстве (passive enumeration —
+/// **без `sudo`**, не пытается claim-нуть интерфейс).
+#[derive(Debug, Clone)]
+pub struct TactrixDeviceInfo {
+    /// USB bus number (информативно, для отладки multi-bus случаев).
+    pub bus_number:     u8,
+    /// USB device address на шине.
+    pub address:        u8,
+    pub vid:            u16,
+    pub pid:            u16,
+    /// Из string descriptor-а — `"Tactrix"` если успел прочитать,
+    /// `None` если открыть устройство для чтения strings не удалось
+    /// (на macOS иногда требует «allow accessory» prompt).
+    pub manufacturer:   Option<String>,
+    pub product:        Option<String>,
+    pub serial:         Option<String>,
+    pub usb_version:    String,
+    pub device_version: String,
+    pub num_interfaces: u8,
+}
+
+/// Перечислить все Tactrix Openport устройства на USB-шине.
+///
+/// **Не требует root** — это просто `DeviceList::new()` + `device_descriptor()`,
+/// что любой user-process может делать на macOS/Linux/Windows. Открытие
+/// устройства (для чтения string-descriptors) пытается best-effort: если
+/// прав нет — основные поля (VID/PID/bus/addr) всё равно вернутся.
+///
+/// **Использование**: pre-flight check перед `TactrixTransport::open` —
+/// чтобы пользователь сразу знал «не подключён» vs «подключён но нет sudo».
+///
+/// # Errors
+///
+/// Только если сам libusb не может enumerate USB-шину (редкое, обычно
+/// означает что USB-driver не загружен).
+pub fn find_tactrix() -> rusb::Result<Vec<TactrixDeviceInfo>> {
+    let mut out = Vec::new();
+    for device in rusb::DeviceList::new()?.iter() {
+        let desc = match device.device_descriptor() {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+        if desc.vendor_id() != TACTRIX_VID || desc.product_id() != TACTRIX_OP2_PID {
+            continue;
+        }
+        // best-effort string descriptor reading
+        let (manufacturer, product, serial) = match device.open() {
+            Ok(handle) => {
+                let timeout = Duration::from_millis(200);
+                let lang = handle
+                    .read_languages(timeout)
+                    .ok()
+                    .and_then(|l| l.first().copied());
+                let m = lang
+                    .and_then(|l| handle.read_manufacturer_string(l, &desc, timeout).ok());
+                let p = lang.and_then(|l| handle.read_product_string(l, &desc, timeout).ok());
+                let s = lang
+                    .and_then(|l| handle.read_serial_number_string(l, &desc, timeout).ok());
+                (m, p, s)
+            }
+            Err(_) => (None, None, None),
+        };
+        let usb_version = {
+            let v = desc.usb_version();
+            format!("{}.{}.{}", v.major(), v.minor(), v.sub_minor())
+        };
+        let device_version = {
+            let v = desc.device_version();
+            format!("{}.{}.{}", v.major(), v.minor(), v.sub_minor())
+        };
+        out.push(TactrixDeviceInfo {
+            bus_number: device.bus_number(),
+            address:    device.address(),
+            vid:        desc.vendor_id(),
+            pid:        desc.product_id(),
+            manufacturer,
+            product,
+            serial,
+            usb_version,
+            device_version,
+            num_interfaces: desc.num_configurations(),
+        });
+    }
+    Ok(out)
+}
