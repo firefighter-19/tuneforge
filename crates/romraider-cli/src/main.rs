@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use tracing_subscriber::EnvFilter;
 
 use romraider_core::{bytes, Address};
@@ -14,8 +14,27 @@ use romraider_io::serial::{SerialConfig, SerialTransport};
 use romraider_io::tactrix::{TactrixConfig, TactrixTransport};
 use romraider_io::Transport;
 use romraider_logger::{LoggerSession, Sample, SampleValue, SessionConfig};
+use romraider_protocol::client::{probe, CanSsmClient, EcuClient, KLineSsmClient};
 use romraider_protocol::ssm::{self, EcuInitResponse};
 use romraider_rom::RomImage;
+
+/// Какой ECU-протокол использовать. Для SSM-команд (ssm-init, dump-rom)
+/// абстрагирует выбор между K-Line SSM2 (Subaru 2002-2006) и SSM3-CAN
+/// (Subaru 2007+). `Auto` пробует оба и выбирает ответивший.
+#[derive(Copy, Clone, Debug, ValueEnum, Default, PartialEq, Eq)]
+enum Protocol {
+    /// Авто-детект: пробует K-Line через Tactrix, fallback на CAN.
+    /// Только для Tactrix — для serial-порта подразумевает Kline.
+    #[default]
+    Auto,
+    /// SSM2 поверх K-Line (4800 baud). Subaru 2002-2006 / pre-anti-fuzz.
+    Kline,
+    /// SSM3 поверх CAN/ISO15765 (500 kbps). Subaru 2007+. Только Tactrix.
+    /// **NB:** на 2007+ ECU `dump-rom --protocol can` обычно режется
+    /// анти-fuzz-ом (NRC 0x12) на ROM-адресах — для full-dump нужен
+    /// `dump-rom-can` (kernel-upload путь, feature `kernel-upload`).
+    Can,
+}
 
 #[derive(Parser)]
 #[command(name = "romraider", version, about = "romraider-rs headless tools")]
@@ -39,10 +58,14 @@ enum Cmd {
     /// операций (macOS «allow accessory» prompt мог не показаться).
     TactrixInfo,
 
-    /// Открыть канал, отправить SSM ECU-Init и распечатать ответ.
+    /// Открыть канал, отправить SSM ECU-Init и распечатать ответ (SSM ID,
+    /// ROM ID, capability bitmap).
     ///
-    /// По умолчанию использует SerialTransport (требует `--port`). С флагом
-    /// `--tactrix` подключается к Openport 2.0 через USB-bulk (libusb).
+    /// Протокол выбирается через `--protocol`:
+    ///   - `auto` (default): пробует K-Line через Tactrix, fallback на CAN
+    ///   - `kline`: SSM2 поверх K-Line — поддерживает `--port` (serial)
+    ///     или `--tactrix` (Tactrix ISO9141)
+    ///   - `can`: SSM3 поверх ISO15765/CAN — только `--tactrix`
     SsmInit {
         #[arg(short, long, default_value = "")]
         port: String,
@@ -52,17 +75,27 @@ enum Cmd {
         timeout_ms: u64,
 
         /// Использовать Tactrix Openport 2.0 (USB-bulk) вместо serial-порта.
-        /// `--port` в этом режиме игнорируется.
+        /// `--port` в этом режиме игнорируется. Обязателен для `--protocol can`.
         #[arg(long)]
         tactrix: bool,
+
+        #[arg(long, value_enum, default_value_t = Protocol::Auto)]
+        protocol: Protocol,
     },
 
     /// Загрузить ROM-файл и вывести базовую инфу.
     InspectRom { path: PathBuf },
 
-    /// Дамп прошивки с ECU через SSM `ReadBlock` (0xA0) в `.bin`-файл.
-    /// Адресный диапазон и размер зависят от ECU — для Subaru SH7055 обычно
-    /// `--start 0 --length 524288` (512 KiB).
+    /// Дамп прошивки с ECU через SSM в `.bin`-файл. Адресный диапазон и
+    /// размер зависят от ECU — для Subaru SH7055/SH7058 обычно
+    /// `--start 0 --length 0x100000` (1 MiB).
+    ///
+    /// Протокол через `--protocol`:
+    ///   - `auto` (default): пробует K-Line (Tactrix ISO9141), fallback CAN
+    ///   - `kline`: SSM2 `ReadBlock` (0xA0), 2002-2006 Subaru
+    ///   - `can`: SSM3 `ReadAddresses` (0xA8) поверх ISO15765 — **NB:** на
+    ///     2007+ ECU блокируется анти-fuzz (NRC 0x12), full-dump смотри
+    ///     `dump-rom-can` (kernel-upload путь).
     DumpRom {
         #[arg(short, long, default_value = "")]
         port: String,
@@ -96,10 +129,14 @@ enum Cmd {
 
         /// Workaround для анти-fuzz Subaru ECU (2007+, например USDM Forester
         /// XT): пересоздавать K-Line канал перед каждым ReadBlock. Очень
-        /// медленно (~6 ч на 1 МБ). По умолчанию **выключено** — обычные
-        /// SSM2 ECU (до 2007) принимают серию ReadBlock в одной сессии.
+        /// медленно (~6 ч на 1 МБ). Только для `--protocol kline --tactrix`.
+        /// По умолчанию **выключено** — обычные SSM2 ECU (до 2007) принимают
+        /// серию ReadBlock в одной сессии.
         #[arg(long)]
         reset_per_chunk: bool,
+
+        #[arg(long, value_enum, default_value_t = Protocol::Auto)]
+        protocol: Protocol,
     },
 
     /// (feature `kernel-upload`) Дамп прошивки **через RAM-резидентный kernel**
@@ -480,16 +517,14 @@ fn main() -> Result<()> {
             baud,
             timeout_ms,
             tactrix,
-        } => {
-            let timeout = Duration::from_millis(timeout_ms);
-            if tactrix {
-                ssm_init_tactrix(timeout)
-            } else if port.is_empty() {
-                anyhow::bail!("--port required when --tactrix is not set");
-            } else {
-                ssm_init(&port, baud, timeout)
-            }
-        }
+            protocol,
+        } => ssm_init_cmd(
+            &port,
+            baud,
+            Duration::from_millis(timeout_ms),
+            tactrix,
+            protocol,
+        ),
         Cmd::InspectRom { path } => inspect_rom(&path),
         Cmd::InspectDef {
             path,
@@ -514,6 +549,7 @@ fn main() -> Result<()> {
             timeout_ms,
             tactrix,
             reset_per_chunk,
+            protocol,
         } => dump_rom_cmd(
             &port,
             baud,
@@ -524,6 +560,7 @@ fn main() -> Result<()> {
             Duration::from_millis(timeout_ms),
             tactrix,
             reset_per_chunk,
+            protocol,
         ),
         #[cfg(feature = "kernel-upload")]
         Cmd::DumpRomKernel {
@@ -666,6 +703,7 @@ fn dump_rom_cmd(
     timeout: Duration,
     tactrix: bool,
     reset_per_chunk: bool,
+    protocol: Protocol,
 ) -> Result<()> {
     let start_addr = parse_int_or_hex_u32(start).with_context(|| format!("--start `{start}`"))?;
     let length_val =
@@ -674,45 +712,26 @@ fn dump_rom_cmd(
         anyhow::bail!("--length must be > 0");
     }
 
-    if tactrix {
-        if reset_per_chunk {
-            // Workaround под анти-fuzz Subaru ECU 2007+: каждый ReadBlock
-            // в свежей K-Line-сессии. Очень медленно (~6 часов на 1 МБ),
-            // но единственный путь когда ECU режет повторные ReadBlock.
-            dump_rom_tactrix_session_per_chunk(start_addr, length_val, chunk_size, timeout, output)
-        } else {
-            // Обычный SSM2 (до анти-fuzz, 2003–2006 Subaru): один ecu_init,
-            // дальше серия ReadBlock в одной сессии. ~22 мин на 512 КБ через
-            // K-Line @ 4800 baud.
-            dump_rom_tactrix_continuous(start_addr, length_val, chunk_size, timeout, output)
+    // `--reset-per-chunk` — это K-Line-специфичный workaround под Tactrix
+    // (channel reset через `atc`/`ato`/`atf`). Допустим только для kline+tactrix.
+    if reset_per_chunk {
+        if !tactrix || matches!(protocol, Protocol::Can) {
+            anyhow::bail!(
+                "--reset-per-chunk requires --protocol kline --tactrix (channel-reset is K-Line specific)"
+            );
         }
-    } else {
-        if port.is_empty() {
-            anyhow::bail!("--port required when --tactrix is not set");
-        }
-        let mut cfg = SerialConfig::ssm(port);
-        cfg.baud_rate = baud;
-        let mut tr =
-            SerialTransport::open(&cfg).with_context(|| format!("opening serial {port}@{baud}"))?;
-        tr.purge()?;
-        do_dump_rom(&mut tr, start_addr, length_val, chunk_size, timeout, output)
+        return dump_rom_tactrix_session_per_chunk(
+            start_addr, length_val, chunk_size, timeout, output,
+        );
     }
-}
 
-/// Tactrix-дамп через **одну** SSM2-сессию: ecu_init один раз, дальше серия
-/// ReadBlock-запросов. Это «нормальный» режим SSM2 — работает на 2003–2006
-/// Subaru до анти-fuzz эры. Намного быстрее `session_per_chunk`-варианта.
-fn dump_rom_tactrix_continuous(
-    start_addr: u32,
-    length: usize,
-    chunk_size: usize,
-    timeout: Duration,
-    output: &PathBuf,
-) -> Result<()> {
-    let mut tr = open_tactrix()?;
+    // Все остальные случаи — через унифицированный `EcuClient` trait.
+    let (mut client, detected) = build_ssm_client(protocol, port, baud, tactrix, timeout)?;
+    eprintln!("Protocol: {} ({:?})", client.description(), detected);
 
-    let init = ssm::ecu_init(&mut tr, timeout)
-        .context("SSM ecu-init failed (ignition ON? engine running?)")?;
+    // Подтверждение что ECU online — заодно показывает ROM ID для проверки
+    // что подключились к ожидаемой машине (для нашего Forester XT 2007 = `4E42504007`).
+    let init = client.init(timeout).context("SSM ecu-init failed")?;
     eprintln!(
         "  ECU online: ROM {} ({} cap bytes)",
         bytes::hex_dump(&init.rom_id),
@@ -721,29 +740,29 @@ fn dump_rom_tactrix_continuous(
 
     let started = std::time::Instant::now();
     eprintln!(
-        "Dumping {length} bytes from 0x{start_addr:06X} via Tactrix \
-         (chunks of {chunk_size}, single session, timeout {}ms)…",
+        "Dumping {length_val} bytes from 0x{start_addr:06X} \
+         (chunks of {chunk_size}, timeout {}ms)…",
         timeout.as_millis()
     );
     let mut last_percent = -1i32;
-    let bytes = ssm::dump_rom(
-        &mut tr,
-        Address::new(start_addr),
-        length,
-        chunk_size,
-        timeout,
-        |done, total| {
-            let percent = (done as i64 * 100 / total as i64) as i32;
-            if percent != last_percent {
-                let elapsed = started.elapsed().as_secs_f64();
-                let rate = done as f64 / elapsed.max(1e-6);
-                let eta = (total - done) as f64 / rate.max(1.0);
-                eprintln!("  {done}/{total} ({percent}%)  {rate:.0} B/s  ETA {eta:.0}s");
-                last_percent = percent;
-            }
-        },
-    )
-    .context("dump_rom failed")?;
+    let bytes = client
+        .dump_rom(
+            start_addr,
+            length_val,
+            chunk_size,
+            timeout,
+            &mut |done, total| {
+                let percent = (done as i64 * 100 / total.max(1) as i64) as i32;
+                if percent != last_percent {
+                    let elapsed = started.elapsed().as_secs_f64();
+                    let rate = done as f64 / elapsed.max(1e-6);
+                    let eta = (total - done) as f64 / rate.max(1.0);
+                    eprintln!("  {done}/{total} ({percent}%)  {rate:.0} B/s  ETA {eta:.0}s");
+                    last_percent = percent;
+                }
+            },
+        )
+        .context("dump_rom failed")?;
 
     std::fs::write(output, &bytes).with_context(|| format!("writing {}", output.display()))?;
     eprintln!(
@@ -869,59 +888,6 @@ fn read_one_chunk_via(
     let _init = ssm::ecu_init(tr, timeout).context("ecu_init")?;
     let data = ssm::read_block(tr, addr, count, timeout).context("read_block")?;
     Ok(data)
-}
-
-fn do_dump_rom(
-    transport: &mut dyn romraider_io::transport::Transport,
-    start_addr: u32,
-    length: usize,
-    chunk_size: usize,
-    timeout: Duration,
-    output: &PathBuf,
-) -> Result<()> {
-    // Открываем SSM-сессию до начала дампа — `ReadBlock` без активной сессии
-    // ECU может проигнорировать (особенно после тайм-аутов). Заодно
-    // подтверждаем, что ECU реально отвечает.
-    eprintln!("Opening SSM session (ecu_init)…");
-    let init = ssm::ecu_init(transport, timeout)
-        .context("SSM ecu_init failed (ignition ON? K-Line wired? ECU asleep?)")?;
-    eprintln!(
-        "  ECU online: ROM {} ({} cap bytes)",
-        bytes::hex_dump(&init.rom_id),
-        init.capabilities.len()
-    );
-
-    let started = std::time::Instant::now();
-    eprintln!(
-        "Dumping {length} bytes from 0x{start_addr:06X} (chunks of {chunk_size}, timeout {}ms)…",
-        timeout.as_millis()
-    );
-    let mut last_percent = -1i32;
-    let bytes = ssm::dump_rom(
-        transport,
-        Address::new(start_addr),
-        length,
-        chunk_size,
-        timeout,
-        |done, total| {
-            let percent = (done as i64 * 100 / total as i64) as i32;
-            if percent != last_percent && (percent % 5 == 0 || done == total) {
-                let elapsed = started.elapsed().as_secs_f64();
-                let rate = done as f64 / elapsed.max(1e-6);
-                eprintln!("  {done}/{total} ({percent}%)  {rate:.1} B/s");
-                last_percent = percent;
-            }
-        },
-    )
-    .context("dump_rom failed")?;
-    std::fs::write(output, &bytes).with_context(|| format!("writing {}", output.display()))?;
-    eprintln!(
-        "Done in {:.1}s. {} bytes written to {}",
-        started.elapsed().as_secs_f64(),
-        bytes.len(),
-        output.display()
-    );
-    Ok(())
 }
 
 fn parse_int_or_hex_u32(s: &str) -> Result<u32> {
@@ -1715,30 +1681,108 @@ fn list_ports() -> Result<()> {
     Ok(())
 }
 
-fn ssm_init(port: &str, baud: u32, timeout: Duration) -> Result<()> {
-    let mut cfg = SerialConfig::ssm(port);
-    cfg.baud_rate = baud;
-    let mut tr = SerialTransport::open(&cfg)?;
-    tr.purge()?;
-
-    let request = ssm::build_request(ssm::Command::EcuInit, &[]);
-    println!("→ {}", bytes::hex_dump(&request));
-
-    let init = ssm::ecu_init(&mut tr, timeout)
-        .context("SSM ecu-init failed (check cable, ignition, baud rate)")?;
+/// Единый ssm-init handler. Строит [`EcuClient`] по `--protocol`+транспорт,
+/// дёргает `init()` и печатает структурированный ответ.
+fn ssm_init_cmd(
+    port: &str,
+    baud: u32,
+    timeout: Duration,
+    tactrix: bool,
+    protocol: Protocol,
+) -> Result<()> {
+    let (mut client, _) = build_ssm_client(protocol, port, baud, tactrix, timeout)?;
+    eprintln!("Protocol: {}", client.description());
+    let init = client
+        .init(timeout)
+        .context("SSM ecu-init failed (check ignition, cable, baud rate)")?;
     print_ecu_init(&init);
     Ok(())
 }
 
-fn ssm_init_tactrix(timeout: Duration) -> Result<()> {
-    let mut tr = open_tactrix()?;
-    let request = ssm::build_request(ssm::Command::EcuInit, &[]);
-    println!("→ {}", bytes::hex_dump(&request));
+/// Построить [`EcuClient`] согласно `--protocol`-выбору и доступному транспорту.
+///
+/// Возвращает `(client, detected_protocol)`. `detected_protocol` всегда
+/// конкретный (`Kline` или `Can`) даже если caller передал `Auto` — это
+/// удобно для последующего CLI-сообщения.
+///
+/// Логика `Auto`:
+///   1. Если `tactrix=true` — пробуем K-Line через Tactrix (ISO9141), если
+///      молчит — fallback на CAN (ISO15765);
+///   2. Если только `--port` — `Auto` детерминирует Kline (на serial CAN недоступен).
+fn build_ssm_client(
+    protocol: Protocol,
+    port: &str,
+    baud: u32,
+    tactrix: bool,
+    timeout: Duration,
+) -> Result<(Box<dyn EcuClient>, Protocol)> {
+    // Probe-timeout: для auto-детекта используем короткий таймаут, иначе
+    // explicit-протокол ждёт настоящий `--timeout-ms`.
+    let probe_timeout = Duration::from_millis(800).min(timeout);
 
-    let init = ssm::ecu_init(&mut tr, timeout)
-        .context("SSM ecu-init via Tactrix failed (ignition ON? K-Line wired?)")?;
-    print_ecu_init(&init);
-    Ok(())
+    match protocol {
+        Protocol::Kline => {
+            let transport = open_kline_transport(port, baud, tactrix)?;
+            Ok((Box::new(KLineSsmClient::new(transport)), Protocol::Kline))
+        }
+        Protocol::Can => {
+            if !tactrix {
+                anyhow::bail!("--protocol can requires --tactrix (CAN only via Tactrix)");
+            }
+            let transport: Box<dyn Transport> = Box::new(open_tactrix_can()?);
+            Ok((Box::new(CanSsmClient::new(transport)), Protocol::Can))
+        }
+        Protocol::Auto => {
+            // На serial-only K-Line — единственный возможный вариант.
+            if !tactrix {
+                if port.is_empty() {
+                    anyhow::bail!(
+                        "--protocol auto requires either --tactrix or --port (serial implies K-Line)"
+                    );
+                }
+                let transport = open_kline_transport(port, baud, false)?;
+                return Ok((Box::new(KLineSsmClient::new(transport)), Protocol::Kline));
+            }
+            // Tactrix: пробуем K-Line first (исторически SSM2 default Subaru).
+            eprintln!("Auto-detect: probing K-Line SSM (Tactrix ISO9141)…");
+            let kline_transport: Box<dyn Transport> = Box::new(open_tactrix()?);
+            let mut kline_client = KLineSsmClient::new(kline_transport);
+            if probe(&mut kline_client, probe_timeout).is_some() {
+                eprintln!("Auto-detect: K-Line responded ✓");
+                return Ok((Box::new(kline_client), Protocol::Kline));
+            }
+            eprintln!("Auto-detect: K-Line silent, switching to CAN…");
+            drop(kline_client); // Free Tactrix перед переоткрытием в ISO15765-mode.
+            let can_transport: Box<dyn Transport> = Box::new(open_tactrix_can()?);
+            let mut can_client = CanSsmClient::new(can_transport);
+            if probe(&mut can_client, probe_timeout).is_some() {
+                eprintln!("Auto-detect: CAN SSM3 responded ✓");
+                return Ok((Box::new(can_client), Protocol::Can));
+            }
+            anyhow::bail!(
+                "Auto-detect: no ECU response on K-Line nor CAN \
+                 (check ignition is ON and OBD-II cable seated)"
+            );
+        }
+    }
+}
+
+/// Открыть K-Line транспорт через Tactrix ISO9141 (если `tactrix=true`) или
+/// serial-порт. Возвращает `Box<dyn Transport>` для use в trait-объектах.
+fn open_kline_transport(port: &str, baud: u32, tactrix: bool) -> Result<Box<dyn Transport>> {
+    if tactrix {
+        Ok(Box::new(open_tactrix()?))
+    } else {
+        if port.is_empty() {
+            anyhow::bail!("--port required when --tactrix is not set");
+        }
+        let mut cfg = SerialConfig::ssm(port);
+        cfg.baud_rate = baud;
+        let mut tr =
+            SerialTransport::open(&cfg).with_context(|| format!("opening serial {port}@{baud}"))?;
+        tr.purge()?;
+        Ok(Box::new(tr))
+    }
 }
 
 fn open_tactrix() -> Result<TactrixTransport> {
