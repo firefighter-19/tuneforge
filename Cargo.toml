@@ -21,7 +21,7 @@ edition = "2021"
 rust-version = "1.78"
 license = "GPL-2.0-or-later"
 authors = ["tuneforge contributors"]
-repository = "https://github.com/RomRaider/tuneforge"
+repository = "https://github.com/firefighter-19/tuneforge"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "warn"
