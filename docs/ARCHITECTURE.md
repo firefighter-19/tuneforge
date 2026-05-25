@@ -60,17 +60,21 @@ slice-by-slice progress смотри [`../PROGRESS.md`](../PROGRESS.md).
 
 ## Workspace layout
 
-| Crate                | Версия | Лицензия       | Описание                                                                      |
-| -------------------- | ------ | -------------- | ----------------------------------------------------------------------------- |
-| `romraider-core`     | 0.1.0  | GPL-2.0+       | Общие типы: `Address`, `Endian`, `bytes::hex_dump`, `RomError`                |
-| `romraider-io`       | 0.1.0  | GPL-2.0+       | `Transport`-trait + impls: serial (serialport), J2534, ELM327, **Tactrix** (rusb K-Line + CAN), MockTransport |
-| `romraider-protocol` | 0.1.0  | GPL-2.0+       | SSM2 K-Line, OBD-II Mode 01/09 (CAN), UDS ISO-14229, Subaru SSM3-CAN, DS2, NCS |
-| `romraider-defs`     | 0.1.0  | GPL-2.0+       | Парсер `ecu_defs.xml` + `log_defs.xml`, scaling-формулы (meval), include-резолв |
-| `romraider-rom`      | 0.1.0  | GPL-2.0+       | `RomImage`, 1D/2D/3D таблицы, checksum (Subaru STD/ALT/4-byte)                 |
-| `romraider-logger`   | 0.1.0  | GPL-2.0+       | `LoggerSession::poll_once`/`run`, CSV-datalog, broadcast-канал                |
-| `romraider-kernel`   | 0.1.0  | **GPL-3.0+**   | Kernel-upload (K-Line + CAN), seed/key Feistel + RE'd round-keys, orchestrator (Slice 23). **Opt-in за feature flag-ом** — workspace остаётся под GPL-2.0+ если не подключён. |
-| `romraider-cli`      | 0.1.0  | GPL-2.0+       | Headless CLI: `ssm-init`, `dump-rom[-can]`, `logger[-can][-ssm-can]`, `inspect-*`, `peek-*`, `dtc-can` |
-| `romraider-gui`      | 0.1.0  | GPL-2.0+       | egui-приложение: Editor (ROM редактор) + Logger (XY-plot) + ECU-tools (опц.) |
+Все крейты наследуют единую версию из `[workspace.package].version` в корневом
+`Cargo.toml` (см. `version = { workspace = true }` в каждом `crates/*/Cargo.toml`).
+Версионирование — SemVer, минорные бампы привязаны к slice-кластерам.
+
+| Crate                | Лицензия       | Описание                                                                      |
+| -------------------- | -------------- | ----------------------------------------------------------------------------- |
+| `romraider-core`     | GPL-2.0+       | Общие типы: `Address`, `Endian`, `bytes::hex_dump`, `RomError`                |
+| `romraider-io`       | GPL-2.0+       | `Transport`-trait + impls: serial (serialport), J2534, ELM327, **Tactrix** (rusb K-Line + CAN), MockTransport |
+| `romraider-protocol` | GPL-2.0+       | SSM2 K-Line, OBD-II Mode 01/09 (CAN), UDS ISO-14229, Subaru SSM3-CAN, DS2, NCS |
+| `romraider-defs`     | GPL-2.0+       | Парсер `ecu_defs.xml` + `log_defs.xml`, scaling-формулы (meval), include-резолв |
+| `romraider-rom`      | GPL-2.0+       | `RomImage`, 1D/2D/3D таблицы, checksum (Subaru STD/ALT/4-byte)                 |
+| `romraider-logger`   | GPL-2.0+       | `LoggerSession::poll_once`/`run`, CSV-datalog, broadcast-канал                |
+| `romraider-kernel`   | **GPL-3.0+**   | Kernel-upload (K-Line + CAN), seed/key Feistel + RE'd round-keys, orchestrator (Slice 23). **Opt-in за feature flag-ом** — workspace остаётся под GPL-2.0+ если не подключён. |
+| `romraider-cli`      | GPL-2.0+       | Headless CLI: `ssm-init`, `dump-rom[-can]`, `logger[-can][-ssm-can]`, `inspect-*`, `peek-*`, `dtc-can` |
+| `romraider-gui`      | GPL-2.0+       | egui-приложение: Editor (ROM редактор) + Logger (XY-plot) + ECU-tools (опц.) |
 
 ## Маппинг Java → Rust
 
