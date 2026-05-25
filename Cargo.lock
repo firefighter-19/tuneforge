@@ -2821,7 +2821,7 @@ dependencies = [
 
 [[package]]
 name = "romraider-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2839,7 +2839,7 @@ dependencies = [
 
 [[package]]
 name = "romraider-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "byteorder",
  "serde",
@@ -2848,7 +2848,7 @@ dependencies = [
 
 [[package]]
 name = "romraider-defs"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "meval",
  "quick-xml 0.36.2",
@@ -2860,7 +2860,7 @@ dependencies = [
 
 [[package]]
 name = "romraider-gui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "eframe",
@@ -2881,7 +2881,7 @@ dependencies = [
 
 [[package]]
 name = "romraider-io"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libloading",
  "romraider-core",
@@ -2893,7 +2893,7 @@ dependencies = [
 
 [[package]]
 name = "romraider-kernel"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "romraider-core",
  "romraider-io",
@@ -2904,7 +2904,7 @@ dependencies = [
 
 [[package]]
 name = "romraider-logger"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "romraider-core",
  "romraider-defs",
@@ -2919,7 +2919,7 @@ dependencies = [
 
 [[package]]
 name = "romraider-protocol"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "romraider-core",
  "romraider-io",
@@ -2929,7 +2929,7 @@ dependencies = [
 
 [[package]]
 name = "romraider-rom"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "nalgebra",
  "romraider-core",
