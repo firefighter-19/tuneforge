@@ -131,13 +131,13 @@
 2. ~~**Авто-fix Subaru checksum** + индикатор valid/invalid~~ ✅ Slice 10
 3. ~~**Compare two ROMs**~~ ✅ Slice 11
 4. ~~**Heatmap-раскраска**~~ ✅ Slice 12
-5. ~~**Undo/Redo**~~ ✅ Slice 13 (history=100, drag = много мелких шагов; coalescing — потом)
+5. ~~**Undo/Redo**~~ ✅ Slice 13 (history=100; coalescing добавлен ниже)
 6. ~~**Tooltip для ячеек**~~ ✅ Slice 14
 7. ~~**Switch-таблицы UI**~~ ✅ Slice 15 (radio + checkbox; multi-byte bitwise — отложен)
-8. **Coalescing undo** при drag (один шаг на drag, а не на каждое промежуточное значение)
-9. **Description в cell tooltip** — копировать описание таблицы в hover-popup
+8. ~~**Coalescing undo** при drag~~ ✅ v0.3.x: `UndoLog::record` принимает `can_merge_with_prev`; `render_cell` определяет drag-continuation через `Response::dragged() && !drag_started()`. Один drag = один undo-step (вместо ~60 за секунду). 5 unit-тестов на merge invariants
+9. ~~**Description в cell tooltip**~~ ✅ v0.3.x: `CellTooltip.description` пробрасывается из `ResolvedTable.description` (атрибут `<table description>` из ecu_defs.xml), рендерится italics на верху tooltip-а
 
-С точки зрения editor-критпути для редактирования прошивок Subaru — основное закрыто. Дальше открываются другие домены: **logger backend**, **dump-rom через SSM**, **J2534**.
+С точки зрения editor-критпути для редактирования прошивок Subaru — **полностью закрыто**. Дальше открываются другие домены: **logger backend**, **dump-rom через SSM**, **J2534**.
 
 Для **дампа и реflash** — отдельный долгий путь:
 

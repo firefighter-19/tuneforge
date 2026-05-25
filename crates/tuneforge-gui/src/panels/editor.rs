@@ -66,9 +66,36 @@ struct EditAction {
 }
 
 impl UndoLog {
-    fn record(&mut self, address: Address, before: Vec<u8>, after: Vec<u8>) {
+    /// Зарегистрировать изменение. Если `can_merge_with_prev` = `true`
+    /// **и** последняя запись имеет тот же address + её `after` совпадает с
+    /// текущим `before` (т.е. это продолжение того же редактирования), то
+    /// мы **сливаем** их в одну: `last.after = new.after`. Это даёт «один
+    /// undo step на drag-сессию» даже если drag-event-ы прилетели за
+    /// несколько frame-ов с промежуточными значениями.
+    ///
+    /// Caller-ы:
+    ///   - `write_back` (DragValue-cells): передаёт `can_merge=true` когда
+    ///     drag всё ещё продолжается (frame N>1 одного drag-а), иначе
+    ///     `false` (первый frame drag-а / typed edit).
+    ///   - switch/bitwise (дискретные клики): всегда `false`.
+    fn record(
+        &mut self,
+        address: Address,
+        before: Vec<u8>,
+        after: Vec<u8>,
+        can_merge_with_prev: bool,
+    ) {
         if before == after {
             return; // no-op
+        }
+        if can_merge_with_prev {
+            if let Some(last) = self.undo.back_mut() {
+                if last.address == address && last.after == before {
+                    last.after = after;
+                    self.redo.clear();
+                    return;
+                }
+            }
         }
         self.undo.push_back(EditAction {
             address,
@@ -817,6 +844,7 @@ fn render_3d(
     );
 
     let mut changed = false;
+    let mut drag_continuation = false;
     egui::Grid::new("table-3d-grid")
         .striped(true)
         .spacing([4.0, 2.0])
@@ -851,6 +879,7 @@ fn render_3d(
                 .as_ref()
                 .and_then(|c| c.source.expression.as_deref());
             let to_byte_expr = scaling.as_ref().and_then(|c| c.source.to_byte.as_deref());
+            let description = table.description.as_deref();
 
             for y in 0..size_y {
                 if let Some(ys) = &y_values {
@@ -872,8 +901,9 @@ fn render_3d(
                         units,
                         expression,
                         to_byte: to_byte_expr,
+                        description,
                     };
-                    if render_cell(
+                    let cell = render_cell(
                         ui,
                         &mut display[idx],
                         base,
@@ -882,8 +912,12 @@ fn render_3d(
                         precision,
                         speed,
                         &tooltip,
-                    ) {
+                    );
+                    if cell.changed {
                         changed = true;
+                        if cell.is_drag_continuation {
+                            drag_continuation = true;
+                        }
                     }
                 }
                 ui.end_row();
@@ -891,7 +925,14 @@ fn render_3d(
         });
 
     if changed {
-        write_back(rom, undo_log, table, &display, scaling.as_ref());
+        write_back(
+            rom,
+            undo_log,
+            table,
+            &display,
+            scaling.as_ref(),
+            drag_continuation,
+        );
     }
 }
 
@@ -955,8 +996,10 @@ fn render_flat(
         .as_ref()
         .and_then(|c| c.source.expression.as_deref());
     let to_byte_expr = scaling.as_ref().and_then(|c| c.source.to_byte.as_deref());
+    let description = table.description.as_deref();
 
     let mut changed = false;
+    let mut drag_continuation = false;
     egui::Grid::new("table-flat-grid")
         .striped(true)
         .spacing([6.0, 2.0])
@@ -976,8 +1019,9 @@ fn render_flat(
                     units,
                     expression,
                     to_byte: to_byte_expr,
+                    description,
                 };
-                if render_cell(
+                let cell = render_cell(
                     ui,
                     &mut display[i],
                     base,
@@ -986,15 +1030,26 @@ fn render_flat(
                     precision,
                     speed,
                     &tooltip,
-                ) {
+                );
+                if cell.changed {
                     changed = true;
+                    if cell.is_drag_continuation {
+                        drag_continuation = true;
+                    }
                 }
             }
             ui.end_row();
         });
 
     if changed {
-        write_back(rom, undo_log, table, &display, scaling.as_ref());
+        write_back(
+            rom,
+            undo_log,
+            table,
+            &display,
+            scaling.as_ref(),
+            drag_continuation,
+        );
     }
 }
 
@@ -1041,6 +1096,24 @@ struct CellTooltip<'a> {
     units: Option<&'a str>,
     expression: Option<&'a str>,
     to_byte: Option<&'a str>,
+    /// Описание таблицы из `ecu_defs.xml` (атрибут `<table description="…">`).
+    /// Отображается на самом верху tooltip-а — частая причина hover-а:
+    /// «что вообще делает эта ячейка?». См. Slice 14 critpath item #9.
+    description: Option<&'a str>,
+}
+
+/// Результат отрисовки одной ячейки в Values-режиме. Нужен для coalescing-а
+/// undo: за один drag-сессию (нажал → потащил → отпустил) DragValue может
+/// прилететь с изменениями в ~60 frame-ов подряд, и без объединения в undo
+/// получалось ~60 шагов Ctrl+Z вместо одного.
+#[derive(Default, Clone, Copy)]
+struct CellEdit {
+    /// Значение этой ячейки изменилось в этом frame.
+    changed: bool,
+    /// Это **продолжение** активного drag-а (frame N>1 одной drag-сессии),
+    /// **не** первый frame и **не** typed-edit. Используется как сигнал
+    /// undo-логу что новую запись можно merge-нуть с предыдущей.
+    is_drag_continuation: bool,
 }
 
 /// Универсальная отрисовка одной ячейки: DragValue в Values-режиме, Label
@@ -1048,7 +1121,9 @@ struct CellTooltip<'a> {
 /// вычислен снаружи (compare-diff приоритетнее heatmap). При hover показывает
 /// `tooltip` — адрес, raw/real, формула, diff vs base (если задан).
 ///
-/// Возвращает `true` если значение было изменено (только в Values-режиме).
+/// Возвращает [`CellEdit`] — `changed` + флаг «это продолжение drag-а».
+/// Caller (`render_3d`/`render_flat`) агрегирует флаги по всему grid-у и
+/// передаёт результат в `write_back` для coalescing-а undo.
 fn render_cell(
     ui: &mut egui::Ui,
     value: &mut f64,
@@ -1058,22 +1133,24 @@ fn render_cell(
     precision: usize,
     speed: f64,
     tooltip: &CellTooltip<'_>,
-) -> bool {
-    let mut changed = false;
+) -> CellEdit {
+    let mut edit = CellEdit::default();
     let response = egui::Frame::none()
         .fill(bg)
         .inner_margin(egui::Margin::same(1.0))
         .show(ui, |ui| match mode {
             DisplayMode::Values => {
-                if ui
-                    .add(
-                        egui::DragValue::new(value)
-                            .speed(speed)
-                            .fixed_decimals(precision),
-                    )
-                    .changed()
-                {
-                    changed = true;
+                let resp = ui.add(
+                    egui::DragValue::new(value)
+                        .speed(speed)
+                        .fixed_decimals(precision),
+                );
+                if resp.changed() {
+                    edit.changed = true;
+                    // Drag-continuation = mid-drag (frame N>1). Первый frame
+                    // drag-а (`drag_started`) и typed-edit (no `dragged`) не
+                    // считаются — каждый из них даёт свежий undo-step.
+                    edit.is_drag_continuation = resp.dragged() && !resp.drag_started();
                 }
             }
             DisplayMode::Diff => {
@@ -1090,7 +1167,7 @@ fn render_cell(
     response.on_hover_ui(|ui| {
         cell_tooltip_ui(ui, tooltip, snapshot_value, base, precision);
     });
-    changed
+    edit
 }
 
 fn cell_tooltip_ui(
@@ -1101,6 +1178,13 @@ fn cell_tooltip_ui(
     precision: usize,
 ) {
     let units = t.units.unwrap_or("");
+    if let Some(desc) = t.description {
+        // Описание таблицы — самая полезная инфа при hover-е («что эта
+        // ячейка вообще делает»). Курсивом + italics чтобы не сливалось
+        // с monospace-телом tooltip-а.
+        ui.label(egui::RichText::new(desc).italics());
+        ui.separator();
+    }
     ui.label(
         egui::RichText::new(format!("@ {}  ({})", t.addr, t.position))
             .strong()
@@ -1199,12 +1283,16 @@ fn lerp_u8(a: u8, b: u8, t: f64) -> u8 {
 
 /// Сконвертировать «real» значения обратно в байт-репрезентацию, записать в ROM
 /// и зарегистрировать изменение в `undo_log` (для Ctrl+Z).
+///
+/// `can_merge_with_prev` = `true` если это продолжение того же drag-а — тогда
+/// undo-лог сольёт новую запись с предыдущей в один шаг (см. [`UndoLog::record`]).
 fn write_back(
     rom: &mut RomImage,
     undo_log: &mut UndoLog,
     table: &ResolvedTable,
     display: &[f64],
     scaling: Option<&CompiledScaling>,
+    can_merge_with_prev: bool,
 ) {
     let raw_back: Vec<f64> = display
         .iter()
@@ -1232,7 +1320,7 @@ fn write_back(
         warn!(?e, "write-back failed");
         return;
     }
-    undo_log.record(addr, before, after);
+    undo_log.record(addr, before, after, can_merge_with_prev);
 }
 
 fn cell_speed(scaling: Option<&CompiledScaling>, precision: usize) -> f64 {
@@ -1310,7 +1398,8 @@ fn render_switch(
 
     if let Some(after) = new_data {
         if rom.write(addr, &after).is_ok() {
-            undo_log.record(addr, current, after);
+            // Switch — discrete click, не drag. Никогда не merge с prev.
+            undo_log.record(addr, current, after, false);
         }
     }
 }
@@ -1379,7 +1468,8 @@ fn render_bitwise_switch(
     });
 
     if new_value != current && rom.write(addr, &[new_value]).is_ok() {
-        undo_log.record(addr, vec![current], vec![new_value]);
+        // BitwiseSwitch — checkbox click, не drag. Не merge.
+        undo_log.record(addr, vec![current], vec![new_value], false);
     }
 }
 
@@ -1640,7 +1730,7 @@ mod tests {
         let after = vec![1, 2, 3, 4];
 
         rom.write(addr, &after).unwrap();
-        log.record(addr, before.clone(), after.clone());
+        log.record(addr, before.clone(), after.clone(), false);
 
         assert!(log.can_undo());
         assert!(!log.can_redo());
@@ -1660,11 +1750,11 @@ mod tests {
         let mut rom = RomImage::from_bytes(vec![0u8; 4]);
         let addr = Address::new(0);
 
-        log.record(addr, vec![0], vec![1]);
+        log.record(addr, vec![0], vec![1], false);
         log.undo(&mut rom);
         assert!(log.can_redo());
 
-        log.record(addr, vec![0], vec![2]);
+        log.record(addr, vec![0], vec![2], false);
         assert!(!log.can_redo(), "redo stack must clear after new record");
     }
 
@@ -1672,7 +1762,7 @@ mod tests {
     fn undo_log_caps_at_max_history() {
         let mut log = UndoLog::default();
         for i in 0..MAX_UNDO_HISTORY + 50 {
-            log.record(Address::new(0), vec![i as u8], vec![(i + 1) as u8]);
+            log.record(Address::new(0), vec![i as u8], vec![(i + 1) as u8], false);
         }
         assert_eq!(log.undo.len(), MAX_UNDO_HISTORY);
     }
@@ -1680,7 +1770,7 @@ mod tests {
     #[test]
     fn undo_log_ignores_no_op() {
         let mut log = UndoLog::default();
-        log.record(Address::new(0), vec![1, 2], vec![1, 2]);
+        log.record(Address::new(0), vec![1, 2], vec![1, 2], false);
         assert!(!log.can_undo());
     }
 
@@ -1705,11 +1795,11 @@ mod tests {
         let addr = Address::new(0);
 
         rom.write(addr, &[1, 0, 0, 0]).unwrap();
-        log.record(addr, vec![0, 0, 0, 0], vec![1, 0, 0, 0]);
+        log.record(addr, vec![0, 0, 0, 0], vec![1, 0, 0, 0], false);
         rom.write(addr, &[1, 2, 0, 0]).unwrap();
-        log.record(addr, vec![1, 0, 0, 0], vec![1, 2, 0, 0]);
+        log.record(addr, vec![1, 0, 0, 0], vec![1, 2, 0, 0], false);
         rom.write(addr, &[1, 2, 3, 0]).unwrap();
-        log.record(addr, vec![1, 2, 0, 0], vec![1, 2, 3, 0]);
+        log.record(addr, vec![1, 2, 0, 0], vec![1, 2, 3, 0], false);
 
         log.undo(&mut rom);
         assert_eq!(rom.raw(), &[1, 2, 0, 0]);
@@ -1722,5 +1812,82 @@ mod tests {
         log.redo(&mut rom);
         log.redo(&mut rom);
         assert_eq!(rom.raw(), &[1, 2, 0, 0]);
+    }
+
+    // ── Coalescing-undo (drag merging) ──────────────────────────────
+
+    /// Симуляция drag-сессии: 5 frame-ов подряд меняют одну ячейку
+    /// 10 → 11 → 12 → 13 → 14 → 15. С `can_merge=true` всё это должно
+    /// схлопнуться в **один** undo-step с before=10, after=15.
+    #[test]
+    fn undo_log_merges_drag_frames_into_single_step() {
+        let mut log = UndoLog::default();
+        let addr = Address::new(0x100);
+
+        // Первый frame drag-а — fresh entry (can_merge=false).
+        log.record(addr, vec![10], vec![11], false);
+        // Frame 2..5 — продолжение drag-а, must merge.
+        log.record(addr, vec![11], vec![12], true);
+        log.record(addr, vec![12], vec![13], true);
+        log.record(addr, vec![13], vec![14], true);
+        log.record(addr, vec![14], vec![15], true);
+
+        assert_eq!(log.undo.len(), 1, "drag-frames должны быть merge-нуты");
+        let action = log.undo.back().unwrap();
+        assert_eq!(action.before, vec![10]);
+        assert_eq!(action.after, vec![15]);
+    }
+
+    /// `can_merge=true` но prev запись имеет **другой** адрес — не merge
+    /// (это другая ячейка/таблица).
+    #[test]
+    fn undo_log_does_not_merge_across_addresses() {
+        let mut log = UndoLog::default();
+        log.record(Address::new(0x100), vec![10], vec![11], false);
+        log.record(Address::new(0x200), vec![20], vec![21], true);
+        assert_eq!(log.undo.len(), 2);
+    }
+
+    /// `can_merge=true` но prev.after != new.before — chain прервалась
+    /// (что-то между ними изменило ROM). Не merge.
+    #[test]
+    fn undo_log_does_not_merge_when_chain_broken() {
+        let mut log = UndoLog::default();
+        let addr = Address::new(0);
+        log.record(addr, vec![10], vec![11], false);
+        // Здесь prev.after=11, но мы шлём before=99 — chain broken.
+        log.record(addr, vec![99], vec![100], true);
+        assert_eq!(log.undo.len(), 2);
+    }
+
+    /// Typed-edit (с `can_merge=false`) после drag-а — новая запись,
+    /// не сливается с merged-drag-entry.
+    #[test]
+    fn undo_log_typed_edit_creates_fresh_entry_after_drag() {
+        let mut log = UndoLog::default();
+        let addr = Address::new(0);
+        // Drag 10 → 15 (один merged step).
+        log.record(addr, vec![10], vec![11], false);
+        log.record(addr, vec![11], vec![15], true);
+        assert_eq!(log.undo.len(), 1);
+        // Typed edit: 15 → 42. can_merge=false — fresh entry даже если addr тот же.
+        log.record(addr, vec![15], vec![42], false);
+        assert_eq!(log.undo.len(), 2);
+    }
+
+    /// Merge правильно очищает redo-stack — после merge нельзя redo-нуть
+    /// промежуточные значения drag-а.
+    #[test]
+    fn undo_log_merge_clears_redo() {
+        let mut log = UndoLog::default();
+        let mut rom = RomImage::from_bytes(vec![0u8; 4]);
+        let addr = Address::new(0);
+        log.record(addr, vec![0], vec![1], false);
+        log.undo(&mut rom);
+        assert!(log.can_redo());
+        // Новый drag-merge должен сбросить redo.
+        log.record(addr, vec![0], vec![5], false);
+        log.record(addr, vec![5], vec![10], true);
+        assert!(!log.can_redo(), "merge must clear redo stack");
     }
 }
