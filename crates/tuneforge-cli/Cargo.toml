@@ -40,3 +40,9 @@ default = []
 # Подключает `tuneforge-kernel` (GPL-3.0) и добавляет `dump-rom-kernel` subcommand.
 # Когда феча выключена, CLI остаётся "чистым" — kernel-upload даже не компилируется.
 kernel-upload = ["dep:tuneforge-kernel", "tuneforge-kernel/sh7058", "tuneforge-kernel/sh7055"]
+
+# Releases (cargo-dist) собираются с full functionality.
+# NB: это переключает workspace на GPL-3.0-or-later (см. license-isolation
+# в README) для бинарей в Github Releases.
+[package.metadata.dist]
+features = ["kernel-upload"]

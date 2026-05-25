@@ -45,3 +45,7 @@ anyhow             = { workspace = true }
 [features]
 default   = []
 ecu-tools = ["dep:tuneforge-kernel", "dep:tuneforge-protocol"]
+
+# Releases (cargo-dist) — full GUI с ECU-tools панелью.
+[package.metadata.dist]
+features = ["ecu-tools"]

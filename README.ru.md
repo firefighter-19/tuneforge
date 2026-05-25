@@ -31,14 +31,35 @@
 
 ## Установка
 
-**Требуется:** Rust stable (1.78+), macOS ARM (M1+) рекомендуется,
-[`libusb`](https://libusb.info/) — на macOS:
+**Runtime зависимость:** [`libusb`](https://libusb.info/) — на macOS:
 
 ```bash
-brew install libusb pkg-config
+brew install libusb
 ```
 
-**Установка из git** (компилируется из исходников, ~2 мин на M1):
+### Pre-built бинари (рекомендуется, macOS ARM + x86)
+
+Собираются и публикуются через [`cargo-dist`](https://opensource.axo.dev/cargo-dist/)
+в [GitHub Releases](https://github.com/firefighter-19/tuneforge/releases/latest).
+В каждом релизе — `tuneforge` (CLI с полной kernel-upload функциональностью)
+и `tuneforge-gui` (editor + logger + ECU-tools panel).
+
+```bash
+# CLI:
+curl --proto '=https' --tlsv1.2 -LsSf \
+    https://github.com/firefighter-19/tuneforge/releases/latest/download/tuneforge-cli-installer.sh | sh
+
+# GUI:
+curl --proto '=https' --tlsv1.2 -LsSf \
+    https://github.com/firefighter-19/tuneforge/releases/latest/download/tuneforge-gui-installer.sh | sh
+```
+
+Бинари будут в `~/.cargo/bin/` (или там куда `cargo` обычно складывает) —
+`tuneforge` (CLI) и `tuneforge-gui` (desktop приложение).
+
+### Из исходников (любая платформа с Rust toolchain)
+
+Требуется Rust stable 1.78+. Компиляция ~2 мин на M1.
 
 ```bash
 # Headless CLI:
@@ -56,14 +77,10 @@ cargo install --git https://github.com/firefighter-19/tuneforge tuneforge-gui \
     --features ecu-tools
 ```
 
-После установки бинари будут в `~/.cargo/bin/`:
+### macOS sudo note для работы с железом
 
-- `tuneforge` — headless CLI
-- `tuneforge-gui` — desktop приложение
-
-**macOS sudo note для работы с железом:** Tactrix Openport требует `sudo`
-для libusb bulk-доступа (ограничение macOS — unclaimed USB-устройства без
-kext-а нужны root-права). Например:
+Tactrix Openport требует `sudo` для libusb bulk-доступа (ограничение
+macOS — unclaimed USB-устройства без kext-а нужны root-права):
 
 ```bash
 sudo tuneforge ssm-init --tactrix
@@ -71,8 +88,7 @@ sudo tuneforge dump-rom-can --output ./dump.bin
 sudo tuneforge-gui  # только если будешь юзать ECU-tools модалки
 ```
 
-**Pre-built бинари** (без Rust toolchain) и `brew install` —
-планируются в v0.4.0 через [`cargo-dist`](https://opensource.axo.dev/cargo-dist/).
+Homebrew tap (`brew install firefighter-19/tap/tuneforge`) — планируется в v0.5.0+.
 
 ## Что работает прямо сейчас
 
