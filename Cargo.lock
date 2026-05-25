@@ -2820,126 +2820,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "romraider-cli"
-version = "0.2.0"
-dependencies = [
- "anyhow",
- "clap",
- "romraider-core",
- "romraider-defs",
- "romraider-io",
- "romraider-kernel",
- "romraider-logger",
- "romraider-protocol",
- "romraider-rom",
- "serialport",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "romraider-core"
-version = "0.2.0"
-dependencies = [
- "byteorder",
- "serde",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "romraider-defs"
-version = "0.2.0"
-dependencies = [
- "meval",
- "quick-xml 0.36.2",
- "romraider-core",
- "serde",
- "thiserror 2.0.18",
- "tracing",
-]
-
-[[package]]
-name = "romraider-gui"
-version = "0.2.0"
-dependencies = [
- "anyhow",
- "eframe",
- "egui",
- "egui_extras",
- "egui_plot",
- "rfd",
- "romraider-core",
- "romraider-defs",
- "romraider-io",
- "romraider-kernel",
- "romraider-logger",
- "romraider-protocol",
- "romraider-rom",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "romraider-io"
-version = "0.2.0"
-dependencies = [
- "libloading",
- "romraider-core",
- "rusb",
- "serialport",
- "thiserror 2.0.18",
- "tracing",
-]
-
-[[package]]
-name = "romraider-kernel"
-version = "0.2.0"
-dependencies = [
- "romraider-core",
- "romraider-io",
- "romraider-protocol",
- "thiserror 2.0.18",
- "tracing",
-]
-
-[[package]]
-name = "romraider-logger"
-version = "0.2.0"
-dependencies = [
- "romraider-core",
- "romraider-defs",
- "romraider-io",
- "romraider-protocol",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "romraider-protocol"
-version = "0.2.0"
-dependencies = [
- "romraider-core",
- "romraider-io",
- "thiserror 2.0.18",
- "tracing",
-]
-
-[[package]]
-name = "romraider-rom"
-version = "0.2.0"
-dependencies = [
- "nalgebra",
- "romraider-core",
- "romraider-defs",
- "serde",
- "thiserror 2.0.18",
- "tracing",
-]
-
-[[package]]
 name = "ron"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3654,6 +3534,126 @@ name = "ttf-parser"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
+
+[[package]]
+name = "tuneforge-cli"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serialport",
+ "tracing",
+ "tracing-subscriber",
+ "tuneforge-core",
+ "tuneforge-defs",
+ "tuneforge-io",
+ "tuneforge-kernel",
+ "tuneforge-logger",
+ "tuneforge-protocol",
+ "tuneforge-rom",
+]
+
+[[package]]
+name = "tuneforge-core"
+version = "0.3.0"
+dependencies = [
+ "byteorder",
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "tuneforge-defs"
+version = "0.3.0"
+dependencies = [
+ "meval",
+ "quick-xml 0.36.2",
+ "serde",
+ "thiserror 2.0.18",
+ "tracing",
+ "tuneforge-core",
+]
+
+[[package]]
+name = "tuneforge-gui"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "eframe",
+ "egui",
+ "egui_extras",
+ "egui_plot",
+ "rfd",
+ "tracing",
+ "tracing-subscriber",
+ "tuneforge-core",
+ "tuneforge-defs",
+ "tuneforge-io",
+ "tuneforge-kernel",
+ "tuneforge-logger",
+ "tuneforge-protocol",
+ "tuneforge-rom",
+]
+
+[[package]]
+name = "tuneforge-io"
+version = "0.3.0"
+dependencies = [
+ "libloading",
+ "rusb",
+ "serialport",
+ "thiserror 2.0.18",
+ "tracing",
+ "tuneforge-core",
+]
+
+[[package]]
+name = "tuneforge-kernel"
+version = "0.3.0"
+dependencies = [
+ "thiserror 2.0.18",
+ "tracing",
+ "tuneforge-core",
+ "tuneforge-io",
+ "tuneforge-protocol",
+]
+
+[[package]]
+name = "tuneforge-logger"
+version = "0.3.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tuneforge-core",
+ "tuneforge-defs",
+ "tuneforge-io",
+ "tuneforge-protocol",
+]
+
+[[package]]
+name = "tuneforge-protocol"
+version = "0.3.0"
+dependencies = [
+ "thiserror 2.0.18",
+ "tracing",
+ "tuneforge-core",
+ "tuneforge-io",
+]
+
+[[package]]
+name = "tuneforge-rom"
+version = "0.3.0"
+dependencies = [
+ "nalgebra",
+ "serde",
+ "thiserror 2.0.18",
+ "tracing",
+ "tuneforge-core",
+ "tuneforge-defs",
+]
 
 [[package]]
 name = "type-map"

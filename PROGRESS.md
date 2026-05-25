@@ -1,4 +1,4 @@
-# romraider-rs — общий статус проекта
+# tuneforge — общий статус проекта
 
 Сводная таблица по всем крейтам. Детали каждого — в соответствующем
 `crates/<name>/PROGRESS.md`.
@@ -7,14 +7,14 @@
 
 | Крейт                   | Назначение                                     | Готовность | PROGRESS                                              |
 | ----------------------- | ---------------------------------------------- | :--------: | ----------------------------------------------------- |
-| **romraider-core**      | Address, Endian, bytes-utils, errors           | 🟢 75%     | [`crates/romraider-core/PROGRESS.md`](crates/romraider-core/PROGRESS.md)         |
-| **romraider-io**        | Transport-trait + serial/elm327/j2534/tactrix  | 🟢 65%     | [`crates/romraider-io/PROGRESS.md`](crates/romraider-io/PROGRESS.md)             |
-| **romraider-protocol**  | SSM/OBD/DS2/NCS диалекты                       | 🟡 45%     | [`crates/romraider-protocol/PROGRESS.md`](crates/romraider-protocol/PROGRESS.md) |
-| **romraider-defs**      | Парсер + резолв ECU/log_defs XML, scaling      | 🟢 88%     | [`crates/romraider-defs/PROGRESS.md`](crates/romraider-defs/PROGRESS.md)         |
-| **romraider-rom**       | ROM-image, decode/encode, checksum             | 🟢 75%     | [`crates/romraider-rom/PROGRESS.md`](crates/romraider-rom/PROGRESS.md)           |
-| **romraider-logger**    | Backend логгера + plugins                      | 🟡 45%     | [`crates/romraider-logger/PROGRESS.md`](crates/romraider-logger/PROGRESS.md)     |
-| **romraider-cli**       | Headless CLI (debug + smoke-tests + logger + dump-rom + tactrix) | 🟢 90% | [`crates/romraider-cli/PROGRESS.md`](crates/romraider-cli/PROGRESS.md) |
-| **romraider-gui**       | egui-редактор (diff/heatmap/undo/changes) + логгер | 🟢 75%   | [`crates/romraider-gui/PROGRESS.md`](crates/romraider-gui/PROGRESS.md)           |
+| **tuneforge-core**      | Address, Endian, bytes-utils, errors           | 🟢 75%     | [`crates/tuneforge-core/PROGRESS.md`](crates/tuneforge-core/PROGRESS.md)         |
+| **tuneforge-io**        | Transport-trait + serial/elm327/j2534/tactrix  | 🟢 65%     | [`crates/tuneforge-io/PROGRESS.md`](crates/tuneforge-io/PROGRESS.md)             |
+| **tuneforge-protocol**  | SSM/OBD/DS2/NCS диалекты                       | 🟡 45%     | [`crates/tuneforge-protocol/PROGRESS.md`](crates/tuneforge-protocol/PROGRESS.md) |
+| **tuneforge-defs**      | Парсер + резолв ECU/log_defs XML, scaling      | 🟢 88%     | [`crates/tuneforge-defs/PROGRESS.md`](crates/tuneforge-defs/PROGRESS.md)         |
+| **tuneforge-rom**       | ROM-image, decode/encode, checksum             | 🟢 75%     | [`crates/tuneforge-rom/PROGRESS.md`](crates/tuneforge-rom/PROGRESS.md)           |
+| **tuneforge-logger**    | Backend логгера + plugins                      | 🟡 45%     | [`crates/tuneforge-logger/PROGRESS.md`](crates/tuneforge-logger/PROGRESS.md)     |
+| **tuneforge-cli**       | Headless CLI (debug + smoke-tests + logger + dump-rom + tactrix) | 🟢 90% | [`crates/tuneforge-cli/PROGRESS.md`](crates/tuneforge-cli/PROGRESS.md) |
+| **tuneforge-gui**       | egui-редактор (diff/heatmap/undo/changes) + логгер | 🟢 75%   | [`crates/tuneforge-gui/PROGRESS.md`](crates/tuneforge-gui/PROGRESS.md)           |
 
 **Легенда:** 🟢 ≥60% — 🟡 30–60% — 🔴 <30%
 
@@ -56,13 +56,13 @@
 | 24b   | **PID batching для скорости** — реализовано: `obd2::read_pids_batched()` шлёт `01 <pid1>..<pid6>` (max 6 per SAE J1979), парсит multi-frame ISO-TP response by-echo (robust к ordering и pid-dropout). `logger_can_cmd` чанкует подписки по 6, с graceful-fallback на single-PID если ECU отвергает batch (NRC 0x13). Ожидаемый speedup ~5-6× для большой подписки (40 PIDs: 4 Hz → ~22 Hz). 4 unit-теста на синтетических responses (mixed lengths, reorder, NRC, zero-pad). | 🟢 готово |
 | 28    | **GUI логгер расширен до SSM3-CAN + derived params + save-dir** — `LoggerPanel` теперь поддерживает два режима через mode-dropdown (`K-Line SSM2` legacy / `SSM3-CAN` modern). SSM3-CAN режим использует `SUBARU_SSM_PARAMS` (16 raw) + `SUBARU_DERIVED_PARAMS` (AVCS Diff R-L, Boost gauge) с auto-include deps. Save-path picker с auto-timestamp default `$HOME/Documents/RomRaider/logs/<mode>-YYYY-MM-DD_HH-MM-SS.csv` + `📁 Change…` + `⟲ Auto` кнопки. CSV пишется live в worker thread параллельно с XY-plot feed-ом. K-Line режим бэк-compat — никаких regressions. Tactrix preflight + ECU-tools menu (Slice 26) интегрированы. SSM-CAN путь под feature `ecu-tools`. **UX-polish**: param-checkboxes в collapsing accordion (default закрыт, max 60% места освобождено), live numeric readout (3-колон. grid с авто-precision и units), **stacked plots с linked X-axis** (один plot на параметр, своя Y-шкала, drag X для скролла по времени, zoom отключён — каждый график живёт в своём диапазоне). | 🟢 готово |
 | 29    | **GUI Read DTCs modal** — пункт меню `ECU → Read DTCs…` открывает модал с preflight-strip (Tactrix detected). Кнопка `▶ Read DTCs` запускает worker, читает Mode 0x03 (stored/MIL), Mode 0x07 (pending), Mode 0x0A (permanent) через `orchestrator::read_dtcs` (DTC parsing вынесен из CLI в kernel orchestrator, encode_dtc → `P0301`/`C1234`/etc per SAE J2012). Три секции с цветовой индикацией (red = stored/permanent, yellow = pending, gray = empty). Re-read и Retry кнопки. CLI `dtc-can` теперь thin wrapper над тем же кодом (вместо ~60 строк inline-байт-парсинга). `clear_dtcs` (Mode 0x04) добавлен в orchestrator API для будущего use, пока без UI-обёртки. | 🟢 готово |
-| 30    | **DTC description database** — извлечён из upstream `ecu_defs.xml`: 324 Subaru-specific кодов (P0xxx/P1xxx/P2xxx) с описаниями типа `P0030 → "Front O2 Sensor Range/perf"`, плюс ~20 generic SAE J2012 кодов (transmission P07xx, network U0xxx) для TCM/CAN issues. Static const table в `romraider_kernel::dtc_db`, sorted, `binary_search_by_key` O(log N). Integrated в CLI `dtc-can` и GUI DTC modal — теперь рядом с кодом сразу видно человеческое описание. Регенерация через `tools/extract_dtc_db.py`. 4 unit-теста (sorted invariant, lookup known, lookup unknown, size sanity). | 🟢 готово |
+| 30    | **DTC description database** — извлечён из upstream `ecu_defs.xml`: 324 Subaru-specific кодов (P0xxx/P1xxx/P2xxx) с описаниями типа `P0030 → "Front O2 Sensor Range/perf"`, плюс ~20 generic SAE J2012 кодов (transmission P07xx, network U0xxx) для TCM/CAN issues. Static const table в `tuneforge_kernel::dtc_db`, sorted, `binary_search_by_key` O(log N). Integrated в CLI `dtc-can` и GUI DTC modal — теперь рядом с кодом сразу видно человеческое описание. Регенерация через `tools/extract_dtc_db.py`. 4 unit-теста (sorted invariant, lookup known, lookup unknown, size sanity). | 🟢 готово |
 | 31    | **Clear DTCs UI** (Mode 0x04) — в GUI DTC modal добавлена кнопка `🗑 Clear DTCs` после Done-state. Click → inline confirmation banner с warning что Mode 0x04 удалит Stored+Pending+Freeze Frame но НЕ Permanent (те уходят после drive-cycle). Yes → spawn worker → auto re-read для показа актуального состояния. Использует existing `orchestrator::clear_dtcs()`. PendingAction enum для clean state-transitions в egui-closure (избегает borrow conflict с inline match-and-mutate). | 🟢 готово |
 | 32    | **Freeze Frame GUI + CLI** (Mode 0x02) — `orchestrator::read_freeze_frame()` шлёт Mode 0x02 PID 0x02 frame 0 (получает triggering DTC), затем по каждому `STANDARD_PIDS` PID — `02 <PID> 00` для snapshot value. Skip-аем bitmap-PIDs. Возвращает `FreezeFrame { triggering_dtc, values: Vec<FreezePidValue> }`. CLI `freeze-frame-can` показывает DTC + description (через dtc_lookup) + table param-snapshot-а. GUI modal через `ECU → Read Freeze Frame…` с тем же layout (DTC сверху red+ description, params в grid). Очень полезно для диагностики: видим RPM/MAP/Coolant/AFR ровно в момент когда P0030 / другой код был зафиксирован. | 🟢 готово |
 | 33    | **GitHub Actions CI** — `.github/workflows/ci.yml`: 2 джоба. **build-and-test** (required): Ubuntu runner, install libusb-1.0-0-dev, билд default-features + full-features (kernel-upload + ecu-tools) + `cargo test --workspace` + CLI smoke-test (`--help`). **lint** (advisory, `continue-on-error: true` пока): clippy + rustfmt check. Cache cargo registry+target/ через Swatinem/rust-cache@v2. Triggers: push на main/master + PRs + manual `workflow_dispatch`. CI-badge добавлен в оба README. Critical для portfolio + предотвращает regressions при merge. | 🟢 готово |
 | 24c   | **Subaru-specific extended params через UDS Mode 0x23 ReadMemoryByAddress** — knock correction, fine-grained AFR, individual cyl data, через firmware-specific RAM-адреса из `<ecuparams>` блока в апстрим `logger.xml` (для нашего ROM `4E42504007`) | 🔵 опц. |
 | 25    | **Generic protocol abstraction** — единый `EcuClient` trait, auto-detect протокола (K-Line vs CAN) через ECU-init capability-байты, `--protocol auto\|ssm\|can\|kwp` в CLI. Уберёт разделение `dump-rom` vs `dump-rom-can`, `peek-vin` vs `ssm-init` и т.п. | 🔵 запланирован |
-| 26    | **GUI ECU-tools menu** — реализован (Slice 26): `ECU` menu в menubar (Read ROM from ECU…, View ECU Info…, disabled Write/Erase placeholders), модал «Read ROM» с multi-phase progress (Phase A/B/C/E + log), worker thread + mpsc, save-as dialog после dump-а. Изолирован за feature-flag-ом `ecu-tools` (тянет GPL-3 `romraider-kernel`). **Refactor**: orchestrator-функция `dump_rom_via_can()` + `peek_ecu_info()` вынесена в `romraider-kernel::orchestrator` — теперь reusable между CLI и GUI. Решение по `sudo` — простейший вариант: `sudo cargo run -p romraider-gui --features ecu-tools` + clear-prompt в Error-state, documented. Helper-binary с IPC откладывается до distribution-этапа | 🟢 готово |
+| 26    | **GUI ECU-tools menu** — реализован (Slice 26): `ECU` menu в menubar (Read ROM from ECU…, View ECU Info…, disabled Write/Erase placeholders), модал «Read ROM» с multi-phase progress (Phase A/B/C/E + log), worker thread + mpsc, save-as dialog после dump-а. Изолирован за feature-flag-ом `ecu-tools` (тянет GPL-3 `tuneforge-kernel`). **Refactor**: orchestrator-функция `dump_rom_via_can()` + `peek_ecu_info()` вынесена в `tuneforge-kernel::orchestrator` — теперь reusable между CLI и GUI. Решение по `sudo` — простейший вариант: `sudo cargo run -p tuneforge-gui --features ecu-tools` + clear-prompt в Error-state, documented. Helper-binary с IPC откладывается до distribution-этапа | 🟢 готово |
 | 27    | **K-Line quirks для pre-anti-fuzz Subaru** — наблюдение на 2004 JDM Legacy B4 (ROM `3C44106006`, SSM-ID `A1 10 08`, 48 cap-bytes): SSM2 ECU-init (`0xBF`) работает **только с заведённым мотором**, а `0xA0`/`0xA8` чтения работают **только с заглушенным мотором** (engine ON генерирует K-Line collisions с другими ECU на шине). На этой машине ни one shot чтения, ни kernel-upload **не работают пока двигатель запущен** → live-logger через K-Line невозможен. Для других подобных машин (2003-2005 JDM) надо: (a) `dump-rom --tactrix` с engine off — работает, продуцирует ground-truth ROM; (b) DTC reading через SSM2 ReadBlock из known RAM-адресов (~30 строк нового `dtc-ssm`-cmd); (c) опционально KWP2000-on-K-Line module (`0x18 ReadDTCByStatus`, `0x21/0x22/0x23` reads) для машин где SSM2 read блокирован полностью | 🔵 опц. |
 
 Дополнительные мелкие polish-задачи без отдельного слайса:
@@ -74,7 +74,7 @@
 
 1. **Открыть, посмотреть, редактировать ROM-файл с XML-определением:**
    ```bash
-   cargo run -p romraider-gui
+   cargo run -p tuneforge-gui
    # File → Open ROM (.bin) → Open Def (.xml) → выбрать ROM-ID + таблицу
    # Кликнуть в ячейку, поправить значение → File → Save ROM As…
    ```
@@ -83,25 +83,25 @@
 
 2. **Headless-инспекция определений:**
    ```bash
-   cargo run -p romraider-cli -- inspect-def def.xml --resolve --rom A2WC522S --sample-byte 800
+   cargo run -p tuneforge-cli -- inspect-def def.xml --resolve --rom A2WC522S --sample-byte 800
    ```
    Показывает разрешённые таблицы child-ROM с примером конверсии.
 
 3. **Headless-чтение таблицы из ROM:**
    ```bash
-   cargo run -p romraider-cli -- read-table firmware.bin --def def.xml --rom-id A2WC522S --table "Target Boost A"
+   cargo run -p tuneforge-cli -- read-table firmware.bin --def def.xml --rom-id A2WC522S --table "Target Boost A"
    ```
 
 4. **SSM ECU-init на реальном железе (Tactrix Openport 2.0 + 2007 Forester XT):**
    ```bash
-   cargo run -p romraider-cli -- ssm-init --tactrix
+   cargo run -p tuneforge-cli -- ssm-init --tactrix
    ```
    ✅ Подтверждено на живой машине 2026-05-11. ROM `4E42504007`, SSM `A2 10 11`,
    96 байт capabilities; round-trip ~600 ms через K-Line @ 4800 baud.
 
 5. **Mac-native ROM dump через CAN/ISO15765 (Tactrix Openport 2.0 + 2007 Forester XT):**
    ```bash
-   sudo cargo run -p romraider-cli --features kernel-upload -- \
+   sudo cargo run -p tuneforge-cli --features kernel-upload -- \
        dump-rom-can --output /tmp/forester-mac-dump.bin
    ```
    ✅ Подтверждено на живой машине 2026-05-13. 1 МБ дамп за 43.7 с, SHA-256
@@ -113,7 +113,7 @@
 
 6. **Редактирование реальной прошивки в GUI:**
    ```bash
-   cargo run -p romraider-gui
+   cargo run -p tuneforge-gui
    # File → Open ROM → fixtures/forester-xt-2007-4E42504007.bin
    # Open Def → /Applications/RomRaider/definitions/ecu_defs.xml
    # → выбрать ROM A8DK100P → редактировать Target Boost / Wastegate Duty
@@ -145,15 +145,15 @@
    `ReadBlock` (0xA0) **возвращает stub-0xFF** из-за анти-fuzz защиты ECU — для
    реального дампа нужен kernel-upload.
 7. ~~**Slice 21/23 — kernel-upload для SH7058**~~ ✅ Slice 23:
-   - GPLv3 изолированный крейт `romraider-kernel`
+   - GPLv3 изолированный крейт `tuneforge-kernel`
    - K-Line path (KWP2000 SID 0x81) **не применим** к 2007 USDM Forester (SID 0x81 timeout,
      `27 01` отказывает): ECU использует CAN/ISO15765, а не KWP2000-on-K-Line
    - **Реальный путь** — UDS-over-CAN @ 500 kbps через Tactrix `ato6` (см. сценарий 5 выше)
    - Round-key table (`0x05972C` в ROM) восстановлена brute-force по 8 (seed,key)-парам из capture
    - Encrypted kernel V1.07 ре-используется from capture (`include_bytes!`)
    - Verify byte-by-byte vs `fixtures/forester-xt-2007-4E42504007.bin` — ✅ SHA-256 совпал
-8. **J2534 Open/Connect/ReadMsgs/WriteMsgs** ([io](crates/romraider-io/PROGRESS.md)) — для Linux/Win через CAN
-9. **J2534 LibraryLocator** под Win/Linux ([io](crates/romraider-io/PROGRESS.md))
+8. **J2534 Open/Connect/ReadMsgs/WriteMsgs** ([io](crates/tuneforge-io/PROGRESS.md)) — для Linux/Win через CAN
+9. **J2534 LibraryLocator** под Win/Linux ([io](crates/tuneforge-io/PROGRESS.md))
 10. **RamTune** — отдельный модуль для flash (опасно, тестировать на ECU-доноре)
 
 Для **полноценного логгера**:

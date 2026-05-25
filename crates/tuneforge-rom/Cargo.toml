@@ -1,0 +1,20 @@
+[package]
+name        = "tuneforge-rom"
+version     = { workspace = true }
+edition     = { workspace = true }
+rust-version = { workspace = true }
+license     = { workspace = true }
+authors     = { workspace = true }
+description = "ROM image, table model, and checksum fixers for tuneforge"
+
+[lints]
+workspace = true
+
+[dependencies]
+tuneforge-core = { workspace = true }
+tuneforge-defs = { workspace = true }
+
+thiserror = { workspace = true }
+tracing   = { workspace = true }
+serde     = { workspace = true }
+nalgebra  = { workspace = true }

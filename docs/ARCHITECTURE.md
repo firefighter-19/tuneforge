@@ -1,4 +1,4 @@
-# Архитектура romraider-rs
+# Архитектура tuneforge
 
 Документ описывает **текущее состояние** проекта — структуру воркспейса,
 зависимости между крейтами, ключевые архитектурные решения. Для
@@ -13,14 +13,14 @@ slice-by-slice progress смотри [`../PROGRESS.md`](../PROGRESS.md).
 
 ```text
 ┌───────────────────────────────────────────────────────────────┐
-│ romraider-gui  (eframe/egui)                                  │
+│ tuneforge-gui  (eframe/egui)                                  │
 │   editor panel · logger panel · ecu-tools panel (Slice 26)    │
 │   File / Edit / ECU menubar                                   │
 └───────────────────────────────────────────────────────────────┘
         │            │             │
         ▼            ▼             ▼ (feature "ecu-tools")
 ┌──────────────┐  ┌──────────────┐  ┌──────────────────────────────┐
-│ romraider-   │  │ romraider-   │  │ romraider-kernel             │
+│ tuneforge-   │  │ tuneforge-   │  │ tuneforge-kernel             │
 │ rom          │  │ logger       │  │ (GPL-3.0, opt-in)            │
 │ tables 1D/2D │  │ session/poll │  │ K-Line + CAN kernel-upload   │
 │ 3D, scaling, │  │ datalog      │  │ seed/key (Feistel + RE'd     │
@@ -30,7 +30,7 @@ slice-by-slice progress смотри [`../PROGRESS.md`](../PROGRESS.md).
         └────────────┼─────────────┤
                      ▼             ▼
 ┌──────────────┐  ┌──────────────────────────────────────────────┐
-│ romraider-   │  │ romraider-protocol                           │
+│ tuneforge-   │  │ tuneforge-protocol                           │
 │ defs         │  │ ssm (K-Line) · obd2 (Mode 01/09) ·           │
 │ ECU/logger   │  │ uds (Mode 0x23) · subaru (SSM3-CAN A8/AA) ·  │
 │ XML, scaling │  │ ds2 · ncs                                    │
@@ -38,7 +38,7 @@ slice-by-slice progress смотри [`../PROGRESS.md`](../PROGRESS.md).
                               │
                               ▼
                   ┌──────────────────────────────┐
-                  │ romraider-io                 │
+                  │ tuneforge-io                 │
                   │ Transport trait              │
                   │ serial · ELM327 · J2534 ·    │
                   │ tactrix (rusb K-Line + CAN)  │
@@ -47,7 +47,7 @@ slice-by-slice progress смотри [`../PROGRESS.md`](../PROGRESS.md).
                               │
                               ▼
                   ┌──────────────────────────────┐
-                  │ romraider-core               │
+                  │ tuneforge-core               │
                   │ Address · Endian · bytes ·   │
                   │ errors · format helpers      │
                   └──────────────────────────────┘
@@ -55,7 +55,7 @@ slice-by-slice progress смотри [`../PROGRESS.md`](../PROGRESS.md).
 
 **Правило:** зависимости **строго сверху вниз**. `core` ни от кого не
 зависит, GUI зависит от всего нужного, логгер не знает про GUI,
-протоколы не знают про ROM/логгер. CLI (`romraider-cli`) — параллельный
+протоколы не знают про ROM/логгер. CLI (`tuneforge-cli`) — параллельный
 бинарный крейт, делит deps с GUI кроме `egui`.
 
 ## Workspace layout
@@ -66,15 +66,15 @@ slice-by-slice progress смотри [`../PROGRESS.md`](../PROGRESS.md).
 
 | Crate                | Лицензия       | Описание                                                                      |
 | -------------------- | -------------- | ----------------------------------------------------------------------------- |
-| `romraider-core`     | GPL-2.0+       | Общие типы: `Address`, `Endian`, `bytes::hex_dump`, `RomError`                |
-| `romraider-io`       | GPL-2.0+       | `Transport`-trait + impls: serial (serialport), J2534, ELM327, **Tactrix** (rusb K-Line + CAN), MockTransport |
-| `romraider-protocol` | GPL-2.0+       | SSM2 K-Line, OBD-II Mode 01/09 (CAN), UDS ISO-14229, Subaru SSM3-CAN, DS2, NCS |
-| `romraider-defs`     | GPL-2.0+       | Парсер `ecu_defs.xml` + `log_defs.xml`, scaling-формулы (meval), include-резолв |
-| `romraider-rom`      | GPL-2.0+       | `RomImage`, 1D/2D/3D таблицы, checksum (Subaru STD/ALT/4-byte)                 |
-| `romraider-logger`   | GPL-2.0+       | `LoggerSession::poll_once`/`run`, CSV-datalog, broadcast-канал                |
-| `romraider-kernel`   | **GPL-3.0+**   | Kernel-upload (K-Line + CAN), seed/key Feistel + RE'd round-keys, orchestrator (Slice 23). **Opt-in за feature flag-ом** — workspace остаётся под GPL-2.0+ если не подключён. |
-| `romraider-cli`      | GPL-2.0+       | Headless CLI: `ssm-init`, `dump-rom[-can]`, `logger[-can][-ssm-can]`, `inspect-*`, `peek-*`, `dtc-can` |
-| `romraider-gui`      | GPL-2.0+       | egui-приложение: Editor (ROM редактор) + Logger (XY-plot) + ECU-tools (опц.) |
+| `tuneforge-core`     | GPL-2.0+       | Общие типы: `Address`, `Endian`, `bytes::hex_dump`, `RomError`                |
+| `tuneforge-io`       | GPL-2.0+       | `Transport`-trait + impls: serial (serialport), J2534, ELM327, **Tactrix** (rusb K-Line + CAN), MockTransport |
+| `tuneforge-protocol` | GPL-2.0+       | SSM2 K-Line, OBD-II Mode 01/09 (CAN), UDS ISO-14229, Subaru SSM3-CAN, DS2, NCS |
+| `tuneforge-defs`     | GPL-2.0+       | Парсер `ecu_defs.xml` + `log_defs.xml`, scaling-формулы (meval), include-резолв |
+| `tuneforge-rom`      | GPL-2.0+       | `RomImage`, 1D/2D/3D таблицы, checksum (Subaru STD/ALT/4-byte)                 |
+| `tuneforge-logger`   | GPL-2.0+       | `LoggerSession::poll_once`/`run`, CSV-datalog, broadcast-канал                |
+| `tuneforge-kernel`   | **GPL-3.0+**   | Kernel-upload (K-Line + CAN), seed/key Feistel + RE'd round-keys, orchestrator (Slice 23). **Opt-in за feature flag-ом** — workspace остаётся под GPL-2.0+ если не подключён. |
+| `tuneforge-cli`      | GPL-2.0+       | Headless CLI: `ssm-init`, `dump-rom[-can]`, `logger[-can][-ssm-can]`, `inspect-*`, `peek-*`, `dtc-can` |
+| `tuneforge-gui`      | GPL-2.0+       | egui-приложение: Editor (ROM редактор) + Logger (XY-plot) + ECU-tools (опц.) |
 
 ## Маппинг Java → Rust
 
@@ -82,29 +82,29 @@ slice-by-slice progress смотри [`../PROGRESS.md`](../PROGRESS.md).
 
 | Java-пакет                                | Rust-крейт                                                   |
 | ----------------------------------------- | ------------------------------------------------------------ |
-| `io.connection`, `io.serial`              | `romraider-io::serial`                                       |
-| `io.elm327`                               | `romraider-io::elm327`                                       |
-| `io.j2534.*`                              | `romraider-io::j2534`                                        |
-| **(нет аналога)**                         | `romraider-io::tactrix` (Mac-native через rusb, без J2534)   |
-| `io.protocol.ssm.iso9141`                 | `romraider-protocol::ssm` (K-Line)                           |
-| `io.protocol.ssm.iso15765`                | `romraider-protocol::subaru` (SSM3-CAN, cmd 0xAA/0xA8/0xA0)  |
-| `io.protocol.obd`                         | `romraider-protocol::obd2` (Mode 01/09, PID-таблица)         |
-| **(нет аналога)**                         | `romraider-protocol::uds` (ISO-14229 Mode 0x23)              |
-| `io.protocol.ds2` / `ncs`                 | `romraider-protocol::ds2` / `ncs` (заглушки, неактивны)      |
-| `xml.*` + `definitions/*.xml`             | `romraider-defs` (XML **не модифицируются**, парсятся as-is) |
-| `maps.*`                                  | `romraider-rom::table`                                       |
-| `maps.checksum.*`                         | `romraider-rom::checksum`                                    |
-| `logger.ecu.*`                            | `romraider-logger::session` (+ async-broadcast)              |
+| `io.connection`, `io.serial`              | `tuneforge-io::serial`                                       |
+| `io.elm327`                               | `tuneforge-io::elm327`                                       |
+| `io.j2534.*`                              | `tuneforge-io::j2534`                                        |
+| **(нет аналога)**                         | `tuneforge-io::tactrix` (Mac-native через rusb, без J2534)   |
+| `io.protocol.ssm.iso9141`                 | `tuneforge-protocol::ssm` (K-Line)                           |
+| `io.protocol.ssm.iso15765`                | `tuneforge-protocol::subaru` (SSM3-CAN, cmd 0xAA/0xA8/0xA0)  |
+| `io.protocol.obd`                         | `tuneforge-protocol::obd2` (Mode 01/09, PID-таблица)         |
+| **(нет аналога)**                         | `tuneforge-protocol::uds` (ISO-14229 Mode 0x23)              |
+| `io.protocol.ds2` / `ncs`                 | `tuneforge-protocol::ds2` / `ncs` (заглушки, неактивны)      |
+| `xml.*` + `definitions/*.xml`             | `tuneforge-defs` (XML **не модифицируются**, парсятся as-is) |
+| `maps.*`                                  | `tuneforge-rom::table`                                       |
+| `maps.checksum.*`                         | `tuneforge-rom::checksum`                                    |
+| `logger.ecu.*`                            | `tuneforge-logger::session` (+ async-broadcast)              |
 | `logger.external.*`                       | TBD (внешние датчики AEM/Innovate)                           |
-| `editor.*` + `swing.*`                    | `romraider-gui::panels::editor` (egui, полностью переписан)  |
-| **(нет аналога)**                         | `romraider-gui::panels::logger` (XY-plot live через mpsc)    |
-| **(нет аналога)**                         | `romraider-gui::panels::ecu_tools` (Slice 26: Read ROM modal) |
+| `editor.*` + `swing.*`                    | `tuneforge-gui::panels::editor` (egui, полностью переписан)  |
+| **(нет аналога)**                         | `tuneforge-gui::panels::logger` (XY-plot live через mpsc)    |
+| **(нет аналога)**                         | `tuneforge-gui::panels::ecu_tools` (Slice 26: Read ROM modal) |
 | `ramtune.*`                               | NOT planned (flash explicit non-goal — нет donor-ECU)        |
-| **(нет аналога)**                         | `romraider-kernel` (K-Line npkern + CAN kernel-upload-flow)  |
+| **(нет аналога)**                         | `tuneforge-kernel` (K-Line npkern + CAN kernel-upload-flow)  |
 
 ## Ключевые архитектурные решения
 
-### 1. **`romraider-kernel` изолирован под GPL-3.0**
+### 1. **`tuneforge-kernel` изолирован под GPL-3.0**
 
 Crate использует наработки от GPL-3 проектов
 ([fenugrec/nisprog](https://github.com/fenugrec/nisprog),
@@ -116,7 +116,7 @@ Java RomRaider).
 
 ### 2. **Два транспорта — K-Line и CAN — через единый `Transport` trait**
 
-`romraider-io::transport::Transport` имеет `write_all`/`read_frame`/
+`tuneforge-io::transport::Transport` имеет `write_all`/`read_frame`/
 `purge`/`set_baud`. Все реализации (Serial, Tactrix, Mock) interchangeable.
 Tactrix-impl настраивается через `TactrixConfig::ssm()` (K-Line ISO9141)
 или `iso15765_500k()` (CAN 500kbps + flow-control filter). Высокоуровневые
@@ -163,7 +163,7 @@ J2534 эмуляции через DLL-wrappers. Trade-off — `sudo` для USB-
 
 ## Open questions
 
-- **GUI sudo на macOS:** сейчас `sudo cargo run -p romraider-gui --features ecu-tools` —
+- **GUI sudo на macOS:** сейчас `sudo cargo run -p tuneforge-gui --features ecu-tools` —
   ugly UX, но простое и работает. Долгосрочная альтернатива — отдельный
   helper-binary с правами + IPC. Решить когда будет реальный distribution
   (bundle/app-image).

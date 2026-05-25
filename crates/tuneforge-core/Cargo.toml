@@ -1,0 +1,16 @@
+[package]
+name        = "tuneforge-core"
+version     = { workspace = true }
+edition     = { workspace = true }
+rust-version = { workspace = true }
+license     = { workspace = true }
+authors     = { workspace = true }
+description = "Shared primitives (addresses, endianness, errors) for tuneforge"
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+serde     = { workspace = true }
+byteorder = { workspace = true }

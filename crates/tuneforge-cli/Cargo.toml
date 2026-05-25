@@ -1,0 +1,37 @@
+[package]
+name        = "tuneforge-cli"
+version     = { workspace = true }
+edition     = { workspace = true }
+rust-version = { workspace = true }
+license     = { workspace = true }
+authors     = { workspace = true }
+description = "Headless CLI for tuneforge (debug I/O, dump ROM, smoke test logger)"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "tuneforge"
+path = "src/main.rs"
+
+[dependencies]
+tuneforge-core     = { workspace = true }
+tuneforge-defs     = { workspace = true }
+tuneforge-io       = { workspace = true, features = ["serial", "tactrix"] }
+tuneforge-protocol = { workspace = true, features = ["ssm"] }
+tuneforge-rom      = { workspace = true }
+tuneforge-logger   = { workspace = true }
+# Kernel-upload путь для дампа ROM — GPL-3.0, opt-in через `--features kernel-upload`.
+tuneforge-kernel   = { workspace = true, optional = true }
+
+clap     = { workspace = true }
+anyhow   = { workspace = true }
+tracing  = { workspace = true }
+tracing-subscriber = { workspace = true }
+serialport = { workspace = true }
+
+[features]
+default = []
+# Подключает `tuneforge-kernel` (GPL-3.0) и добавляет `dump-rom-kernel` subcommand.
+# Когда феча выключена, CLI остаётся "чистым" — kernel-upload даже не компилируется.
+kernel-upload = ["dep:tuneforge-kernel", "tuneforge-kernel/sh7058", "tuneforge-kernel/sh7055"]

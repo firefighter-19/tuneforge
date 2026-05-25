@@ -1,6 +1,6 @@
-# romraider-rs
+# tuneforge
 
-[![CI](https://github.com/firefighter-19/romraider-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/firefighter-19/romraider-rs/actions/workflows/ci.yml)
+[![CI](https://github.com/firefighter-19/tuneforge/actions/workflows/ci.yml/badge.svg)](https://github.com/firefighter-19/tuneforge/actions/workflows/ci.yml)
 [![License: GPL-2.0+](https://img.shields.io/badge/License-GPL--2.0%2B-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org/)
 
@@ -26,7 +26,7 @@
 > Tactrix; код её мы не используем, но функционально воспроизводим dump-flow
 > (UDS sequence, seed/key, encrypted kernel) на основе reverse-engineering-а
 > capture-ов EcuFlash-сессий. Этот репозиторий распространяется под GPL v2.0+
-> (модуль `romraider-kernel` — под GPL v3.0+, изолированно). См.
+> (модуль `tuneforge-kernel` — под GPL v3.0+, изолированно). См.
 > [Происхождение и лицензия](#происхождение-и-лицензия).
 
 ## Что работает прямо сейчас
@@ -34,7 +34,7 @@
 Подтверждено на живой машине (2007 USDM Subaru Forester XT, ROM `4E42504007`,
 Tactrix Openport 2.0 на Mac ARM):
 
-- ✅ **SSM2 ECU-init по K-Line** через `romraider-cli ssm-init --tactrix`
+- ✅ **SSM2 ECU-init по K-Line** через `tuneforge-cli ssm-init --tactrix`
 - ✅ **GUI-редактор**: открыть `forester-xt-2007-4E42504007.bin` + `ecu_defs.xml`,
   отредактировать Target Boost / Wastegate Duty, авто-fix checksum, Save As;
   diff двух ROM-ов с heatmap, undo/redo, Changes-since-open, tooltip с raw/Δ
@@ -43,7 +43,7 @@ Tactrix Openport 2.0 на Mac ARM):
 - ✅ **Полный 1 МБ ROM-dump через UDS-over-CAN** за ~44 с — byte-for-byte
   совпадает с дампом EcuFlash:
   ```bash
-  sudo cargo run -p romraider-cli --features kernel-upload -- \
+  sudo cargo run -p tuneforge-cli --features kernel-upload -- \
       dump-rom-can --output /tmp/forester-mac-dump.bin
   ```
 
@@ -62,34 +62,34 @@ Tactrix Openport 2.0 на Mac ARM):
 
 | Crate                | Назначение                                                              |
 | -------------------- | ----------------------------------------------------------------------- |
-| `romraider-core`     | Общие типы: адреса, endian, ошибки, утилиты для байтов                  |
-| `romraider-io`       | Транспорты: serial, J2534, ELM327, **Tactrix Openport 2.0 (rusb, K-Line + CAN)** |
-| `romraider-protocol` | Диалекты: SSM, OBD-II, DS2, NCS, RamTune                                 |
-| `romraider-defs`     | Парсер XML-определений ECU и логгера                                     |
-| `romraider-rom`      | Образ ROM, таблицы 1D/2D/3D, scaling/формулы, патчер контрольных сумм    |
-| `romraider-logger`   | Backend логгера, подписки, datalog-файлы, внешние датчики                |
-| `romraider-cli`      | Headless CLI — отладка, smoke-test, **dump-rom, ssm-init, peek-vin** и т.п. |
-| `romraider-gui`      | GUI на `eframe`/`egui` (редактор + логгер + diff/heatmap/undo/changes)   |
-| `romraider-kernel`   | (opt-in, GPL-3.0) Subaru SH7058 kernel-upload + UDS-over-CAN dump-flow   |
+| `tuneforge-core`     | Общие типы: адреса, endian, ошибки, утилиты для байтов                  |
+| `tuneforge-io`       | Транспорты: serial, J2534, ELM327, **Tactrix Openport 2.0 (rusb, K-Line + CAN)** |
+| `tuneforge-protocol` | Диалекты: SSM, OBD-II, DS2, NCS, RamTune                                 |
+| `tuneforge-defs`     | Парсер XML-определений ECU и логгера                                     |
+| `tuneforge-rom`      | Образ ROM, таблицы 1D/2D/3D, scaling/формулы, патчер контрольных сумм    |
+| `tuneforge-logger`   | Backend логгера, подписки, datalog-файлы, внешние датчики                |
+| `tuneforge-cli`      | Headless CLI — отладка, smoke-test, **dump-rom, ssm-init, peek-vin** и т.п. |
+| `tuneforge-gui`      | GUI на `eframe`/`egui` (редактор + логгер + diff/heatmap/undo/changes)   |
+| `tuneforge-kernel`   | (opt-in, GPL-3.0) Subaru SH7058 kernel-upload + UDS-over-CAN dump-flow   |
 
 ## Сборка
 
 ```bash
 cargo build --workspace                            # без kernel-upload
 cargo test  --workspace                            # ~175 тестов
-cargo run   -p romraider-cli -- --help             # headless-команды
-cargo run   -p romraider-gui                       # редактор + логгер
+cargo run   -p tuneforge-cli -- --help             # headless-команды
+cargo run   -p tuneforge-gui                       # редактор + логгер
 ```
 
 Для **ROM-dump через Tactrix** требуется opt-in feature и `sudo` (libusb
 bulk-IO на macOS):
 
 ```bash
-sudo cargo run -p romraider-cli --features kernel-upload -- \
+sudo cargo run -p tuneforge-cli --features kernel-upload -- \
     dump-rom-can --output ./my-dump.bin
 ```
 
-`--features kernel-upload` подключает crate `romraider-kernel` (GPL-3.0)
+`--features kernel-upload` подключает crate `tuneforge-kernel` (GPL-3.0)
 к CLI. По умолчанию он отключён — workspace остаётся под GPL-2.0+ если
 этот код не используется.
 
@@ -114,7 +114,7 @@ sudo cargo run -p romraider-cli --features kernel-upload -- \
 (`Copyright (C) 2006-2022 RomRaider.com` — см. заголовки исходников апстрима).
 Условия распространения совпадают с оригиналом: **GNU GPL версии 2 или новее**.
 
-**Отдельно — crate `romraider-kernel`** (kernel-upload и UDS-dump): под **GPL v3.0+**,
+**Отдельно — crate `tuneforge-kernel`** (kernel-upload и UDS-dump): под **GPL v3.0+**,
 поскольку использует наработки от GPL-3 проектов
 ([`fenugrec/nisprog`](https://github.com/fenugrec/nisprog),
 [`fenugrec/npkern`](https://github.com/fenugrec/npkern)).

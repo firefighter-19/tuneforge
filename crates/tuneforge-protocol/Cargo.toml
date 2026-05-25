@@ -1,0 +1,28 @@
+[package]
+name        = "tuneforge-protocol"
+version     = { workspace = true }
+edition     = { workspace = true }
+rust-version = { workspace = true }
+license     = { workspace = true }
+authors     = { workspace = true }
+description = "ECU diagnostic protocols (SSM, OBD-II, DS2, NCS) for tuneforge"
+
+[lints]
+workspace = true
+
+[dependencies]
+tuneforge-core = { workspace = true }
+tuneforge-io   = { workspace = true }
+
+thiserror = { workspace = true }
+tracing   = { workspace = true }
+
+[dev-dependencies]
+tuneforge-io = { workspace = true, features = ["mock"] }
+
+[features]
+default = ["ssm", "obd2"]
+ssm   = []
+obd2  = []
+ds2   = []
+ncs   = []

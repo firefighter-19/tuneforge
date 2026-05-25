@@ -1,0 +1,42 @@
+[package]
+name        = "tuneforge-gui"
+version     = { workspace = true }
+edition     = { workspace = true }
+rust-version = { workspace = true }
+license     = { workspace = true }
+authors     = { workspace = true }
+description = "egui-based GUI for tuneforge (editor + logger)"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "tuneforge-gui"
+path = "src/main.rs"
+
+[dependencies]
+tuneforge-core     = { workspace = true }
+tuneforge-defs     = { workspace = true }
+tuneforge-io       = { workspace = true, features = ["serial", "tactrix"] }
+tuneforge-rom      = { workspace = true }
+tuneforge-logger   = { workspace = true }
+
+# ECU-tools panel (Slice 26): «Read ROM from ECU» через kernel-upload + UDS/CAN.
+# Изолирован за feature-flag-ом `ecu-tools`, чтобы GUI по умолчанию оставался
+# под GPL-2.0+ (tuneforge-kernel — GPL-3.0+).
+tuneforge-kernel   = { workspace = true, features = ["sh7058"], optional = true }
+tuneforge-protocol = { workspace = true, optional = true }
+
+eframe       = { workspace = true }
+egui         = { workspace = true }
+egui_extras  = { workspace = true }
+egui_plot    = { workspace = true }
+rfd          = { workspace = true }
+
+tracing            = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow             = { workspace = true }
+
+[features]
+default   = []
+ecu-tools = ["dep:tuneforge-kernel", "dep:tuneforge-protocol"]

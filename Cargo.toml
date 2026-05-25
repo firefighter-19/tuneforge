@@ -1,27 +1,27 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/romraider-core",
-    "crates/romraider-io",
-    "crates/romraider-protocol",
-    "crates/romraider-defs",
-    "crates/romraider-rom",
-    "crates/romraider-logger",
-    "crates/romraider-cli",
-    "crates/romraider-gui",
+    "crates/tuneforge-core",
+    "crates/tuneforge-io",
+    "crates/tuneforge-protocol",
+    "crates/tuneforge-defs",
+    "crates/tuneforge-rom",
+    "crates/tuneforge-logger",
+    "crates/tuneforge-cli",
+    "crates/tuneforge-gui",
     # Slice 21: kernel-upload path для Subaru SH7055/SH7058 ROM dump.
     # Лицензирован под GPL-3.0-or-later (отдельно от workspace default), потому
     # что прямой port из GPL-3.0 апстрима (fenugrec/nisprog, fenugrec/npkern).
-    "crates/romraider-kernel",
+    "crates/tuneforge-kernel",
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.78"
 license = "GPL-2.0-or-later"
-authors = ["romraider-rs contributors"]
-repository = "https://github.com/RomRaider/romraider-rs"
+authors = ["tuneforge contributors"]
+repository = "https://github.com/RomRaider/tuneforge"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "warn"
@@ -94,13 +94,13 @@ incompatible_msrv               = "allow"  # accept newer stdlib methods, bumpin
 
 [workspace.dependencies]
 # Internal crates — keep paths so a single `cargo build` builds the whole tree.
-romraider-core     = { path = "crates/romraider-core" }
-romraider-io       = { path = "crates/romraider-io" }
-romraider-protocol = { path = "crates/romraider-protocol" }
-romraider-defs     = { path = "crates/romraider-defs" }
-romraider-rom      = { path = "crates/romraider-rom" }
-romraider-logger   = { path = "crates/romraider-logger" }
-romraider-kernel   = { path = "crates/romraider-kernel" }
+tuneforge-core     = { path = "crates/tuneforge-core" }
+tuneforge-io       = { path = "crates/tuneforge-io" }
+tuneforge-protocol = { path = "crates/tuneforge-protocol" }
+tuneforge-defs     = { path = "crates/tuneforge-defs" }
+tuneforge-rom      = { path = "crates/tuneforge-rom" }
+tuneforge-logger   = { path = "crates/tuneforge-logger" }
+tuneforge-kernel   = { path = "crates/tuneforge-kernel" }
 
 # Errors / logging
 thiserror   = "2"

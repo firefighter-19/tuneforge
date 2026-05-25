@@ -61,7 +61,7 @@ jobs:
       - name: Build with full features
         run: |
           cargo build --workspace \
-            --features romraider-cli/kernel-upload,romraider-gui/ecu-tools \
+            --features tuneforge-cli/kernel-upload,tuneforge-gui/ecu-tools \
             --all-targets
 
       - name: Run tests
@@ -72,8 +72,8 @@ jobs:
       # вообще запускается.
       - name: CLI smoke-test (--help)
         run: |
-          cargo run -p romraider-cli --quiet -- --help > /dev/null
-          cargo run -p romraider-cli --quiet --features kernel-upload -- --help > /dev/null
+          cargo run -p tuneforge-cli --quiet -- --help > /dev/null
+          cargo run -p tuneforge-cli --quiet --features kernel-upload -- --help > /dev/null
 
   # Mac build — primary user target (Mac ARM). Линковочный граф отличается
   # от Linux: нет libudev-sys, но есть Cocoa/CoreFoundation крейты через
@@ -104,7 +104,7 @@ jobs:
       - name: Build with full features
         run: |
           cargo build --workspace \
-            --features romraider-cli/kernel-upload,romraider-gui/ecu-tools \
+            --features tuneforge-cli/kernel-upload,tuneforge-gui/ecu-tools \
             --all-targets
 
       - name: Run tests
@@ -112,8 +112,8 @@ jobs:
 
       - name: CLI smoke-test (--help)
         run: |
-          cargo run -p romraider-cli --quiet -- --help > /dev/null
-          cargo run -p romraider-cli --quiet --features kernel-upload -- --help > /dev/null
+          cargo run -p tuneforge-cli --quiet -- --help > /dev/null
+          cargo run -p tuneforge-cli --quiet --features kernel-upload -- --help > /dev/null
 
   # Lint gate — required. Кодовая база вычищена под `-D warnings` с
   # workspace-уровневой allow-list для pedantic-нюансов нерелевантных
@@ -149,7 +149,7 @@ jobs:
       - name: Clippy (full features)
         run: |
           cargo clippy --workspace --all-targets \
-            --features romraider-cli/kernel-upload,romraider-gui/ecu-tools \
+            --features tuneforge-cli/kernel-upload,tuneforge-gui/ecu-tools \
             -- -D warnings
 
       - name: rustfmt check

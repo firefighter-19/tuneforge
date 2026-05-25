@@ -1,0 +1,20 @@
+[package]
+name        = "tuneforge-defs"
+version     = { workspace = true }
+edition     = { workspace = true }
+rust-version = { workspace = true }
+license     = { workspace = true }
+authors     = { workspace = true }
+description = "Parser for RomRaider ECU and logger XML definitions"
+
+[lints]
+workspace = true
+
+[dependencies]
+tuneforge-core = { workspace = true }
+
+thiserror  = { workspace = true }
+tracing    = { workspace = true }
+serde      = { workspace = true }
+quick-xml  = { workspace = true }
+meval      = { workspace = true }
