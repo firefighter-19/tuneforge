@@ -27,6 +27,12 @@ pub mod uds;
 #[cfg(feature = "ssm")]
 pub mod subaru;
 
+/// Унифицированный ECU-клиент: `EcuClient` trait + `KLineSsmClient` / `CanSsmClient`
+/// impls. Слайс 25 — позволяет CLI и GUI работать через единый интерфейс,
+/// диспатчая выбор протокола runtime-флагом (`--protocol auto|kline|can|…`).
+#[cfg(feature = "ssm")]
+pub mod client;
+
 #[cfg(feature = "ds2")]
 pub mod ds2;
 
