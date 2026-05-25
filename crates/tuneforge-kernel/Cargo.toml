@@ -10,6 +10,11 @@ rust-version = { workspace = true }
 license      = "GPL-3.0-or-later"
 authors      = { workspace = true }
 description  = "Kernel-upload path для дампа ROM с Subaru SH7055/SH7058 ECU (port из nisprog, GPL-3.0)"
+repository  = { workspace = true }
+homepage    = { workspace = true }
+readme      = { workspace = true }
+keywords    = { workspace = true }
+categories  = { workspace = true }
 
 [lints]
 workspace = true

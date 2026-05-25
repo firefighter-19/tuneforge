@@ -126,11 +126,11 @@ impl eframe::App for App {
                     let write_btn = egui::Button::new("Write ROM to ECU…");
                     let erase_btn = egui::Button::new("Erase ROM");
                     ui.add_enabled(false, write_btn).on_disabled_hover_text(
-                        "Flash-write не реализован: для безопасной разработки\n\
-                             требуется donor-ECU. Текущая стратегия проекта — read-only.",
+                        "Flash-write is not implemented: safe development requires\n\
+                             a donor ECU. Project strategy is read-only for now.",
                     );
                     ui.add_enabled(false, erase_btn).on_disabled_hover_text(
-                        "Erase не реализован — см. tooltip выше про donor-ECU.",
+                        "Erase is not implemented — see tooltip above about donor ECU.",
                     );
                 });
                 ui.separator();

@@ -28,6 +28,51 @@ Combines two things that have historically required a Windows VM on Mac:
 > repository is distributed under GPL v2.0+; the `tuneforge-kernel` crate is
 > isolated under GPL v3.0+. See [Origin and license](#origin-and-license).
 
+## Install
+
+**Requires:** Rust stable (1.78+), macOS ARM (M1+) recommended,
+[`libusb`](https://libusb.info/) — on macOS:
+
+```bash
+brew install libusb pkg-config
+```
+
+**Install from git** (compiles from source, ~2 min on M1):
+
+```bash
+# Headless CLI:
+cargo install --git https://github.com/firefighter-19/tuneforge tuneforge-cli
+
+# CLI + ROM dump over CAN (opt-in GPL-3.0 kernel-upload path):
+cargo install --git https://github.com/firefighter-19/tuneforge tuneforge-cli \
+    --features kernel-upload
+
+# GUI editor + logger:
+cargo install --git https://github.com/firefighter-19/tuneforge tuneforge-gui
+
+# GUI + ECU-tools panel (Read ROM / DTC / Freeze Frame modals):
+cargo install --git https://github.com/firefighter-19/tuneforge tuneforge-gui \
+    --features ecu-tools
+```
+
+After install, binaries land in `~/.cargo/bin/`:
+
+- `tuneforge` — headless CLI
+- `tuneforge-gui` — desktop app
+
+**macOS sudo note for hardware I/O:** Tactrix Openport requires `sudo` for
+libusb bulk access (macOS limitation for unclaimed USB devices without a
+kext). E.g.:
+
+```bash
+sudo tuneforge ssm-init --tactrix
+sudo tuneforge dump-rom-can --output ./dump.bin
+sudo tuneforge-gui  # only required if you'll use ECU-tools modals
+```
+
+**Pre-built binaries** (no Rust toolchain needed) and `brew install` —
+planned for v0.4.0 via [`cargo-dist`](https://opensource.axo.dev/cargo-dist/).
+
 ## What works today
 
 Verified on a live car (2007 USDM Subaru Forester XT, ROM `4E42504007`,

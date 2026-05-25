@@ -545,9 +545,7 @@ impl EditorPanel {
             }
             ui.separator();
             ui.checkbox(&mut self.heatmap_enabled, "Heatmap")
-                .on_hover_text(
-                "Раскрасить ячейки cool→warm по значению (только в режиме Values без compare ROM)",
-            );
+                .on_hover_text("Color cells cool→warm by value (Values mode only, no compare ROM)");
         });
 
         // Вторая строка: compare-ROM + display-mode toggle.

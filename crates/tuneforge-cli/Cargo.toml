@@ -6,6 +6,11 @@ rust-version = { workspace = true }
 license     = { workspace = true }
 authors     = { workspace = true }
 description = "Headless CLI for tuneforge (debug I/O, dump ROM, smoke test logger)"
+repository  = { workspace = true }
+homepage    = { workspace = true }
+readme      = { workspace = true }
+keywords    = { workspace = true }
+categories  = ["hardware-support", "command-line-utilities"]
 
 [lints]
 workspace = true

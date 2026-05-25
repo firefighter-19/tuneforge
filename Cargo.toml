@@ -22,6 +22,15 @@ rust-version = "1.78"
 license = "GPL-2.0-or-later"
 authors = ["tuneforge contributors"]
 repository = "https://github.com/firefighter-19/tuneforge"
+homepage = "https://github.com/firefighter-19/tuneforge"
+# `readme` ссылается на workspace-level README; путь резолвится относительно
+# manifest-а каждого крейта (т.е. для `crates/tuneforge-cli/Cargo.toml` это
+# `crates/tuneforge-cli/../../README.md` = корневой README).
+readme = "../../README.md"
+# Keywords/categories из официальных списков crates.io — нужны для
+# поиска и rendering-а на сайте если когда-то опубликуем.
+keywords = ["subaru", "ecu", "tuning", "tactrix", "automotive"]
+categories = ["hardware-support"]
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "warn"

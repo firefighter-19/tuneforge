@@ -354,8 +354,8 @@ impl EcuToolsPanel {
                 ui.label("Checking USB…");
             }
             Some(Preflight::NotFound) => {
-                ui.colored_label(egui::Color32::RED, "❌ Tactrix не обнаружен на USB");
-                ui.label("→ воткни кабель и нажми 🔄");
+                ui.colored_label(egui::Color32::RED, "❌ Tactrix not detected on USB");
+                ui.label("→ plug the cable in and click 🔄");
             }
             Some(Preflight::Found(d)) => {
                 let serial = d.serial.as_deref().unwrap_or("?");
@@ -371,11 +371,11 @@ impl EcuToolsPanel {
                 ui.colored_label(
                     egui::Color32::YELLOW,
                     format!(
-                        "⚠️  Tactrix bus={:03} addr={:03} найден, но без strings",
+                        "⚠️  Tactrix bus={:03} addr={:03} found, but string descriptors are unreadable",
                         d.bus_number, d.address
                     ),
                 );
-                ui.label("(скорее всего нужен sudo для USB-claim)");
+                ui.label("(most likely sudo is required for USB-claim)");
             }
             Some(Preflight::UsbError(msg)) => {
                 ui.colored_label(egui::Color32::RED, "❌ USB error:");
@@ -484,9 +484,9 @@ impl EcuToolsPanel {
                 ui.separator();
                 match &self.view_info_state {
                     ViewInfoState::Prep => {
-                        ui.label("Опросить ECU через OBD-II (Mode 01/09).");
-                        ui.label("• Tactrix Openport 2.0 подключён к OBD-II");
-                        ui.label("• Зажигание ON (мотор не обязательно)");
+                        ui.label("Query ECU via OBD-II (Mode 01/09).");
+                        ui.label("• Tactrix Openport 2.0 plugged into OBD-II");
+                        ui.label("• Ignition ON (engine doesn't need to run)");
                         ui.add_space(8.0);
                         let btn = ui.add_enabled(detected, egui::Button::new("▶ Start"));
                         if btn.clicked() {
@@ -495,19 +495,19 @@ impl EcuToolsPanel {
                     }
                     ViewInfoState::Running => {
                         ui.spinner();
-                        ui.label("Опрос ECU…");
+                        ui.label("Querying ECU…");
                     }
                     ViewInfoState::Done { info, rom_id_hex } => {
                         ui.heading("ECU Info");
                         ui.separator();
                         ui.label(format!(
                             "VIN:    {}",
-                            info.vin.as_deref().unwrap_or("(не отдан)")
+                            info.vin.as_deref().unwrap_or("(not reported)")
                         ));
                         ui.label(format!(
                             "CVN:    {}",
                             info.cvn.map_or_else(
-                                || "(не отдан)".into(),
+                                || "(not reported)".into(),
                                 |c| format!("{:02X} {:02X} {:02X} {:02X}", c[0], c[1], c[2], c[3])
                             )
                         ));
@@ -519,7 +519,7 @@ impl EcuToolsPanel {
                         ));
                     }
                     ViewInfoState::Error(msg) => {
-                        ui.colored_label(egui::Color32::RED, "Ошибка:");
+                        ui.colored_label(egui::Color32::RED, "Error:");
                         ui.label(msg);
                         if msg.contains("Access")
                             || msg.contains("denied")
@@ -528,7 +528,7 @@ impl EcuToolsPanel {
                             ui.add_space(6.0);
                             ui.colored_label(
                                 egui::Color32::YELLOW,
-                                "Tactrix требует root для USB-bulk. Запусти GUI с sudo:",
+                                "Tactrix requires root for USB-bulk. Run the GUI with sudo:",
                             );
                             ui.code("sudo cargo run -p tuneforge-gui --features ecu-tools");
                         }
@@ -581,15 +581,15 @@ impl EcuToolsPanel {
         ui.separator();
         let detected = self.render_preflight_strip(ui);
         ui.separator();
-        ui.label("Перед стартом проверь:");
-        ui.label("  1. Tactrix Openport 2.0 подключён к OBD-II");
-        ui.label("  2. Зажигание в положении ON (мотор НЕ заводить)");
-        ui.label("  3. Машина не движется, нагрузка минимальная");
-        ui.label("  4. GUI запущен с sudo (USB-bulk требует root на macOS)");
+        ui.label("Before starting, verify:");
+        ui.label("  1. Tactrix Openport 2.0 is plugged into OBD-II");
+        ui.label("  2. Ignition is ON (do NOT start the engine)");
+        ui.label("  3. Vehicle is stationary, minimal electrical load");
+        ui.label("  4. GUI was launched with sudo (USB-bulk requires root on macOS)");
         ui.add_space(6.0);
-        ui.label("Процесс займёт ~45 секунд. Во время дампа:");
-        ui.label("  • ECU перейдёт в programming-mode (двигатель завести нельзя)");
-        ui.label("  • После окончания — выключи зажигание, подожди 10с, снова ON");
+        ui.label("Process takes ~45 seconds. During the dump:");
+        ui.label("  • ECU enters programming-mode (engine cannot be started)");
+        ui.label("  • When done — turn ignition OFF, wait 10s, then ON again");
         ui.add_space(10.0);
         let btn = ui.add_enabled(detected, egui::Button::new("▶ Start"));
         if btn.clicked() {
@@ -683,10 +683,10 @@ impl EcuToolsPanel {
             ui.label(format!("CVN: {cvn}"));
         }
         ui.add_space(10.0);
-        ui.label("⚠️  Не забудь:");
-        ui.label("  • Выключить зажигание");
-        ui.label("  • Подождать 10 секунд (ECU outputs reset)");
-        ui.label("  • Снова повернуть в ON чтобы выйти из programming-mode");
+        ui.label("⚠️  Don't forget to:");
+        ui.label("  • Turn ignition OFF");
+        ui.label("  • Wait 10 seconds (ECU outputs reset)");
+        ui.label("  • Turn ignition ON again to exit programming-mode");
         ui.add_space(8.0);
         if ui.button("💾 Save As…").clicked() {
             if let Some(path) = rfd::FileDialog::new()
@@ -723,9 +723,9 @@ impl EcuToolsPanel {
             ui.add_space(6.0);
             ui.colored_label(
                 egui::Color32::YELLOW,
-                "USB-bulk доступ к Tactrix требует root на macOS.",
+                "USB-bulk access to Tactrix requires root on macOS.",
             );
-            ui.label("Запусти GUI так:");
+            ui.label("Launch the GUI like this:");
             ui.code("sudo cargo run -p tuneforge-gui --features ecu-tools");
         }
 
@@ -756,12 +756,14 @@ impl EcuToolsPanel {
                 let state = std::mem::take(&mut self.dtc_state);
                 let next = match state {
                     DtcState::Prep => {
-                        ui.label("Прочитать DTC коды (Diagnostic Trouble Codes):");
-                        ui.label("  • Mode 0x03 — Stored (confirmed) codes, эти зажигают MIL");
-                        ui.label("  • Mode 0x07 — Pending codes (одиночные fault events)");
-                        ui.label("  • Mode 0x0A — Permanent (ECU помнит после очистки)");
+                        ui.label("Read DTC codes (Diagnostic Trouble Codes):");
+                        ui.label(
+                            "  • Mode 0x03 — Stored (confirmed) codes, these light up the MIL",
+                        );
+                        ui.label("  • Mode 0x07 — Pending codes (single fault events)");
+                        ui.label("  • Mode 0x0A — Permanent (ECU remembers across clear)");
                         ui.add_space(8.0);
-                        ui.label("Read-only — никаких изменений в ECU.");
+                        ui.label("Read-only — no changes to the ECU.");
                         ui.add_space(6.0);
                         let btn = ui.add_enabled(detected, egui::Button::new("▶ Read DTCs"));
                         if btn.clicked() {
@@ -802,9 +804,9 @@ impl EcuToolsPanel {
                             if ui
                                 .add_enabled(any_codes, egui::Button::new("🗑 Clear DTCs"))
                                 .on_hover_text(
-                                    "Mode 0x04: чистит Stored + Pending + Freeze Frame.\n\
-                                     Permanent DTCs (Mode 0x0A) не стираются — те уходят\n\
-                                     только после прохождения drive-cycle тестов.",
+                                    "Mode 0x04: clears Stored + Pending + Freeze Frame.\n\
+                                     Permanent DTCs (Mode 0x0A) are not erased — they only\n\
+                                     clear after passing drive-cycle readiness tests.",
                                 )
                                 .clicked()
                             {
@@ -833,19 +835,19 @@ impl EcuToolsPanel {
                             .show(ui, |ui| {
                                 ui.colored_label(
                                     egui::Color32::YELLOW,
-                                    "⚠️  Clear DTCs (Mode 0x04) сделает следующее:",
+                                    "⚠️  Clear DTCs (Mode 0x04) will:",
                                 );
-                                ui.label("  • Удалит Stored + Pending DTCs из памяти ECU");
-                                ui.label("  • Сбросит Freeze Frame snapshot");
-                                ui.label("  • Обнулит O2-monitor / readiness flags");
-                                ui.label("  • НЕ удалит Permanent DTCs (Mode 0x0A) —");
-                                ui.label("    те уходят только после нескольких drive-cycle");
+                                ui.label("  • Erase Stored + Pending DTCs from ECU memory");
+                                ui.label("  • Reset the Freeze Frame snapshot");
+                                ui.label("  • Reset O2-monitor / readiness flags");
+                                ui.label("  • NOT erase Permanent DTCs (Mode 0x0A) —");
+                                ui.label("    those only clear after several drive-cycles");
                                 ui.add_space(4.0);
                                 ui.colored_label(
                                     egui::Color32::LIGHT_GRAY,
-                                    "Полезно после физических фиксов чтобы ECU начал \
-                                     заново учить trim/timing, а не использовал старые \
-                                     learned corrections.",
+                                    "Useful after physical repairs so the ECU relearns \
+                                     trim/timing instead of relying on stale learned \
+                                     corrections.",
                                 );
                             });
                         ui.add_space(6.0);
@@ -878,7 +880,7 @@ impl EcuToolsPanel {
                         DtcState::Clearing
                     }
                     DtcState::Error(msg) => {
-                        ui.colored_label(egui::Color32::RED, "Ошибка:");
+                        ui.colored_label(egui::Color32::RED, "Error:");
                         ui.label(&msg);
                         ui.add_space(6.0);
                         if ui.button("Retry").clicked() {
@@ -931,15 +933,15 @@ impl EcuToolsPanel {
                 let state = std::mem::take(&mut self.freeze_state);
                 let next = match state {
                     FreezeState::Prep => {
-                        ui.label("Прочитать **Freeze Frame** — snapshot всех ECU-параметров");
-                        ui.label("**в момент** когда был зафиксирован triggering DTC.");
+                        ui.label("Read **Freeze Frame** — snapshot of all ECU parameters");
+                        ui.label("**at the moment** the triggering DTC was captured.");
                         ui.add_space(6.0);
-                        ui.label("Что включает:");
-                        ui.label("  • DTC код который вызвал snapshot");
-                        ui.label("  • RPM, MAP, Coolant, IAT, MAF, TPS на момент fault");
-                        ui.label("  • Все Mode 01 PIDs которые ECU поддерживает в FF");
+                        ui.label("Includes:");
+                        ui.label("  • The DTC code that triggered the snapshot");
+                        ui.label("  • RPM, MAP, Coolant, IAT, MAF, TPS at the fault moment");
+                        ui.label("  • All Mode 01 PIDs the ECU supports in freeze frames");
                         ui.add_space(6.0);
-                        ui.label("Read-only — никаких изменений в ECU.");
+                        ui.label("Read-only — no changes to the ECU.");
                         ui.add_space(8.0);
                         let btn = ui.add_enabled(detected, egui::Button::new("▶ Read Freeze Frame"));
                         if btn.clicked() {
@@ -951,7 +953,7 @@ impl EcuToolsPanel {
                     }
                     FreezeState::Running => {
                         ui.spinner();
-                        ui.label("Reading freeze frame… (~3-5 секунд, опрос ~10 PIDs)");
+                        ui.label("Reading freeze frame… (~3-5 seconds, ~10 PIDs polled)");
                         FreezeState::Running
                     }
                     FreezeState::Done(ff) => {
@@ -971,7 +973,7 @@ impl EcuToolsPanel {
                         } else {
                             ui.colored_label(
                                 egui::Color32::GRAY,
-                                "ECU не имеет stored Freeze Frame — нет stored DTC.",
+                                "ECU has no stored Freeze Frame — no stored DTC.",
                             );
                         }
                         if has_dtc {
@@ -983,7 +985,7 @@ impl EcuToolsPanel {
                             ui.add_space(4.0);
                             if ff.values.is_empty() {
                                 ui.weak(
-                                    "  (ECU не вернул параметров — Mode 02 ограничен на этой firmware)",
+                                    "  (ECU returned no parameters — Mode 02 is limited on this firmware)",
                                 );
                             } else {
                                 egui::Grid::new("freeze_grid")
@@ -1015,7 +1017,7 @@ impl EcuToolsPanel {
                         }
                     }
                     FreezeState::Error(msg) => {
-                        ui.colored_label(egui::Color32::RED, "Ошибка:");
+                        ui.colored_label(egui::Color32::RED, "Error:");
                         ui.label(&msg);
                         ui.add_space(6.0);
                         if ui.button("Retry").clicked() {

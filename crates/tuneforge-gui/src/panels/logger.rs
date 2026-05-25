@@ -338,7 +338,7 @@ impl LoggerPanel {
                     .max_height(260.0)
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        ui.label(egui::RichText::new("RAW (читаются с ECU):").strong());
+                        ui.label(egui::RichText::new("RAW (read from ECU):").strong());
                         for p in SUBARU_SSM_PARAMS {
                             let mut on = self.selected_params.contains(p.name);
                             let label = format!("{} ({}) [{}]", p.name, p.units, p.id);

@@ -29,6 +29,51 @@
 > (модуль `tuneforge-kernel` — под GPL v3.0+, изолированно). См.
 > [Происхождение и лицензия](#происхождение-и-лицензия).
 
+## Установка
+
+**Требуется:** Rust stable (1.78+), macOS ARM (M1+) рекомендуется,
+[`libusb`](https://libusb.info/) — на macOS:
+
+```bash
+brew install libusb pkg-config
+```
+
+**Установка из git** (компилируется из исходников, ~2 мин на M1):
+
+```bash
+# Headless CLI:
+cargo install --git https://github.com/firefighter-19/tuneforge tuneforge-cli
+
+# CLI + ROM dump через CAN (opt-in GPL-3.0 kernel-upload):
+cargo install --git https://github.com/firefighter-19/tuneforge tuneforge-cli \
+    --features kernel-upload
+
+# GUI редактор + логгер:
+cargo install --git https://github.com/firefighter-19/tuneforge tuneforge-gui
+
+# GUI + ECU-tools panel (модалки Read ROM / DTC / Freeze Frame):
+cargo install --git https://github.com/firefighter-19/tuneforge tuneforge-gui \
+    --features ecu-tools
+```
+
+После установки бинари будут в `~/.cargo/bin/`:
+
+- `tuneforge` — headless CLI
+- `tuneforge-gui` — desktop приложение
+
+**macOS sudo note для работы с железом:** Tactrix Openport требует `sudo`
+для libusb bulk-доступа (ограничение macOS — unclaimed USB-устройства без
+kext-а нужны root-права). Например:
+
+```bash
+sudo tuneforge ssm-init --tactrix
+sudo tuneforge dump-rom-can --output ./dump.bin
+sudo tuneforge-gui  # только если будешь юзать ECU-tools модалки
+```
+
+**Pre-built бинари** (без Rust toolchain) и `brew install` —
+планируются в v0.4.0 через [`cargo-dist`](https://opensource.axo.dev/cargo-dist/).
+
 ## Что работает прямо сейчас
 
 Подтверждено на живой машине (2007 USDM Subaru Forester XT, ROM `4E42504007`,
