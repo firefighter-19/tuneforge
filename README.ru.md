@@ -29,6 +29,43 @@
 > (модуль `tuneforge-kernel` — под GPL v3.0+, изолированно). См.
 > [Происхождение и лицензия](#происхождение-и-лицензия).
 
+## Скриншоты
+
+> Снято на живой машине (2007 USDM Forester XT, ROM `4E42504007`,
+> Tactrix Openport 2.0 на Mac M1).
+
+**ROM-редактор** — heatmap, подсветка изменённых ячеек, tooltip с raw/real/Δ:
+
+![Editor](docs/screenshots/editor.png)
+
+| Compare ROMs (current vs baseline) | Live SSM3-CAN логгер — engine view |
+|---|---|
+| ![Compare](docs/screenshots/compare.png) | ![Logger engine](docs/screenshots/logger-1.png) |
+
+| Live SSM3-CAN логгер — AVCS / boost view | Freeze Frame (Mode 02) — параметры на момент fault-а |
+|---|---|
+| ![Logger AVCS](docs/screenshots/logger-2.png) | ![Freeze Frame](docs/screenshots/freeze-frame.png) |
+
+**Read ROM через UDS-over-CAN** — multi-phase progress: OBD-II identify →
+SecurityAccess seed/key → encrypted kernel upload → ROM dump loop (~44 с целиком):
+
+| Phase A+B | Phase C | Phase E (done) |
+|---|---|---|
+| ![Phase A/B](docs/screenshots/ecu-dump-rom1.png) | ![Phase C](docs/screenshots/ecu-dump-rom2.png) | ![Phase E](docs/screenshots/ecu-dump-rom3.png) |
+
+## Для чего это нужно
+
+Mac-native инструмента для тюнинга Subaru не существовало. RomRaider (Java)
+не работает на macOS, EcuFlash — Windows-only freeware. Любая
+альтернатива требовала Windows VM или Wine с J2534 DLL — ничего из этого
+я не хотел между Mac-ом и ECU.
+
+Нативный USB-драйвер Tactrix (rusb, без J2534 DLL),
+binary protocol stack (SSM2 / SSM3-CAN / OBD-II / UDS), reverse-engineered
+криптография (Subaru seed/key — Feistel cipher с round-keys которые
+живут в самой прошивке, извлечены из Wireshark capture-ов EcuFlash-сессий)
+и immediate-mode GUI на `egui` — всё в одном Cargo workspace.
+
 ## Установка
 
 **Runtime зависимость:** [`libusb`](https://libusb.info/) — на macOS:
@@ -90,6 +127,41 @@ sudo tuneforge-gui  # только если будешь юзать ECU-tools м
 
 Homebrew tap (`brew install firefighter-19/tap/tuneforge`) — планируется в v0.5.0+.
 
+## Быстрый старт
+
+После установки headless CLI содержит ~20 subcommand-ов. Самые частые:
+
+```bash
+# Probe ECU — проверка железа, печать ROM ID + capability bitmap
+sudo tuneforge ssm-init --tactrix
+
+# OBD-II identifiers — VIN + CVN (без security access)
+sudo tuneforge peek-vin
+sudo tuneforge peek-cvn
+
+# Diagnostic Trouble Codes (Mode 03/07/0A) с SAE-J2012 описаниями
+sudo tuneforge dtc-can
+
+# Freeze Frame (Mode 02) — snapshot параметров на момент fault-а
+sudo tuneforge freeze-frame-can
+
+# Live SSM3-CAN logger — Subaru tuner-grade params (knock, AVCS, AFR, boost)
+sudo tuneforge logger-ssm-can --all --out "./drive-$(date +%F).csv"
+
+# Полный 1 МБ ROM-dump через UDS-over-CAN + kernel-upload
+sudo tuneforge dump-rom-can --output ./my-rom.bin
+
+# Headless ROM-инспекция — значения таблиц + оси, без GUI
+tuneforge inspect-def ./ecu_defs.xml --resolve --rom A8DK100P
+tuneforge read-table ./rom.bin --def ./ecu_defs.xml --rom-id A8DK100P \
+    --table "Target Boost A"
+
+# Открыть desktop-приложение
+sudo tuneforge-gui  # sudo нужен только если будешь юзать ECU-tools panel
+```
+
+`tuneforge --help` показывает все subcommand-ы; `tuneforge <cmd> --help` — флаги конкретной команды.
+
 ## Что работает прямо сейчас
 
 Подтверждено на живой машине (2007 USDM Subaru Forester XT, ROM `4E42504007`,
@@ -110,9 +182,7 @@ Tactrix Openport 2.0 на Mac ARM):
 
 ## Что **не** делает (и пока не будет)
 
-- ❌ **Flash-write в ECU**. Это explicit non-goal. У автора одна машина и нет
-  donor-ECU; риск кирпича превышает пользу. Если когда-то и появится — только
-  на доноре. Kernel-upload пишет **только в RAM**, никакого flash-erase/program.
+- ❌ **Flash-write в ECU**. Это explicit non-goal. У меня нет donor-ECU; риск кирпича превышает пользу. Если когда-то и появится — только на доноре. Kernel-upload пишет **только в RAM**, никакого flash-erase/program.
 - ❌ **Не-Subaru ECU.** Эталон — Java-RomRaider, тестовая машина — Subaru.
 - ❌ **Windows-only paths** (J2534 DLL-emulation, Wine, x86-USB-passthrough)
   — нам интересен именно Mac-native поток.
@@ -133,26 +203,20 @@ Tactrix Openport 2.0 на Mac ARM):
 | `tuneforge-gui`      | GUI на `eframe`/`egui` (редактор + логгер + diff/heatmap/undo/changes)   |
 | `tuneforge-kernel`   | (opt-in, GPL-3.0) Subaru SH7058 kernel-upload + UDS-over-CAN dump-flow   |
 
-## Сборка
+## Разработка
 
 ```bash
-cargo build --workspace                            # без kernel-upload
-cargo test  --workspace                            # ~175 тестов
-cargo run   -p tuneforge-cli -- --help             # headless-команды
-cargo run   -p tuneforge-gui                       # редактор + логгер
-```
-
-Для **ROM-dump через Tactrix** требуется opt-in feature и `sudo` (libusb
-bulk-IO на macOS):
-
-```bash
-sudo cargo run -p tuneforge-cli --features kernel-upload -- \
-    dump-rom-can --output ./my-dump.bin
+git clone https://github.com/firefighter-19/tuneforge && cd tuneforge
+cargo build --workspace                                                  # default features
+cargo build --workspace --features tuneforge-cli/kernel-upload,tuneforge-gui/ecu-tools
+cargo test  --workspace                                                  # 220+ тестов
+cargo clippy --workspace --all-targets -- -D warnings                    # CI gate
+cargo fmt --all --check                                                  # CI gate
 ```
 
 `--features kernel-upload` подключает crate `tuneforge-kernel` (GPL-3.0)
-к CLI. По умолчанию он отключён — workspace остаётся под GPL-2.0+ если
-этот код не используется.
+к CLI; `--features ecu-tools` — к GUI. Оба отключены по умолчанию —
+workspace остаётся под GPL-2.0+ если этот код не используется.
 
 ## Совместимость с оригиналом
 
