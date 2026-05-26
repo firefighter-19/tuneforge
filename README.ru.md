@@ -3,6 +3,8 @@
 [![CI](https://github.com/firefighter-19/tuneforge/actions/workflows/ci.yml/badge.svg)](https://github.com/firefighter-19/tuneforge/actions/workflows/ci.yml)
 [![License: GPL-2.0+](https://img.shields.io/badge/License-GPL--2.0%2B-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org/)
+[![Read the story on dev.to](https://img.shields.io/badge/dev.to-Read%20the%20story-black?logo=devdotto&logoColor=white)](https://dev.to/firefighter19/building-a-mac-native-subaru-ecu-tuning-tool-in-rust-5bg5)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
 **Languages:** [English](README.md) · **Русский**
 
@@ -65,6 +67,8 @@ binary protocol stack (SSM2 / SSM3-CAN / OBD-II / UDS), reverse-engineered
 криптография (Subaru seed/key — Feistel cipher с round-keys которые
 живут в самой прошивке, извлечены из Wireshark capture-ов EcuFlash-сессий)
 и immediate-mode GUI на `egui` — всё в одном Cargo workspace.
+
+> 📝 **Подробная статья:** [Building a Mac-native Subaru ECU tuning tool in Rust](https://dev.to/firefighter19/building-a-mac-native-subaru-ecu-tuning-tool-in-rust-5bg5) на dev.to (англ.) — история, RE seed/key, и полный UDS-over-CAN dump flow по фазам.
 
 ## Установка
 
@@ -230,7 +234,18 @@ workspace остаётся под GPL-2.0+ если этот код не исп�
 
 ## Дорожная карта
 
-См. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+- Архитектура: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- Slice-by-slice progress + планируемая работа: [`PROGRESS.md`](PROGRESS.md)
+- История релизов: [`CHANGELOG.md`](CHANGELOG.md)
+
+## Контрибьютинг
+
+Issues, идеи и PR-ы приветствуются — см. **[`CONTRIBUTING.md`](CONTRIBUTING.md)**
+для build/test/lint workflow, license-isolation policy (GPL-2 vs GPL-3) и
+PR checklist. **ECU compatibility reports** особенно полезны — даже если
+у тебя всё работает, это быстрее строит coverage matrix.
+
+Issue-шаблоны: bug report · feature request · ECU compatibility report.
 
 ## Происхождение и лицензия
 

@@ -1,0 +1,59 @@
+name: Feature request
+description: Suggest a new feature or behavior change
+title: "feat: <short summary>"
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What would you like to see?
+      placeholder: |
+        Headless CLI subcommand `tuneforge analyze <log.csv>` that prints a
+        summary of a drive log: RPM range, peak boost, AFR anomalies,
+        knock-correction events, etc.
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why is this useful?
+      description: What problem does it solve for you?
+      placeholder: |
+        After a drive I currently use ad-hoc awk scripts to extract numbers
+        from the CSV. A built-in summary would replace that and make it
+        easier to share results in issues / compatibility reports.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you've considered
+      placeholder: |
+        - Could be done as an external Python script
+        - Could live in the GUI as a "Drive summary" tab
+    validations:
+      required: false
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Where does this likely live?
+      options:
+        - CLI
+        - GUI
+        - Both
+        - Library crate (parsing / protocol / defs)
+        - Not sure
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: hardware
+    attributes:
+      label: Hardware requirements
+      options:
+        - label: Can be implemented and tested without an ECU connected
+        - label: Requires a Subaru ECU + Tactrix cable for proper testing
+        - label: Requires hardware I don't currently have (e.g. donor ECU, BMW ECU, etc.)

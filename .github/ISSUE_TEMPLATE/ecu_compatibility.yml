@@ -1,0 +1,81 @@
+name: ECU compatibility report
+description: "Tested tuneforge on your car? Tell us what worked / what didn't."
+title: "compat: <year/model/ROM-ID> — <works / partial / fails>"
+labels: ["compatibility"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Even a "doesn't work at all" report is valuable — it builds the
+        compatibility matrix faster. Please don't skip this template
+        because you're not sure something is "a bug" — vehicle-specific
+        ECU behavior usually isn't.
+
+  - type: textarea
+    id: vehicle
+    attributes:
+      label: Vehicle
+      description: Year, market region, model, trim, transmission.
+      placeholder: "2007 USDM Subaru Forester XT, 5MT"
+    validations:
+      required: true
+
+  - type: input
+    id: rom-id
+    attributes:
+      label: ECU ROM ID
+      description: 5-byte ASCII ROM ID, shown by `tuneforge ssm-init --tactrix`.
+      placeholder: "4E42504007"
+    validations:
+      required: true
+
+  - type: input
+    id: mcu
+    attributes:
+      label: ECU MCU (if known)
+      description: e.g. SH7058, SH7055, SH72513. Skip if you don't know.
+      placeholder: "SH7058"
+    validations:
+      required: false
+
+  - type: textarea
+    id: setup
+    attributes:
+      label: Setup
+      value: |
+        - tuneforge version: (`tuneforge --version`)
+        - Cable: Tactrix Openport 2.0 (or other?)
+        - OS: macOS 15.x / Apple Silicon | macOS Intel | Linux | Windows
+    validations:
+      required: true
+
+  - type: textarea
+    id: results
+    attributes:
+      label: What worked / what didn't
+      description: Run through the commands and report success/failure for each.
+      value: |
+        - [ ] `tuneforge tactrix-info` finds the cable
+        - [ ] `tuneforge ssm-init --tactrix` returns ROM ID + capabilities
+        - [ ] `tuneforge ssm-init --tactrix --protocol can` returns ROM ID
+        - [ ] `tuneforge peek-vin` returns the VIN
+        - [ ] `tuneforge dtc-can` returns DTC codes (or "no codes")
+        - [ ] `tuneforge freeze-frame-can` returns a snapshot (or "no DTC")
+        - [ ] `tuneforge logger-ssm-can --all --out test.csv` produces a populated CSV
+        - [ ] `tuneforge dump-rom-can --output test.bin` produces a 1 MiB file
+        - [ ] The dump SHA-256 matches an EcuFlash dump of the same car (if you have one to compare)
+
+        Notes:
+    validations:
+      required: true
+
+  - type: textarea
+    id: outputs
+    attributes:
+      label: Sample outputs / logs
+      description: |
+        Paste output snippets, especially for anything that failed.
+        For dump-rom, the SHA-256 + file size is enough.
+      render: text
+    validations:
+      required: false

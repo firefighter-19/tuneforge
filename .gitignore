@@ -20,3 +20,7 @@ Thumbs.db
 
 # definitions
 /defs/*.xml
+
+# Articles
+/docs/BLOG.md
+/docs/LINKEDIN.md

@@ -3,6 +3,8 @@
 [![CI](https://github.com/firefighter-19/tuneforge/actions/workflows/ci.yml/badge.svg)](https://github.com/firefighter-19/tuneforge/actions/workflows/ci.yml)
 [![License: GPL-2.0+](https://img.shields.io/badge/License-GPL--2.0%2B-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org/)
+[![Read the story on dev.to](https://img.shields.io/badge/dev.to-Read%20the%20story-black?logo=devdotto&logoColor=white)](https://dev.to/firefighter19/building-a-mac-native-subaru-ecu-tuning-tool-in-rust-5bg5)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
 **Languages:** **English** · [Русский](README.ru.md)
 
@@ -64,6 +66,8 @@ binary protocol stack (SSM2 / SSM3-CAN / OBD-II / UDS), reverse-engineered
 cryptography (Subaru seed/key — a Feistel cipher with firmware-resident
 round-keys extracted from Wireshark captures of EcuFlash sessions), and an
 immediate-mode GUI in `egui` — all in one Cargo workspace.
+
+> 📝 **Full write-up:** [Building a Mac-native Subaru ECU tuning tool in Rust](https://dev.to/firefighter19/building-a-mac-native-subaru-ecu-tuning-tool-in-rust-5bg5) on dev.to — the journey, the seed/key reverse-engineering, and the full UDS-over-CAN dump flow phase by phase.
 
 ## Install
 
@@ -233,7 +237,18 @@ is not used.
 
 ## Roadmap
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+- Architecture overview: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- Slice-by-slice progress + planned work: [`PROGRESS.md`](PROGRESS.md)
+- Release history: [`CHANGELOG.md`](CHANGELOG.md)
+
+## Contributing
+
+Issues, ideas, and PRs are welcome — see **[`CONTRIBUTING.md`](CONTRIBUTING.md)**
+for build/test/lint workflow, license-isolation policy (GPL-2 vs GPL-3),
+and PR checklist. **ECU compatibility reports** are particularly useful
+even if everything works on your car — it builds a coverage matrix faster.
+
+Issue templates: bug report · feature request · ECU compatibility report.
 
 ## Origin and license
 

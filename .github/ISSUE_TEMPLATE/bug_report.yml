@@ -1,0 +1,58 @@
+name: Bug report
+description: Something behaves unexpectedly or crashes
+title: "bug: <short summary>"
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: Clear, short description. Include the command you ran or the GUI action you took.
+      placeholder: |
+        Ran `sudo tuneforge dump-rom-can --output rom.bin`. After Phase B (SecurityAccess
+        granted) the kernel handshake hangs for ~30 s then errors out with
+        `KernelError::HandshakeTimeout`.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      placeholder: Dump completes and writes a 1 MiB file.
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Anything that might be relevant.
+      value: |
+        - tuneforge version: (`tuneforge --version`)
+        - Install method: (pre-built binary / `cargo install --git`)
+        - macOS version + chip: (e.g. macOS 15.1 / Apple Silicon M2)
+        - Cable: Tactrix Openport 2.0 (or other?)
+        - Vehicle / ECU ROM ID: (5-byte ASCII, shown by `ssm-init`)
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / output
+      description: |
+        Paste the full output (`RUST_LOG=debug tuneforge …` if reproducible)
+        or attach a Wireshark capture if it's a protocol-level issue.
+      render: text
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: tried
+    attributes:
+      label: Things I tried
+      options:
+        - label: Ignition was ON and the engine state is appropriate for the command (off for dump-rom, on for logger)
+        - label: I tried unplugging/replugging the Tactrix cable
+        - label: I checked that `tuneforge tactrix-info` sees the device

@@ -1,0 +1,11 @@
+# Disable blank issues — push users toward a template so we get the info
+# we actually need on the first round.
+blank_issues_enabled: false
+
+contact_links:
+  - name: Question or general discussion
+    url: https://github.com/firefighter-19/tuneforge/discussions
+    about: "Not a bug or feature request? Start a discussion."
+  - name: dev.to write-up
+    url: https://dev.to/firefighter19/building-a-mac-native-subaru-ecu-tuning-tool-in-rust-5bg5
+    about: "How and why tuneforge was built — read first for context."
