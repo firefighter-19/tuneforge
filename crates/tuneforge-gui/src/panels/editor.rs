@@ -1436,7 +1436,7 @@ fn draw_surface(
     // (выше высота → больше depth → ближе к зрителю).
     quads.sort_by(|a, b| a.1.total_cmp(&b.1));
 
-    let stroke = egui::Stroke::new(0.5, egui::Color32::from_black_alpha(60));
+    let stroke = egui::Stroke::new(0.5_f32, egui::Color32::from_black_alpha(60));
     for (corners, _, color) in quads {
         painter.add(egui::Shape::convex_polygon(corners.to_vec(), color, stroke));
     }
