@@ -16,6 +16,8 @@ use tuneforge_defs::{
 };
 use tuneforge_rom::{encode_cells, subaru_classic, RomImage};
 
+use crate::panels::surface;
+
 #[derive(Default)]
 pub struct EditorPanel {
     rom: Option<RomState>,
@@ -35,6 +37,10 @@ pub struct EditorPanel {
     undo_log: UndoLog,
     /// Открыто ли окно «Changes since open».
     changes_window_open: bool,
+    /// Открыто ли окно 3D-поверхности выбранной карты.
+    surface_window_open: bool,
+    /// Ракурс 3D-поверхности (yaw/pitch).
+    surface_view: surface::SurfaceView,
 }
 
 const MAX_UNDO_HISTORY: usize = 100;
@@ -303,6 +309,7 @@ impl EditorPanel {
         self.handle_shortcuts(ui);
         self.render_status(ui);
         self.render_changes_window(ui.ctx());
+        self.render_surface_window(ui.ctx());
 
         egui::SidePanel::left("editor-sidebar")
             .min_width(220.0)
@@ -409,6 +416,62 @@ impl EditorPanel {
         if save {
             self.save_rom();
         }
+    }
+
+    fn render_surface_window(&mut self, ctx: &egui::Context) {
+        if !self.surface_window_open {
+            return;
+        }
+        let mut open = self.surface_window_open;
+        egui::Window::new("3D surface")
+            .open(&mut open)
+            .default_size([560.0, 480.0])
+            .show(ctx, |ui| self.render_surface_body(ui));
+        self.surface_window_open = open;
+    }
+
+    fn render_surface_body(&mut self, ui: &mut egui::Ui) {
+        let Some((name, z, sx, sy)) = self.selected_surface_data() else {
+            ui.label("Select a 3D table (with axes) to see its surface.");
+            return;
+        };
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(name).strong());
+            ui.label(egui::RichText::new("— drag to rotate").weak());
+            if ui.button("Reset view").clicked() {
+                self.surface_view = surface::SurfaceView::default();
+            }
+        });
+        let (rect, response) = ui.allocate_exact_size(ui.available_size(), egui::Sense::drag());
+        if response.dragged() {
+            let d = response.drag_delta();
+            self.surface_view.yaw += d.x * 0.01;
+            self.surface_view.pitch = (self.surface_view.pitch + d.y * 0.01).clamp(0.15, 1.55);
+        }
+        draw_surface(ui.painter(), rect, &z, sx, sy, self.surface_view);
+    }
+
+    /// Собрать данные выбранной 3D-таблицы: (имя, real-значения Z по строкам,
+    /// `size_x`, `size_y`). `None`, если подходящей 3D-таблицы нет.
+    fn selected_surface_data(&self) -> Option<(String, Vec<f64>, usize, usize)> {
+        let rom_state = self.rom.as_ref()?;
+        let def = self.def.as_ref()?;
+        let rom_id = self.selected_rom_id.as_ref()?;
+        let table_name = self.selected_table_name.as_ref()?;
+        let rom_def = def.roms.iter().find(|r| &r.xml_id == rom_id)?;
+        let table = rom_def.tables.iter().find(|t| &t.name == table_name)?;
+        let sx = table.size_x? as usize;
+        let sy = table.size_y? as usize;
+        if sx < 2 || sy < 2 {
+            return None;
+        }
+        let raw = rom_state.rom.read_table(table).ok()?;
+        if raw.len() != sx * sy {
+            return None;
+        }
+        let scaling = compile_first_scaling(table);
+        let z = raw.iter().map(|&x| to_real(scaling.as_ref(), x)).collect();
+        Some((table_name.clone(), z, sx, sy))
     }
 
     /// Загружен ли ROM (для enable/disable пунктов меню и guard'а).
@@ -576,6 +639,8 @@ impl EditorPanel {
             ui.separator();
             ui.checkbox(&mut self.heatmap_enabled, "Heatmap")
                 .on_hover_text("Color cells cool→warm by value (Values mode only, no compare ROM)");
+            ui.checkbox(&mut self.surface_window_open, "3D surface")
+                .on_hover_text("Show the selected 3D map as a rotatable colored surface");
         });
 
         // Вторая строка: compare-ROM + display-mode toggle.
@@ -1264,6 +1329,119 @@ fn diff_bg(diff: f64, have_base: bool) -> egui::Color32 {
 /// Диапазон для heatmap: scaling.min/max если оба заданы, иначе автоматический
 /// min/max из самих данных. Возвращает `None` если диапазон вырожденный
 /// (все ячейки равны или невалидны) — в этом случае heatmap не рисуется.
+/// Нарисовать 3D-поверхность карты: проекция каждой вершины, заливка квадратов
+/// цветом по нормированной высоте (`heat_color`), отрисовка far→near
+/// (painter's algorithm). Порядок — по средней глубине квадрата; для гладких
+/// карт достаточно, сильно взаимопроникающие квадраты он не разрешает (нужен
+/// был бы z-buffer). Таблица перечитывается каждый кадр — для 15×18 дёшево;
+/// при желании можно кэшировать по `(rom_id, table_name)`.
+fn draw_surface(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    z: &[f64],
+    sx: usize,
+    sy: usize,
+    view: surface::SurfaceView,
+) {
+    if sx < 2 || sy < 2 || z.len() != sx * sy {
+        return;
+    }
+    let pad = 12.0;
+    if rect.width() < 2.0 * pad || rect.height() < 2.0 * pad {
+        return; // окно слишком маленькое — рисовать негде
+    }
+
+    // Диапазон высот берём ТОЛЬКО по конечным значениям: scaling может дать
+    // inf/NaN (напр. `k/x` при нулевой ячейке), и один inf иначе «схлопнул» бы
+    // всю поверхность. Пустой/вырожденный диапазон → рисуем плоскость по центру.
+    let (zmin, zmax) = z
+        .iter()
+        .copied()
+        .filter(|v| v.is_finite())
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| {
+            (lo.min(v), hi.max(v))
+        });
+    let degenerate = !zmin.is_finite() || (zmax - zmin).abs() < f64::EPSILON;
+
+    // Нормированная высота [0,1] на вершину (0.5 для не-конечных/вырожденных) —
+    // используется и для высоты, и для цвета, поэтому inf/NaN и плоские карты
+    // не портят ни геометрию, ни `heat_color`.
+    let norm: Vec<f32> = z
+        .iter()
+        .map(|&v| {
+            if degenerate || !v.is_finite() {
+                0.5
+            } else {
+                (((v - zmin) / (zmax - zmin)) as f32).clamp(0.0, 1.0)
+            }
+        })
+        .collect();
+
+    const HEIGHT: f32 = 0.55;
+    let mut pts: Vec<(egui::Pos2, f32)> = Vec::with_capacity(sx * sy);
+    for j in 0..sy {
+        for i in 0..sx {
+            let gx = i as f32 / (sx - 1) as f32 - 0.5;
+            let gz = j as f32 / (sy - 1) as f32 - 0.5;
+            let gy = (norm[j * sx + i] - 0.5) * HEIGHT;
+            let (px, py, depth) = surface::project(gx, gy, gz, view.yaw, view.pitch);
+            pts.push((egui::pos2(px, py), depth));
+        }
+    }
+
+    // Вписать проекцию в rect (равномерный масштаб, по центру).
+    let (mut minx, mut miny, mut maxx, mut maxy) = (
+        f32::INFINITY,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::NEG_INFINITY,
+    );
+    for (p, _) in &pts {
+        minx = minx.min(p.x);
+        maxx = maxx.max(p.x);
+        miny = miny.min(p.y);
+        maxy = maxy.max(p.y);
+    }
+    let scale = ((rect.width() - 2.0 * pad) / (maxx - minx).max(1e-3))
+        .min((rect.height() - 2.0 * pad) / (maxy - miny).max(1e-3));
+    let cx = rect.center().x - (minx + maxx) * 0.5 * scale;
+    let cy = rect.center().y - (miny + maxy) * 0.5 * scale;
+    let to_screen = |p: egui::Pos2| egui::pos2(p.x * scale + cx, p.y * scale + cy);
+
+    // Квадраты со средней глубиной и цветом по средней нормированной высоте
+    // (navg ∈ [0,1] всегда конечен → `heat_color` не получает вырожденный range).
+    let mut quads: Vec<([egui::Pos2; 4], f32, egui::Color32)> =
+        Vec::with_capacity((sx - 1) * (sy - 1));
+    for j in 0..sy - 1 {
+        for i in 0..sx - 1 {
+            let idx = [
+                j * sx + i,
+                j * sx + i + 1,
+                (j + 1) * sx + i + 1,
+                (j + 1) * sx + i,
+            ];
+            let corners = [
+                to_screen(pts[idx[0]].0),
+                to_screen(pts[idx[1]].0),
+                to_screen(pts[idx[2]].0),
+                to_screen(pts[idx[3]].0),
+            ];
+            let depth = idx.iter().map(|&k| pts[k].1).sum::<f32>() / 4.0;
+            let navg = f64::from(idx.iter().map(|&k| norm[k]).sum::<f32>() / 4.0);
+            quads.push((corners, depth, heat_color(navg, 0.0, 1.0)));
+        }
+    }
+    // Painter's algorithm: дальние (МЕНЬШИЙ depth) рисуем ПЕРВЫМИ, ближние
+    // (больший depth) — поверх. Depth-семантику см. в `surface::project`
+    // (выше высота → больше depth → ближе к зрителю).
+    quads.sort_by(|a, b| a.1.total_cmp(&b.1));
+
+    let stroke = egui::Stroke::new(0.5, egui::Color32::from_black_alpha(60));
+    for (corners, _, color) in quads {
+        painter.add(egui::Shape::convex_polygon(corners.to_vec(), color, stroke));
+    }
+}
+
 fn heatmap_range(scaling: Option<&CompiledScaling>, data: &[f64]) -> Option<(f64, f64)> {
     if let Some(c) = scaling {
         if let (Some(mn), Some(mx)) = (c.source.min, c.source.max) {
