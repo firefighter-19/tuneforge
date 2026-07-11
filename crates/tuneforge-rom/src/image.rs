@@ -157,6 +157,22 @@ impl RomImage {
         self.write_cells(table, values)
     }
 
+    /// Записать таблицу целиком из РЕАЛЬНЫХ (engineering) значений: применяет
+    /// обратный scaling первой шкалы (`to_byte`), затем пишет байты. Если у
+    /// таблицы нет scaling с `to_byte`, значения пишутся как есть (identity) —
+    /// так же, как это делает GUI-редактор. Длину проверяет [`Self::write_table`].
+    pub fn write_table_real(
+        &mut self,
+        table: &ResolvedTable,
+        real_values: &[f64],
+    ) -> RomResult<()> {
+        let byte_values: Vec<f64> = match table.scalings.first().and_then(|s| s.compile().ok()) {
+            Some(compiled) => real_values.iter().map(|&v| compiled.to_byte(v)).collect(),
+            None => real_values.to_vec(),
+        };
+        self.write_table(table, &byte_values)
+    }
+
     /// Прочитать таблицу целиком — count выводится из `kind` и `size_x`/`size_y`:
     /// - `3D`: `size_x * size_y`
     /// - `2D`/`X Axis`/`Y Axis`: `size_x` или `size_y` (что задано)

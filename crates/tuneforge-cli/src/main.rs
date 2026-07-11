@@ -467,6 +467,52 @@ enum Cmd {
         table: String,
     },
 
+    /// Записать значения (реальные/engineering) в таблицу ROM и пересчитать
+    /// Subaru checksum, сохранив результат (по умолчанию — на месте).
+    WriteTable {
+        /// Путь к бинарному файлу прошивки (input).
+        rom: PathBuf,
+
+        /// Путь к XML с определениями (`<roms>`).
+        #[arg(long)]
+        def: PathBuf,
+
+        /// `xmlid` ROM-а внутри определения.
+        #[arg(long)]
+        rom_id: String,
+
+        /// Имя таблицы для записи.
+        #[arg(long)]
+        table: String,
+
+        /// Файл со значениями: числа через пробел/запятую/перевод строки,
+        /// row-major, ровно по числу ячеек таблицы. `-` = stdin.
+        #[arg(long)]
+        values_file: PathBuf,
+
+        /// Куда сохранить результат. По умолчанию — перезаписать входной ROM.
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Пересчитать Subaru checksum-fix-таблицы ROM и сохранить.
+    FixChecksum {
+        /// Путь к бинарному файлу прошивки (input).
+        rom: PathBuf,
+
+        /// Путь к XML с определениями (`<roms>`).
+        #[arg(long)]
+        def: PathBuf,
+
+        /// `xmlid` ROM-а внутри определения.
+        #[arg(long)]
+        rom_id: String,
+
+        /// Куда сохранить результат. По умолчанию — перезаписать входной ROM.
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+
     /// Прочитать `log_defs.xml` (`<ecus>`) и показать сводку.
     ///
     /// С флагом `--ecu <id>` фокусируется на одном ECU: list of параметров
@@ -539,6 +585,20 @@ fn main() -> Result<()> {
             rom_id,
             table,
         } => read_table_cmd(&rom, &def, &rom_id, &table),
+        Cmd::WriteTable {
+            rom,
+            def,
+            rom_id,
+            table,
+            values_file,
+            output,
+        } => write_table_cmd(&rom, &def, &rom_id, &table, &values_file, output.as_ref()),
+        Cmd::FixChecksum {
+            rom,
+            def,
+            rom_id,
+            output,
+        } => fix_checksum_cmd(&rom, &def, &rom_id, output.as_ref()),
         Cmd::DumpRom {
             port,
             baud,
@@ -1980,6 +2040,110 @@ fn read_table_cmd(
         RomImage::open(rom_path).with_context(|| format!("opening {}", rom_path.display()))?;
 
     print_read_table(&rom, table)
+}
+
+/// Разобрать файл со значениями (числа через пробел/запятую/перевод строки).
+/// `-` читает из stdin.
+fn parse_values(values_file: &PathBuf) -> Result<Vec<f64>> {
+    let text = if values_file.to_str() == Some("-") {
+        use std::io::Read;
+        let mut s = String::new();
+        std::io::stdin()
+            .read_to_string(&mut s)
+            .context("reading values from stdin")?;
+        s
+    } else {
+        std::fs::read_to_string(values_file)
+            .with_context(|| format!("reading {}", values_file.display()))?
+    };
+    text.split(|c: char| c.is_whitespace() || c == ',')
+        .filter(|tok| !tok.is_empty())
+        .map(|tok| {
+            tok.parse::<f64>()
+                .map_err(|e| anyhow::anyhow!("invalid number `{tok}`: {e}"))
+        })
+        .collect()
+}
+
+fn warn_if_no_checksums(fixed: usize, rom_id: &str) {
+    if fixed == 0 {
+        eprintln!(
+            "warning: no checksum-fix tables were applied for ROM `{rom_id}` — \
+             the saved file may be rejected by the ECU"
+        );
+    }
+}
+
+fn write_table_cmd(
+    rom_path: &PathBuf,
+    def_path: &PathBuf,
+    rom_id: &str,
+    table_name: &str,
+    values_file: &PathBuf,
+    output: Option<&PathBuf>,
+) -> Result<()> {
+    let doc = tuneforge_defs::parse_file(def_path)
+        .with_context(|| format!("parsing {}", def_path.display()))?;
+    let resolved = resolve(&doc).context("resolving inheritance")?;
+    let rom_def = resolved
+        .iter()
+        .find(|r| r.xml_id == rom_id)
+        .ok_or_else(|| anyhow::anyhow!("ROM `{rom_id}` not found in {}", def_path.display()))?;
+    let table = rom_def
+        .tables
+        .iter()
+        .find(|t| t.name == table_name)
+        .ok_or_else(|| anyhow::anyhow!("table `{table_name}` not found in ROM `{rom_id}`"))?;
+
+    let values = parse_values(values_file)?;
+
+    let mut rom =
+        RomImage::open(rom_path).with_context(|| format!("opening {}", rom_path.display()))?;
+    rom.write_table_real(table, &values)
+        .with_context(|| format!("writing table `{table_name}`"))?;
+
+    let fixed =
+        tuneforge_rom::subaru_classic::fix(&mut rom, rom_def).context("recomputing checksums")?;
+
+    let out = output.unwrap_or(rom_path);
+    rom.save_as(out)
+        .with_context(|| format!("saving {}", out.display()))?;
+
+    println!(
+        "Wrote {} values to `{table_name}`; fixed {fixed} checksum entries → {}",
+        values.len(),
+        out.display()
+    );
+    warn_if_no_checksums(fixed, rom_id);
+    Ok(())
+}
+
+fn fix_checksum_cmd(
+    rom_path: &PathBuf,
+    def_path: &PathBuf,
+    rom_id: &str,
+    output: Option<&PathBuf>,
+) -> Result<()> {
+    let doc = tuneforge_defs::parse_file(def_path)
+        .with_context(|| format!("parsing {}", def_path.display()))?;
+    let resolved = resolve(&doc).context("resolving inheritance")?;
+    let rom_def = resolved
+        .iter()
+        .find(|r| r.xml_id == rom_id)
+        .ok_or_else(|| anyhow::anyhow!("ROM `{rom_id}` not found in {}", def_path.display()))?;
+
+    let mut rom =
+        RomImage::open(rom_path).with_context(|| format!("opening {}", rom_path.display()))?;
+    let fixed =
+        tuneforge_rom::subaru_classic::fix(&mut rom, rom_def).context("recomputing checksums")?;
+
+    let out = output.unwrap_or(rom_path);
+    rom.save_as(out)
+        .with_context(|| format!("saving {}", out.display()))?;
+
+    println!("Fixed {fixed} checksum entries → {}", out.display());
+    warn_if_no_checksums(fixed, rom_id);
+    Ok(())
 }
 
 fn print_read_table(rom: &RomImage, table: &ResolvedTable) -> Result<()> {

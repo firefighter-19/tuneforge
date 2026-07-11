@@ -154,3 +154,46 @@ fn three_d_with_axes_via_explicit_count() {
     assert_eq!(xs, vec![1.0, 2.0, 3.0]);
     assert_eq!(ys, vec![500.0, 1000.0]);
 }
+
+#[test]
+fn write_table_real_applies_inverse_scaling() {
+    // `write_table_real` принимает РЕАЛЬНЫЕ значения и сам применяет `to_byte`
+    // (то, что редактор делает вручную) — это ядро headless-правки для CLI.
+    let doc = parse_str(DEF).unwrap();
+    let resolved = resolve(&doc).unwrap();
+    let table = &resolved[0].tables[0];
+    let scaling = table.scalings[0].compile().unwrap();
+
+    let mut rom = build_rom();
+    rom.write_table_real(table, &[10.0, 20.0, 30.0, 40.0])
+        .unwrap();
+    assert!(rom.is_dirty());
+
+    // Читаем обратно и де-скейлим — те же реальные значения.
+    let raw_after = rom.read_table(table).unwrap();
+    let real_after: Vec<f64> = raw_after.into_iter().map(|x| scaling.to_real(x)).collect();
+    assert_eq!(real_after, vec![10.0, 20.0, 30.0, 40.0]);
+
+    // Под капотом to_byte = x*2 → байты 20,40,60,80 (BE uint16).
+    assert_eq!(
+        &rom.raw()[0x10..0x18],
+        &[0x00, 0x14, 0x00, 0x28, 0x00, 0x3C, 0x00, 0x50],
+    );
+}
+
+#[test]
+fn write_table_real_without_scaling_is_identity() {
+    // Таблица без <scaling> → значения пишутся как сырые байты (как в GUI).
+    let xml = r#"
+        <roms><rom><romid><xmlid>T</xmlid></romid>
+        <table type="2D" name="raw" storagetype="uint8" endian="big" sizex="3" storageaddress="0x00"/>
+        </rom></roms>
+    "#;
+    let doc = parse_str(xml).unwrap();
+    let resolved = resolve(&doc).unwrap();
+    let table = &resolved[0].tables[0];
+
+    let mut rom = RomImage::from_bytes(vec![0u8; 8]);
+    rom.write_table_real(table, &[1.0, 2.0, 3.0]).unwrap();
+    assert_eq!(&rom.raw()[0..3], &[1, 2, 3]);
+}
