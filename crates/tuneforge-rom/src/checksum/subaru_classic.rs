@@ -5,8 +5,8 @@
 //! 1. Найти все таблицы в резолвнутом ROM-определении, имя которых начинается
 //!    с `"checksum fix"`. Каждая такая таблица — массив `(start, end, diff)`
 //!    32-битных big-endian троек (12 байт на каждую).
-//! 2. Для каждой тройки: `diff_new = CHECK_TOTAL - sum(rom[start..end])`, где
-//!    сумма берётся по 4-байтным BE-словам с 32-битным wrapping.
+//! 2. Для каждой тройки: `diff_new = CHECK_TOTAL - sum(rom[start..=end])`, где
+//!    сумма берётся по 4-байтным BE-словам (`end` — inclusive) с wrapping.
 //! 3. Запись/проверка: при сохранении ROM мы пересчитываем все `diff`'ы и
 //!    записываем; при проверке — сравниваем stored vs computed.
 //!
@@ -80,15 +80,19 @@ pub fn verify(rom: &RomImage, def: &ResolvedRom) -> RomResult<Vec<EntryStatus>> 
     Ok(out)
 }
 
-/// Сумма 4-байтных BE-слов в `bytes[start..end]` с 32-битным wrapping,
-/// потом `CHECK_TOTAL - sum`.
+/// Сумма 4-байтных BE-слов в `bytes[start..=end]` (`end` — inclusive, адрес
+/// последнего байта региона, как в RomRaider) с 32-битным wrapping, потом
+/// `CHECK_TOTAL - sum`.
 ///
-/// `end` должен быть >= `start` и не выходить за пределы буфера.
-/// `(end - start)` должен делиться на 4 (иначе хвостовые байты игнорируются).
+/// `end` должен быть >= `start` и указывать на валидный байт буфера.
+/// `(end + 1 - start)` должен делиться на 4 (иначе хвостовые байты игнорируются).
 pub fn calculate_diff(bytes: &[u8], start: u32, end: u32) -> RomResult<u32> {
     let s = start as usize;
+    // `end` — адрес ПОСЛЕДНЕГО байта региона (inclusive), как в RomRaider
+    // (`RomChecksum.java` суммирует `start..=end`). Раньше мы считали `[start,
+    // end)` и теряли последнее 32-битное слово региона → неверная checksum.
     let e = end as usize;
-    if e > bytes.len() || s > e {
+    if e >= bytes.len() || s > e {
         return Err(RomError::AddressOutOfRange {
             addr: end,
             size: bytes.len(),
@@ -96,7 +100,7 @@ pub fn calculate_diff(bytes: &[u8], start: u32, end: u32) -> RomResult<u32> {
     }
     let mut sum: u32 = 0;
     let mut i = s;
-    while i + 4 <= e {
+    while i + 4 <= e + 1 {
         let arr: [u8; 4] = bytes[i..i + 4].try_into().expect("4");
         sum = sum.wrapping_add(u32::from_be_bytes(arr));
         i += 4;
@@ -153,23 +157,25 @@ fn iter_entries(rom: &RomImage, def: &ResolvedRom) -> RomResult<Vec<ParsedEntry>
 }
 
 fn is_checksum_fix_table(t: &ResolvedTable) -> bool {
-    // Java: `table.getName().startsWith("checksum fix")` — case-sensitive.
-    t.name.starts_with("checksum fix")
+    // Апстрим (`Rom.java`) сравнивает имя case-insensitively, а реальные дефы
+    // называют таблицу с заглавных — `"Checksum Fix"`. Наш прежний
+    // case-sensitive `starts_with("checksum fix")` молча её пропускал.
+    t.name.to_ascii_lowercase().starts_with("checksum fix")
 }
 
 /// Полный размер таблицы в байтах: `byte_size(storage_type) * size_x * size_y`
 /// (отсутствующие размерности трактуем как 1).
+///
+/// В реальных дефах checksum-fix объявлена как `<table type="Switch" … sizey="N">`
+/// **без** `storagetype`. Такой элемент трактуем как один «сырой» байт, чтобы
+/// `sizey` дал полный размер региона `(start, end, diff)`-троек (иначе таблица
+/// молча пропускалась).
 fn byte_count(t: &ResolvedTable) -> Option<usize> {
-    let st = t.storage_type?;
+    let elem = t.storage_type.map_or(1, StorageType::byte_size);
     let sx = t.size_x.unwrap_or(1) as usize;
     let sy = t.size_y.unwrap_or(1) as usize;
-    Some(st.byte_size() * sx * sy)
+    Some(elem * sx * sy)
 }
-
-// «Helper» для пользователей: подавит linter-warning, если кто-то импортирует
-// `StorageType` ради `byte_size` через этот модуль.
-#[allow(dead_code)]
-const _STORAGE_TYPE_USED: Option<StorageType> = None;
 
 #[cfg(test)]
 mod tests {
@@ -177,20 +183,21 @@ mod tests {
 
     #[test]
     fn calculate_diff_known_sum() {
-        // 4 BE-слова: 1, 2, 3, 4 → sum=10. diff = CHECK_TOTAL - 10
+        // 4 BE-слова: 1, 2, 3, 4 → sum=10. diff = CHECK_TOTAL - 10.
+        // end=15 — inclusive последний байт (все 4 слова, байты 0..=15).
         let bytes = [
             0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00,
             0x00, 0x04,
         ];
-        let diff = calculate_diff(&bytes, 0, 16).unwrap();
+        let diff = calculate_diff(&bytes, 0, 15).unwrap();
         assert_eq!(diff, CHECK_TOTAL.wrapping_sub(10));
     }
 
     #[test]
     fn calculate_diff_wraps_on_overflow() {
-        // 0xFFFFFFFF + 0x00000001 = 0 (wrap) → diff = CHECK_TOTAL
+        // 0xFFFFFFFF + 0x00000001 = 0 (wrap) → diff = CHECK_TOTAL. end=7 inclusive.
         let bytes = [0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x01];
-        let diff = calculate_diff(&bytes, 0, 8).unwrap();
+        let diff = calculate_diff(&bytes, 0, 7).unwrap();
         assert_eq!(diff, CHECK_TOTAL);
     }
 
@@ -212,7 +219,7 @@ mod tests {
     fn calculate_diff_inverse_relationship() {
         // Главное свойство: sum + diff == CHECK_TOTAL для любого региона.
         let bytes = [0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE];
-        let diff = calculate_diff(&bytes, 0, 8).unwrap();
+        let diff = calculate_diff(&bytes, 0, 7).unwrap(); // end inclusive
         let s1 = u32::from_be_bytes([0xDE, 0xAD, 0xBE, 0xEF]);
         let s2 = u32::from_be_bytes([0xCA, 0xFE, 0xBA, 0xBE]);
         let sum = s1.wrapping_add(s2);

@@ -1,7 +1,9 @@
 //! Интеграция Subaru-классического checksum: edit → fix → verify cycle на
 //! синтетическом ROM с известной структурой.
 
-use tuneforge_defs::{parse_str, resolve};
+use std::path::PathBuf;
+
+use tuneforge_defs::{parse_file, parse_str, resolve};
 use tuneforge_rom::{subaru_classic, RomImage};
 
 /// Синтетический ROM:
@@ -161,4 +163,97 @@ fn multiple_entries_in_one_fix_table() {
 
     let after = subaru_classic::verify(&rom, &resolved[0]).unwrap();
     assert!(after.iter().all(|r| r.valid));
+}
+
+// --- Regression: real Subaru defs name the table "Checksum Fix" (capitalized)
+//     and declare it as a `Switch` with NO `storagetype` (just `sizey`). Both
+//     tripped bugs that made verify/fix silently skip it → ECU-invalid saves. ---
+
+#[test]
+fn recognizes_capitalized_checksum_fix_table() {
+    // Isolates the CASE bug: real defs capitalize it ("Checksum Fix"), but the
+    // port's case-sensitive starts_with("checksum fix") silently skipped it.
+    // storagetype is present here so only the name differs from a working table.
+    let def = r#"
+    <roms>
+      <rom>
+        <romid><xmlid>T</xmlid></romid>
+        <table type="2D" name="map" storagetype="uint16" endian="big" sizex="8" storageaddress="0x00"/>
+        <table type="2D" name="Checksum Fix" storagetype="uint8" endian="big"
+               sizey="12" storageaddress="0x10"/>
+      </rom>
+    </roms>
+    "#;
+    let doc = parse_str(def).unwrap();
+    let resolved = resolve(&doc).unwrap();
+    let rom = build_rom_with_correct_checksum();
+
+    let results = subaru_classic::verify(&rom, &resolved[0]).unwrap();
+    assert_eq!(
+        results.len(),
+        1,
+        "capitalized 'Checksum Fix' must be recognized"
+    );
+    assert!(results[0].valid);
+}
+
+#[test]
+fn handles_switch_checksum_fix_without_storagetype() {
+    // Isolates the STORAGETYPE bug: real defs declare it as <table type="Switch"
+    // ... sizey="N"> with NO storagetype, so byte_count() bailed on the missing
+    // storage type. Lowercase name here so only the storagetype differs.
+    let def = r#"
+    <roms>
+      <rom>
+        <romid><xmlid>T</xmlid></romid>
+        <table type="2D" name="map" storagetype="uint16" endian="big" sizex="8" storageaddress="0x00"/>
+        <table type="Switch" name="checksum fix region" sizey="12" storageaddress="0x10">
+          <state name="on" data="00 00 00 00 00 00 00 00 5A A5 A5 5A"/>
+        </table>
+      </rom>
+    </roms>
+    "#;
+    let doc = parse_str(def).unwrap();
+    let resolved = resolve(&doc).unwrap();
+    let rom = build_rom_with_correct_checksum();
+
+    let results = subaru_classic::verify(&rom, &resolved[0]).unwrap();
+    assert_eq!(
+        results.len(),
+        1,
+        "Switch checksum-fix table with no storagetype must be recognized"
+    );
+    assert!(results[0].valid);
+}
+
+#[test]
+fn finds_and_validates_checksum_tables_in_real_forester_def() {
+    // Locks the actual bug on the real assets: ROM 4E42504007 / xmlid A8DK100P
+    // declares "Checksum Fix" as a Switch (sizey=168, no storagetype) @0xFFB80.
+    // Both bugs made verify() find ZERO entries here, so edited ROMs saved with
+    // stale checksums. The factory fixture must verify clean.
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let doc = parse_file(root.join("defs/ecu_defs.xml")).unwrap();
+    let resolved = resolve(&doc).unwrap();
+    let rom_def = resolved
+        .iter()
+        .find(|r| r.xml_id == "A8DK100P")
+        .expect("A8DK100P (4E42504007) present in ecu_defs.xml");
+    let rom = RomImage::open(root.join("fixtures/forester-xt-2007-4E42504007.bin")).unwrap();
+
+    let results = subaru_classic::verify(&rom, rom_def).unwrap();
+    assert!(
+        !results.is_empty(),
+        "checksum-fix entries must be discovered for 4E42504007"
+    );
+    // Factory dump → every checksum must already be valid.
+    assert!(
+        results.iter().all(|r| r.valid),
+        "factory fixture checksums must verify as valid"
+    );
+    // ...and at least one real (non-disabled) protected region exists.
+    assert!(
+        results.iter().any(|r| !r.disabled),
+        "expected at least one active checksum region"
+    );
 }
