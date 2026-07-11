@@ -232,14 +232,27 @@ fn finds_and_validates_checksum_tables_in_real_forester_def() {
     // declares "Checksum Fix" as a Switch (sizey=168, no storagetype) @0xFFB80.
     // Both bugs made verify() find ZERO entries here, so edited ROMs saved with
     // stale checksums. The factory fixture must verify clean.
+    //
+    // NOTE: the full RomRaider def and the real ROM dump are gitignored (large /
+    // private), so they are absent on a clean checkout / CI. When they are not
+    // present locally we SKIP — the recognition and inclusive-sum bugs are
+    // already covered by the hermetic synthetic tests above and the
+    // `calculate_diff` unit tests, so this bonus real-asset check never breaks CI.
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let doc = parse_file(root.join("defs/ecu_defs.xml")).unwrap();
+    let def_path = root.join("defs/ecu_defs.xml");
+    let rom_path = root.join("fixtures/forester-xt-2007-4E42504007.bin");
+    if !def_path.exists() || !rom_path.exists() {
+        eprintln!("skipping real-def checksum test: gitignored assets not present");
+        return;
+    }
+
+    let doc = parse_file(&def_path).unwrap();
     let resolved = resolve(&doc).unwrap();
     let rom_def = resolved
         .iter()
         .find(|r| r.xml_id == "A8DK100P")
         .expect("A8DK100P (4E42504007) present in ecu_defs.xml");
-    let rom = RomImage::open(root.join("fixtures/forester-xt-2007-4E42504007.bin")).unwrap();
+    let rom = RomImage::open(&rom_path).unwrap();
 
     let results = subaru_classic::verify(&rom, rom_def).unwrap();
     assert!(
