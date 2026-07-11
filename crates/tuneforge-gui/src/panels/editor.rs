@@ -1,4 +1,4 @@
-//! ROM editor panel — read-only MVP.
+//! ROM editor panel — load a ROM + defs, view and edit table values, save.
 //!
 //! Workflow:
 //! 1. File → Open ROM…       (через rfd)
@@ -51,6 +51,8 @@ const SHORTCUT_REDO_Z: egui::KeyboardShortcut = egui::KeyboardShortcut::new(
     },
     egui::Key::Z,
 );
+const SHORTCUT_SAVE: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::S);
 
 #[derive(Debug, Default)]
 struct UndoLog {
@@ -397,15 +399,43 @@ impl EditorPanel {
         let undo = ui.input_mut(|i| i.consume_shortcut(&SHORTCUT_UNDO));
         let redo_y = ui.input_mut(|i| i.consume_shortcut(&SHORTCUT_REDO_Y));
         let redo_z = ui.input_mut(|i| i.consume_shortcut(&SHORTCUT_REDO_Z));
+        let save = ui.input_mut(|i| i.consume_shortcut(&SHORTCUT_SAVE));
         if undo {
             self.undo_action();
         }
         if redo_y || redo_z {
             self.redo_action();
         }
+        if save {
+            self.save_rom();
+        }
+    }
+
+    /// Загружен ли ROM (для enable/disable пунктов меню и guard'а).
+    pub fn has_rom(&self) -> bool {
+        self.rom.is_some()
+    }
+
+    /// Есть ли несохранённые правки.
+    pub fn is_dirty(&self) -> bool {
+        self.rom.as_ref().is_some_and(|s| s.rom.is_dirty())
+    }
+
+    /// Сохранить на месте (в текущий путь) — File → Save / Ctrl+S. Возвращает
+    /// `false`, если ROM не загружен (тогда вызывающий откроет диалог Save As…).
+    pub fn save_rom(&mut self) -> bool {
+        let Some(path) = self.rom.as_ref().map(|s| s.path.clone()) else {
+            return false;
+        };
+        self.save_to(path);
+        true
     }
 
     pub fn save_rom_as(&mut self, path: PathBuf) {
+        self.save_to(path);
+    }
+
+    fn save_to(&mut self, path: PathBuf) {
         let Some(state) = self.rom.as_mut() else {
             self.error = Some("No ROM loaded.".into());
             return;
@@ -1887,5 +1917,32 @@ mod tests {
         log.record(addr, vec![0], vec![5], false);
         log.record(addr, vec![5], vec![10], true);
         assert!(!log.can_redo(), "merge must clear redo stack");
+    }
+}
+
+#[cfg(test)]
+mod save_tests {
+    use super::EditorPanel;
+
+    #[test]
+    fn save_rom_reports_no_rom_then_saves_in_place() {
+        let path = std::env::temp_dir().join("tuneforge_save_rom_test.bin");
+        std::fs::write(&path, [0xAAu8; 16]).unwrap();
+
+        let mut panel = EditorPanel::default();
+        assert!(!panel.save_rom(), "no ROM loaded → save_rom() is false");
+        assert!(!panel.has_rom());
+
+        panel.load_rom(path.clone());
+        assert!(panel.has_rom());
+        assert!(!panel.is_dirty(), "a freshly loaded ROM is clean");
+        assert!(
+            panel.save_rom(),
+            "ROM loaded → saves in place, returns true"
+        );
+        assert!(!panel.is_dirty(), "save clears the dirty flag");
+        assert_eq!(std::fs::read(&path).unwrap().len(), 16);
+
+        let _ = std::fs::remove_file(&path);
     }
 }
